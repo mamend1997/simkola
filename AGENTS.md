@@ -381,3 +381,134 @@ node dev-tests/ui-round16.js  # 14 cek Playwright: auto-submit dropdown, cetak i
 - Disesuaikan karena perubahan perilaku yang DISENGAJA: `round9.js` (kwitansi default A4 portrait + `orient=small`,
   slip portal per periode), `round7.js` (label ekskul "Bendahara"), `print.js` & `ui-round14.js` (mode `orient=small`),
   `final.js` (`coa_id` pajak dinamis), `ta.js`/`ta-ui.js` (teks "X dari Y transaksi"), `audit3.js`/`ui-final.js` (label "Rekonsiliasi Kas").
+
+---
+
+## Ronde 17 — Non-BKU antrean, pelonggaran tutup bulan, iuran bulanan, catatan pegawai, backup menyeluruh, .env
+
+### 1. Antrean posting iuran: opsi & tombol Non-BKU
+- Status `iuran_bayar` yang dipakai: `pending` (antrean BKU) · `posted` · **`manual`/`nonbku` = DATA SAJA (Non-BKU)** · `void` · `beasiswa`. Tidak ada kolom baru.
+- `POST /iuran/antrean/nonbku` (`ids=1,2,3`) → `status='manual'`, `transaksi_id=NULL`, `bku_id=NULL`. Audit `NON-BKU IURAN`. Tidak membuat transaksi BKU.
+- `POST /iuran/antrean/edit` kini menerima `status_tujuan` = `pending` | `manual`. Untuk `pending` **wajib** `bku_id` aktif (dipakai bila baris dikembalikan ke antrean). `manual` → `bku_id=NULL`.
+- Halaman `/iuran/antrean` punya **dua tombol aksi utama** per kelompok (dan di footer modal Tinjau): **Posting ke BKU** (hijau) & **Hanya Simpan Data (Non-BKU)**. Tombol pertama memakai hidden `coa_id` default; pemilihan CoA tetap ada di modal.
+- Halaman antrean kini 3 kartu: **Antrean Posting BKU**, **Rincian Penerimaan Belum Terposting** (pending), **Penerimaan Non-BKU (Data Saja)** (manual, bisa diedit kembali ke antrean).
+- **Gotcha diperbaiki**: `${late.html()}` dulu dipanggil sebelum `late('mE…')` milik tabel rincian → modal edit per baris tidak pernah terender. Sekarang **satu** `${late.html()}` di akhir `content` (pola wajib: semua `late()` harus selesai sebelum `late.html()`).
+
+### 2. Validasi tutup bulan dilonggarkan
+- `dbm.periodeLockError()` sekarang **hanya** memblokir periode berstatus **`ditutup`** (pesan mengarahkan ke tombol **Buka Kembali**). Status `terlewat` (bulan lalu belum ditutup) **tidak lagi** memblokir input/posting.
+- Konsekuensi: pesan lama "Bulan … sudah berganti dan BKU bulan tersebut belum ditutup…" **hilang** (jangan dimunculkan lagi). Badge "belum ditutup" di daftar transaksi ikut hilang karena `lockInfo` selalu null.
+- `routes/payroll.js` posting honor: workaround "pindahkan ke bulan berjalan bila periode leger `terlewat`" **dihapus** — honor selalu dibukukan pada akhir periode leger sendiri (`catatanTanggal` dihapus).
+- Notifikasi dashboard `dbm.unclosedPeriods()` tetap ada (informasi, bukan blokir).
+- Test yang disesuaikan karena perubahan perilaku ini: `round9.js` (kartu Non-BKU di antrean), `round14.js` (tidak ada lagi "Catatan periode" saat bayar di bulan belum ditutup).
+
+### 3. Rincian iuran bulanan (Juli … Juni)
+- Halaman baru `GET /iuran/bulanan` (`active:'iuran_bulanan'`): matriks **siswa × 12 bulan** (`dbm.BULAN_TA` = 7..12,1..6). Sel: nominal + tanda `✓` lunas / `½` sebagian / `!` belum / `—` tidak ditagihkan; filter TA, q, kelas & grup multi-pilih. Total tagihan/bayar/terhutang di tfoot.
+- Data: `iuranTagihanRows()` (grup bulanan) + satu query `iuran_bayar` per TA, dialokasikan lewat `monthlyDetail()`.
+- Detail siswa `/iuran/data/:id` kini merender **12 baris `tr.month-row`** (bulan tanpa nominal → badge "Tidak ditagihkan", tanpa ceklis/tombol bayar).
+- CSS: `.bulanan-tbl`, `.bulan-cell.lunas|sebagian|kurang|kosong`, `.sticky-col(2)`, `tr.row-muted`.
+
+### 4. Catatan Pegawai → Bendahara (modul `catatan`)
+- Tabel `catatan_pegawai` (`user_id, nama, jabatan, pesan, terkait, periode, status, balasan, balas_oleh, balas_at, tahun_ajaran_id, created_at, updated_at`). Status: `baru` → `diproses` → `selesai`.
+- Helper `dbm.catatanAdd/List/Count/Reply/Status/Delete` + `CATATAN_STATUS`.
+- `routes/catatan.js`: `GET /catatan-pegawai` (form + daftar), `POST /catatan-pegawai/kirim` (create), `POST /catatan-pegawai/balas|status` (edit), `POST /catatan-pegawai/delete` (delete).
+- **Nama & jabatan pengirim diambil dari sesi login di server** (`req.user`) — field `nama`/`jabatan` dari klien diabaikan (diuji dengan mengirim nama palsu).
+- RBAC: modul baru `catatan` — staff & kepala sekolah = view+create (kepala sekolah juga edit), super_admin penuh. Nav grup baru **Komunikasi Internal** (Catatan Pegawai + Pesan Orang Tua dipindah ke sini).
+- Dashboard: kartu `#catatanPegawai` (bendahara: semua catatan + badge "perlu ditindaklanjuti"; staff: catatan sendiri).
+- `catatan_pegawai` masuk `TABLES` backup/restore.
+
+### 5. Backup menyeluruh level admin (`/backup`)
+- `GET /backup/export-database` → dump **.sql** portabel (`DROP/CREATE` dari `sqlite_master` + `INSERT` seluruh baris, nilai di-escape, diakhiri `COMMIT`). Guard `backup.create`.
+- `GET /backup/download-source` → ZIP source code: `server.js, env.js, db.js, lib.js, ui.js, wa.js, xlsx-read.js, importer.js, impcache.js, printcfg.js, package*.json, .env.example, .gitignore, AGENTS.md` + folder `routes/`, `public/`, `dev-tests/` + `README-SOURCE.txt` (cara pasang di VPS). **Tidak** menyertakan `data/`, `node_modules/`, `.git/`, `*.sqlite*`, `.env`, `.vibecoder-media-token`.
+- `TABLES` (backup/restore) ditambah `catatan_pegawai, portal_pesan, otp_code`.
+- Halaman `/backup` menampilkan kartu **Konfigurasi Lingkungan (.env)** dari `envCfg.describe()` (nilai sensitif disamarkan; penanda "dari .env" vs default).
+
+### 6. Portable configuration (.env)
+- `env.js` (tanpa dependency): memuat `.env` di folder aplikasi (atau `ENV_FILE`) saat `require('./env')`; **tidak menimpa** `process.env` yang sudah ada. Di-require paling atas oleh `db.js` & `server.js`.
+- Variabel: `PORT`, `DB_PATH`, `APP_BASE_URL`, `APP_MEDIA_URL` (default `http://127.0.0.1:4310`, dipakai `uploadMedia`), `APP_MEDIA_TOKEN` (runtime platform), `WA_API_URL`, `WA_API_TOKEN`, `WA_API_PAYLOAD`, `STORAGE_QUOTA_MB`, `ENV_FILE`.
+- `wa.waConfig()`: **env menang** atas setting `wa_api_url/token/payload` di DB. `wa.portalLink()` memakai `APP_BASE_URL` dan disisipkan ke pesan OTP portal pegawai ("Buka portal: …").
+- Berkas contoh: `.env.example`; `.env` & `.env.local` masuk `.gitignore`.
+
+### Test ronde 17
+```bash
+node dev-tests/round17.js     # 62 cek: non-BKU antrean (2 tombol, edit status bolak-balik), pelonggaran tutup bulan
+                              # (terlewat boleh, ditutup diblokir, buka kembali), 12 baris bulan, catatan pegawai
+                              # (nama otomatis, balasan, RBAC), export .sql, download source (isi & pengecualian), .env
+node dev-tests/ui-round17.js  # 23 cek Playwright: matriks 12 bulan, 2 tombol antrean + modal, form catatan,
+                              # menu baru, tombol backup, mobile 390px tanpa overflow, tanpa error JS
+```
+
+---
+
+## Ronde 18 — rincian bulanan di portal publik, catatan di portal pegawai, ekskul per jenis, slug portal
+
+### 1. Portal publik tagihan siswa: rincian bulanan (Juli … Juni)
+- `routes/portal.js` `renderResults()` tidak lagi menampilkan grup bulanan sebagai satu baris. Setiap grup `jenis='bulanan'` **dijabarkan satu baris per bulan**: `SPP - Juli 2026`, `SPP - Agustus 2026`, … `SPP - Juni 2027` (label memakai `tanggal_mulai` tahun ajaran grup).
+- Sumber angka = helper bersama **`dbm.iuranMonthDetail(grupId, payments)`** (dipindah ke `db.js`; dulu duplikat di `routes/iuran.js`) + `dbm.iuranPaysMap(ids)`. `routes/iuran.js` `monthlyDetail()` kini hanya mendelegasikan ke helper itu → angka portal, detail siswa, dan matriks bulanan **selalu identik**.
+- Bulan tanpa nominal (tidak ditagihkan) tidak dirender; badge `Lunas` / `Sebagian` per bulan; baris `tr.month-line` + CSS `.portal-bill`.
+- Subtotal tahun pelajaran dihitung dari **baris tampilan** (bukan dari `iuran_tagihan` mentah) supaya tidak dobel-hitung.
+- Catatan orang tua: form tetap; riwayat 3 catatan terakhir siswa ditampilkan di atas form.
+
+### 2. Portal piutang pegawai & slip gaji: kolom catatan untuk bendahara
+- `portal_pesan` mendapat kolom **`sumber`** (`siswa` default · `piutang-pegawai` · `slip-pegawai`) dan **`ref`** (id pegawai/siswa). Migrasi ALTER otomatis + masuk SCHEMA.
+- `catatanForm()` (di `routes/portal_pegawai.js`) dirender di halaman rincian piutang dan halaman hasil slip: nama pegawai otomatis (readonly), nomor WhatsApp terdaftar, pilihan "Terkait", riwayat 3 catatan terakhir.
+- `POST /portal-pegawai/pesan` & `POST /portal-slip/pesan` → `handlePesan()`: **wajib sesi OTP terverifikasi** (`otp_code.verified=1` dan `jenis` cocok, `ref` = id pegawai) → tidak bisa mengirim catatan atas nama orang lain. Audit `CATATAN PEGAWAI` (modul `portal`).
+- Piutang: konfirmasi dirender inline (`piutangResult({...ok})`). Slip: redirect ke `/portal-slip/hasil?...&ok=` — `/portal-slip/hasil` kini membaca `ok`/`err` dari query.
+- `/pesan-orangtua` + kartu dashboard menampilkan **kolom Sumber** (Tagihan Siswa / Piutang Pegawai / Slip Pegawai).
+
+### 3. Posting honor ekskul dipisah per JENIS
+- `GET /ekskul/antrean` mengelompokkan pending per **(periode + jenis)**, bukan per periode lagi. Kartu berjudul `Pramuka — Periode Juli 2026`, dst., masing-masing punya form posting sendiri (hidden `jenis`) → **satu transaksi BKU per jenis**.
+- `POST /ekskul/antrean/posting` menerima `jenis`; query memakai `COALESCE(TRIM(jenis),'')=?`. Tanpa `jenis` = perilaku lama (semua pending periode itu) untuk kompatibilitas.
+- Uraian & `nama_pihak` transaksi memuat jenis (`Honor Pembina Ekstrakurikuler Pramuka <Periode> (n pembina)`), `syncBatch()` ikut memakai jenis pada uraian.
+- `POST /ekskul/save`: **jenis item yang sudah terposting tidak boleh diubah** (satu transaksi = satu jenis).
+
+### 4. Ujung alamat (slug) portal publik dapat diubah
+- Setting baru: **`portal_slug`** (default `portal`), **`portal_pegawai_slug`** (`portal-pegawai`), **`portal_slip_slug`** (`portal-slip`). Diatur di **Identitas Sekolah → Alamat (URL) Portal Publik**.
+- `db.js`: `PORTAL_SLUG_KEYS`, `PORTAL_SLUG_DEFAULT`, `RESERVED_SLUGS` (path aplikasi yang tidak boleh dipakai), `normalizePortalSlug()`, `portalSlugs()` (cache, di-reset oleh `setSetting`), `portalSlugError(raw, key)` (validasi: `^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`; unik antar portal; bukan path aplikasi; nilai default selalu boleh).
+- `server.js`: `dbm.portalRewrite(pathname)` dijalankan **sebelum** pencocokan route → `/<slug-kustom>` dipetakan ke route kanonik (`/portal`, `/portal-pegawai`, `/portal-slip`), termasuk semua sub-path (`/otp`, `/nama`, `/verifikasi`, `/hasil`, `/cetak`, `/pesan`). Alamat default tetap dapat dibuka.
+- Semua tautan internal portal memakai slug aktif (`pgUrl()`, `slipUrl()`, `kindUrl()`, `url()` di portal siswa), termasuk `wa.portalLink()` (tautan "Buka portal" pada pesan OTP) dan tautan di halaman Pengaturan Sistem / Pesan Orang Tua.
+- Validasi dijalankan **sebelum** menulis setting lain di `POST /sekolah` (tidak ada penyimpanan separuh).
+
+### Test ronde 18
+```bash
+node dev-tests/round18.js     # 56 cek: 12 baris bulan di portal, subtotal tidak dobel, catatan piutang & slip
+                              # (wajib OTP, nama otomatis), inbox bendahara per sumber, ekskul 2 transaksi terpisah,
+                              # slug kustom + validasi (reserved/ganda) + alamat default tetap jalan
+node dev-tests/ui-round18.js  # 16 cek Playwright: portal bulanan, form catatan portal pegawai, form alamat portal,
+                              # 2 tombol posting ekskul, mobile 390px, tanpa error JS
+```
+
+---
+
+## Ronde 19 — kwitansi pengeluaran, tempat-tanggal seragam, ikon portal, urutan TA portal
+
+### 1. Kwitansi pengeluaran: "Telah diterima dari" → "Bendahara <sekolah>"
+- `printcfg.js` DOCS `kwitansi_trx`: label `dari_keluar` default **`Telah diterima dari`** (dulu `Bendahara Sekolah`) dan **field baru** `nilai_dari_keluar` default **`Bendahara {sekolah}`** (`{sekolah}` = `settings.sekolah_nama`).
+- `routes/transaksi.js` kwitansi: pengeluaran → label `L.dari_keluar`, isi `printcfg.fill(L.nilai_dari_keluar, {sekolah})`; pemasukan tetap memakai `nama_pihak`.
+- **Migrasi konfigurasi lama**: `printcfg.readAll()` memakai `LEGACY_LABELS` — bila `print_design` tersimpan **belum punya** kolom `nilai_dari_keluar` (konfigurasi sebelum ronde ini) dan nilai `dari_keluar` = `Bendahara Sekolah`, otomatis dibaca sebagai default baru. Konfigurasi baru yang sengaja diisi `Bendahara Sekolah` tetap dihormati (karena sudah punya kolom `nilai_dari_keluar`).
+
+### 2. Baris "Tempat, tanggal" seragam di semua cetakan (default Cikoneng)
+- Setting baru **`print_tempat`** (default `Cikoneng`) + helper `printcfg.tempat(dbm)`, `printcfg.tempatTanggal(dbm, tanggal)`, `printcfg.fill(text, vars)`, konstanta `TEMPAT_DEFAULT`.
+- Diatur di **Desain Templat Cetak** (`/desain-cetak`) → kartu **"Tempat pada Tanggal Cetak"** (input `name="print_tempat"`, kosong = kembali ke `Cikoneng`); disimpan oleh `printcfg.saveFromBody()` (yang kini juga menulis `print_tempat`).
+- Dipakai oleh: kwitansi transaksi (`kota`), bukti piutang pegawai / sertifikasi / piutang lainnya, kwitansi iuran (2 jalur), honor ekskul, dan **`ui.signBlock()`** (laporan BKU/LRA/neraca/arus kas/pembantu/piutang, berita acara tutup BKU, leger & slip payroll, dll — semua pemanggil `signBlock` yang dulu mengirim `tempat: ''`).
+- `ui.signBlock()` sekarang: `tempat = opts.tempat || settings.print_tempat || 'Cikoneng'` lalu dirender `"<tempat>, <tanggal>"` (dulu tanpa koma dan kosong).
+
+### 3. Ikon "tanda seru" portal slip proporsional
+- Penyebab: `ui.icon()` merender `<svg viewBox>` **tanpa width/height**, dan di `routes/portal_pegawai.js` (`slipResult`) ikon diletakkan di `<div class="help small">` yang tidak punya aturan ukuran → SVG melebar mengikuti kontainer (±822 px pada kartu portal).
+- Perbaikan CSS (`public/app.css`): `.help svg` & `.hint svg` = 13×13, plus `.portal-card .alert svg` = 15×15 dan padding alert portal dipadatkan.
+
+### 4. Portal tagihan siswa: urutan tahun pelajaran TERLAMA di atas
+- `routes/portal.js` `renderResults()` menyusun ulang entri per tahun pelajaran dengan `dbm.taSortKey()` **ascending** (2024/2025 → 2025/2026 → …); tagihan tanpa TA diletakkan paling bawah.
+
+### Test ronde 19
+```bash
+node dev-tests/round19.js     # 37 cek: label+isi "diterima dari", 7 halaman cetak + kwitansi iuran memakai
+                              # "Cikoneng, <tanggal>", edit tempat lewat desain, konfigurasi lama termigrasi,
+                              # template {sekolah} kustom, urutan TA portal
+node dev-tests/ui-round19.js  # 17 cek Playwright: urutan baris kwitansi, TTD "Cikoneng, …", kolom tempat,
+                              # ikon portal ≤24px, urutan TA portal, mobile 390px, tanpa error JS
+```
+- Disesuaikan karena perubahan perilaku yang DISENGAJA: `ui-round15.js` (label bawaan kwitansi pengeluaran).
+
+### Gotcha ronde 19
+- **`ui.icon()` tidak punya width/height** → jangan menaruhnya di kontainer tanpa aturan ukuran (`.help`, `.hint`, `p`, `span` polos); SVG akan memenuhi lebar kontainer. Sudah dijaga lewat CSS `.help svg, .hint svg{width:13px}` — bila menambah kontainer teks baru, tambahkan kelas `.help`/`.hint` atau atur ukuran svg-nya.
+- Teks tempat cetak **hanya** dari `settings.print_tempat` (jangan pakai `sekolah_nama` sebagai tempat lagi).

@@ -97,11 +97,13 @@ const periode = today.slice(0, 7);
   const bulan10 = db.prepare('SELECT * FROM iuran_bayar WHERE bulan=10 ORDER BY id DESC LIMIT 1').get();
   ok('item non-BKU berstatus manual & tanpa BKU', bulan10.status === 'manual' && !bulan10.bku_id, JSON.stringify({ s: bulan10.status, b: bulan10.bku_id }));
   r = await req('GET', '/iuran/antrean');
-  // baris non-BKU tidak dirender pada antrean (modal edit per baris bernama mE<id>)
-  ok('antrean tidak memuat baris pembayaran non-BKU', !r.text.includes('mE' + bulan10.id + '"'), 'baris non-BKU muncul di antrean');
+  // ronde 17: baris non-BKU punya kartu sendiri; bagian "Rincian Penerimaan Belum Terposting"
+  // hanya boleh memuat pembayaran berstatus pending.
+  const antrePending = r.text.split('Penerimaan Non-BKU (Data Saja)')[0];
+  ok('antrean tidak memuat baris pembayaran non-BKU', !antrePending.includes('mE' + bulan10.id + '"'), 'baris non-BKU muncul di antrean');
   const pendingCount = db.prepare("SELECT COUNT(*) c FROM iuran_bayar WHERE status='pending'").get().c;
-  ok('jumlah pending = jumlah baris antrean rincian', (r.text.match(/<button class="btn btn-sm btn-icon" data-open="mE\d+"/g) || []).length === pendingCount,
-    `pending=${pendingCount}`);
+  ok('jumlah pending = jumlah baris antrean rincian', (antrePending.match(/data-open="mE\d+"/g) || []).length === pendingCount,
+    `pending=${pendingCount} baris=${(antrePending.match(/data-open="mE\d+"/g) || []).length}`);
   const kasBku = db.prepare(`SELECT COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE -nominal END),0) s FROM transaksi WHERE bku_id=? AND status='posted'`).get(bku.id).s;
   ok('kas BKU tidak bertambah oleh non-BKU', Number(kasBku) === 0, String(kasBku));
   const trxIuran = await req('GET', '/iuran/transaksi');

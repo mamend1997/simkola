@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
+const envCfg = require('./env');
 const lib = require('./lib');
 const dbm = require('./db');
 const ui = require('./ui');
@@ -11,6 +12,7 @@ const ui = require('./ui');
 const PORT = process.env.PORT || 3120;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BODY = 30 * 1024 * 1024;
+const MEDIA_BASE = String(process.env.APP_MEDIA_URL || 'http://127.0.0.1:4310').replace(/\/+$/, '');
 
 /* ---------------- tiny router ---------------- */
 const routes = [];
@@ -190,7 +192,7 @@ async function uploadMedia(base64, filename) {
   const b64 = String(base64).includes(',') ? String(base64).split(',').pop() : String(base64);
   const buf = Buffer.from(b64, 'base64');
   if (!buf.length) throw new Error('Berkas kosong / gagal dibaca.');
-  const r = await fetch(`http://127.0.0.1:4310/api/app-media/upload?filename=${encodeURIComponent(clean)}`, {
+  const r = await fetch(`${MEDIA_BASE}/api/app-media/upload?filename=${encodeURIComponent(clean)}`, {
     method: 'POST',
     headers: { 'X-App-Media-Token': token, 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length },
     body: buf
@@ -330,6 +332,7 @@ require('./routes/trash')({ get, post, dbm, lib, ui, page, ctx, guard, can, flas
 require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
+require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 
 /* ---------------- server ---------------- */
 const server = http.createServer(async (req, res) => {
@@ -337,7 +340,9 @@ const server = http.createServer(async (req, res) => {
   req.BASE = base;
   let url;
   try { url = new URL(req.url, 'http://localhost'); } catch (e) { return makeRes(res).html('Bad request', 400); }
-  const pathname = decodeURIComponent(url.pathname);
+  const pathname0 = decodeURIComponent(url.pathname);
+  // alamat portal publik bisa diubah (mis. /portal-slip-pegawai) → dipetakan ke route kanonik
+  const pathname = dbm.portalRewrite(pathname0) || pathname0;
   req.query = url.searchParams;
 
   // favicon dari logo sekolah
@@ -406,7 +411,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log('SIMKEU Sekolah listening on ' + PORT);
+  console.log('SIMKEU Sekolah listening on ' + PORT + (process.env.APP_BASE_URL ? ' · base ' + process.env.APP_BASE_URL : ''));
 });
 
 /* kotak sampah: buang data kedaluwarsa (>30 hari) saat start & berkala */

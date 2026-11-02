@@ -10,6 +10,7 @@
  * perilaku ini dikendalikan setting `wa_demo_tampil`.
  */
 const dbm = require('./db');
+const env = require('./env');
 
 function normalizePhone(raw) {
   let s = String(raw || '').replace(/[^\d+]/g, '');
@@ -19,12 +20,18 @@ function normalizePhone(raw) {
   if (s.startsWith('8')) s = '62' + s;
   return s;
 }
+/**
+ * Konfigurasi gateway: variabel lingkungan (.env) DIUTAMAKAN, lalu pengaturan
+ * di menu Pengaturan Sistem. Dengan begitu kredensial API key tidak perlu
+ * ditulis di kode maupun di database saat deploy ke hosting lain.
+ */
 function waConfig() {
   return {
-    url: String(dbm.getSetting('wa_api_url', '') || '').trim(),
-    token: String(dbm.getSetting('wa_api_token', '') || '').trim(),
-    payload: String(dbm.getSetting('wa_api_payload', 'form') || 'form').toLowerCase(),
-    demo: dbm.getSetting('wa_demo_tampil', '1') === '1'
+    url: String(process.env.WA_API_URL || dbm.getSetting('wa_api_url', '') || '').trim(),
+    token: String(process.env.WA_API_TOKEN || dbm.getSetting('wa_api_token', '') || '').trim(),
+    payload: String(process.env.WA_API_PAYLOAD || dbm.getSetting('wa_api_payload', 'form') || 'form').toLowerCase(),
+    demo: dbm.getSetting('wa_demo_tampil', '1') === '1',
+    fromEnv: !!(process.env.WA_API_URL || process.env.WA_API_TOKEN)
   };
 }
 async function sendWA(phone, message) {
@@ -53,8 +60,15 @@ async function sendWA(phone, message) {
     return { ok: false, demo: false, reason: 'Gagal menghubungi gateway WhatsApp: ' + e.message };
   }
 }
-function otpMessage({ kode, keperluan, sekolah, menit }) {
-  return `*${sekolah || 'Sekolah'}*\nKode OTP ${keperluan} Anda: *${kode}*\n\nKode berlaku ${menit || 10} menit dan hanya untuk Anda. Jangan bagikan kode ini kepada siapa pun.`;
+function otpMessage({ kode, keperluan, sekolah, menit, link }) {
+  return `*${sekolah || 'Sekolah'}*\nKode OTP ${keperluan} Anda: *${kode}*\n\nKode berlaku ${menit || 10} menit dan hanya untuk Anda. Jangan bagikan kode ini kepada siapa pun.`
+    + (link ? `\n\nBuka portal: ${link}` : '');
+}
+/** tautan absolut portal bila APP_BASE_URL diatur di .env */
+function portalLink(pathname) {
+  const b = env.baseUrl();
+  if (!b) return '';
+  return b + (String(pathname || '').startsWith('/') ? pathname : '/' + pathname);
 }
 
-module.exports = { sendWA, otpMessage, waConfig, normalizePhone };
+module.exports = { sendWA, otpMessage, waConfig, normalizePhone, portalLink };

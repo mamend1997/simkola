@@ -311,7 +311,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         <div class="sig"><div>Mengetahui,</div><div style="font-weight:600">Kepala ${esc(c.settings.sekolah_nama || 'Sekolah')}</div><div class="space"></div>
           <div class="nm">${esc(c.settings.sekolah_kepala || '............................')}</div>
           <div>NIP. ${esc(c.settings.sekolah_nip_kepala || '.....................')}</div></div>
-        <div class="sig"><div>${esc(c.settings.sekolah_nama || '')}, ${tglID(tanggal)}<br>Bendahara</div><div class="space"></div>
+        <div class="sig"><div>${esc(c.settings.print_tempat || 'Cikoneng')}, ${tglID(tanggal)}<br>Bendahara</div><div class="space"></div>
           <div class="nm">${esc(c.settings.sekolah_bendahara || '............................')}</div>
           <div>NIP. ${esc(c.settings.sekolah_nip_bendahara || '.....................')}</div></div>
         <div class="sig"><div>${isCair ? 'Penerima' : 'Penyetor'}</div><div class="space"></div>

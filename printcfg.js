@@ -22,7 +22,8 @@ const DOCS = [
       ['judul_masuk', 'Judul kwitansi pemasukan', 'KWITANSI PENERIMAAN'],
       ['judul_keluar', 'Judul kwitansi pengeluaran', 'KWITANSI PENGELUARAN'],
       ['dari_masuk', 'Label "diterima dari" (pemasukan)', 'Telah diterima dari'],
-      ['dari_keluar', 'Label "terima dari" (pengeluaran)', 'Bendahara Sekolah'],
+      ['dari_keluar', 'Label "diterima dari" (pengeluaran)', 'Telah diterima dari'],
+      ['nilai_dari_keluar', 'Isi baris "diterima dari" (pengeluaran) — {sekolah} = nama sekolah', 'Bendahara {sekolah}'],
       ['sejumlah', 'Label "uang sejumlah"', 'Uang sejumlah'],
       ['untuk', 'Label "untuk pembayaran"', 'Untuk pembayaran'],
       ['rekening', 'Label kode rekening', 'Kode Rekening'],
@@ -108,6 +109,20 @@ const DOCS = [
 
 const DOC_MAP = new Map(DOCS.map(d => [d.key, d]));
 
+/**
+ * Nilai label BAWAAN LAMA yang sudah terlanjur tersimpan di setting `print_design`.
+ * Dibandingkan tanpa memandang huruf besar/kecil; bila cocok, dipakai nilai default
+ * baru supaya perubahan redaksional bawaan ikut terpakai pada instalasi lama.
+ */
+const LEGACY_LABELS = {
+  kwitansi_trx: {
+    // dulu label & isi baris "diterima dari" pengeluaran = "Bendahara Sekolah"
+    dari_keluar: { 'bendahara sekolah': 'Telah diterima dari' }
+  }
+};
+/** teks tempat default pada baris "Cikoneng, 2 November 2026" */
+const TEMPAT_DEFAULT = 'Cikoneng';
+
 function normOrient(v) {
   const s = String(v || '').toLowerCase();
   return ORIENT.includes(s) ? s : '';
@@ -123,9 +138,14 @@ function readAll(dbm) {
   for (const d of DOCS) {
     const cur = docs[d.key] && typeof docs[d.key] === 'object' ? docs[d.key] : {};
     const labels = {};
+    const hasBaru = !!(cur.labels && Object.prototype.hasOwnProperty.call(cur.labels, 'nilai_dari_keluar'));
     for (const [k, , def] of d.fields) {
       const v = cur.labels && cur.labels[k];
-      labels[k] = (v === undefined || v === null || String(v).trim() === '') ? def : String(v);
+      let val = (v === undefined || v === null || String(v).trim() === '') ? def : String(v);
+      const legacy = (LEGACY_LABELS[d.key] || {})[k];
+      // konfigurasi LAMA (belum punya kolom baru) memakai nilai bawaan lama → ikut default baru
+      if (!hasBaru && legacy && legacy[String(val).trim().toLowerCase()]) val = legacy[String(val).trim().toLowerCase()];
+      labels[k] = val;
     }
     out[d.key] = { orient: normOrient(cur.orient) || d.orient, labels };
   }
@@ -145,7 +165,22 @@ function saveFromBody(dbm, body) {
     docs[d.key] = { orient: o || cur[d.key].orient, labels };
   }
   dbm.setSetting('print_design', JSON.stringify({ docs }));
+  // tempat pada baris tanggal semua dokumen ("Cikoneng, 2 November 2026")
+  if (body.print_tempat !== undefined) dbm.setSetting('print_tempat', String(body.print_tempat).trim() || TEMPAT_DEFAULT);
   return docs;
+}
+/** isi placeholder {nama} pada sebuah teks (mis. "Bendahara {sekolah}") */
+function fill(text, vars) {
+  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (vars && vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : ''));
+}
+/** teks tempat cetak (default "Cikoneng"), dipakai sebelum tanggal di semua dokumen */
+function tempat(dbm) {
+  if (!dbm || !dbm.getSetting) return TEMPAT_DEFAULT;
+  return String(dbm.getSetting('print_tempat', TEMPAT_DEFAULT) || '').trim() || TEMPAT_DEFAULT;
+}
+/** baris "Tempat, tanggal" yang seragam untuk semua cetakan */
+function tempatTanggal(dbm, tanggal) {
+  return [tempat(dbm), tanggal].filter(Boolean).join(', ');
 }
 /** label dokumen (fallback ke default bila pengguna mengosongkan) */
 function labels(dbm, key) {
@@ -167,4 +202,7 @@ function pageRule(o, opts = {}) {
   return `@page{size:${paper} ${oo};margin:${margin}}`;
 }
 
-module.exports = { ORIENT, ORIENT_LABEL, DOCS, docOf, readAll, saveFromBody, labels, orient, pageRule, normOrient };
+module.exports = {
+  ORIENT, ORIENT_LABEL, DOCS, docOf, readAll, saveFromBody, labels, orient, pageRule, normOrient,
+  fill, tempat, tempatTanggal, TEMPAT_DEFAULT
+};

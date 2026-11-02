@@ -14,14 +14,18 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
 
   const JENIS_LABEL = { piutang: 'Cek Piutang Pegawai', slip: 'Slip Gaji Pegawai' };
+  /** ujung alamat portal dapat diubah di menu Identitas Sekolah (default: portal-pegawai / portal-slip) */
+  const pgUrl = (base, sub = '') => `${base}/${dbm.portalSlugs().pegawai}${sub}`;
+  const slipUrl = (base, sub = '') => `${base}/${dbm.portalSlugs().slip}${sub}`;
+  const kindUrl = (base, isSlip, sub = '') => isSlip ? slipUrl(base, sub) : pgUrl(base, sub);
 
   function shell({ base, settings, content, title, aktif = 'piutang' }) {
     const logo = settings.sekolah_logo
       ? `<img src="${esc(settings.sekolah_logo)}" alt="Logo">`
       : `<div class="p-logo-ph">${esc((settings.sekolah_nama || 'S').charAt(0))}</div>`;
     const lainnya = aktif === 'piutang'
-      ? `<a class="btn btn-sm portal-login" href="${base}/portal-slip">Slip Gaji Pegawai</a>`
-      : `<a class="btn btn-sm portal-login" href="${base}/portal-pegawai">Cek Piutang Pegawai</a>`;
+      ? `<a class="btn btn-sm portal-login" href="${slipUrl(base)}">Slip Gaji Pegawai</a>`
+      : `<a class="btn btn-sm portal-login" href="${pgUrl(base)}">Cek Piutang Pegawai</a>`;
     return `<!DOCTYPE html><html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(settings.sekolah_nama || 'Sekolah')}</title>
@@ -59,10 +63,10 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       <p class="muted small">Masukkan <b>nama pegawai</b> dan <b>tanggal lahir</b> sesuai data sekolah.
         Sistem mengirim <b>kode OTP 4 digit</b> ke <b>nomor WhatsApp yang sudah terdaftar</b> pada data pegawai sebelum rincian dibuka.</p>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
-      <form method="post" action="${base}${isSlip ? '/portal-slip' : '/portal-pegawai'}/otp">
+      <form method="post" action="${kindUrl(base, isSlip, '/otp')}">
         <div class="field"><label>Nama Pegawai</label>
           <input name="nama" value="${esc(nama)}" required autocomplete="off" placeholder="Ketik minimal 3 huruf nama Anda"
-            data-autocomplete="${base}${isSlip ? '/portal-slip' : '/portal-pegawai'}/nama" data-autocomplete-min="3">
+            data-autocomplete="${kindUrl(base, isSlip, '/nama')}" data-autocomplete-min="3">
           <div class="ac-list" data-ac-list></div>
           <div class="hint">Pilihan nama muncul otomatis setelah Anda mengetik 3 huruf.</div></div>
         <div class="field"><label>Tanggal Lahir</label>
@@ -84,14 +88,14 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
         Untuk pengujian, kode OTP Anda: <b class="mono" style="font-size:18px;letter-spacing:3px">${esc(demoKode)}</b><br>
         <span class="small">Atur <code>wa_api_url</code> &amp; <code>wa_api_token</code> pada Pengaturan Sistem agar kode dikirim otomatis, lalu matikan mode uji.</span></div></div>` : ''}
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
-      <form method="post" action="${base}${isSlip ? '/portal-slip' : '/portal-pegawai'}/verifikasi">
+      <form method="post" action="${kindUrl(base, isSlip, '/verifikasi')}">
         <input type="hidden" name="token" value="${esc(token)}">
         <div class="field"><label>Kode OTP (4 digit)</label>
           <input name="kode" required inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="••••"
             style="letter-spacing:8px;font-size:20px;text-align:center;font-weight:700" autocomplete="one-time-code"></div>
         <button class="btn btn-primary btn-block">${ui.icon('check')}Verifikasi &amp; Tampilkan</button>
       </form>
-      <div class="center mt-2"><a class="btn" href="${base}${isSlip ? '/portal-slip' : '/portal-pegawai'}">Ulangi Pencarian</a></div>
+      <div class="center mt-2"><a class="btn" href="${kindUrl(base, isSlip)}">Ulangi Pencarian</a></div>
     </div>`;
   }
   function closedBlock(settings, base, msg, kind) {
@@ -150,12 +154,13 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
         content: `<div class="portal-card"><h2>Nomor WhatsApp belum terdaftar</h2>
           <p class="muted">Nomor WhatsApp aktif pegawai <b>${esc(pg.nama)}</b> belum tercatat pada master data sekolah, sehingga kode OTP tidak dapat dikirim.
           Silakan hubungi <b>bendahara sekolah</b> untuk memperbarui nomor WhatsApp Anda.</p>
-          <div class="center mt-2"><a class="btn" href="${base}/portal-pegawai">Kembali ke Halaman Pencarian</a></div></div>`
+          <div class="center mt-2"><a class="btn" href="${pgUrl(base)}">Kembali ke Halaman Pencarian</a></div></div>`
       }));
     }
     const o = dbm.otpCreate('piutang', String(pg.id), phone, 10);
     const sent = await wa.sendWA(phone, wa.otpMessage({
-      kode: o.kode, keperluan: 'Cek Piutang Pegawai', sekolah: settings.sekolah_nama || 'Sekolah', menit: 10
+      kode: o.kode, keperluan: 'Cek Piutang Pegawai', sekolah: settings.sekolah_nama || 'Sekolah', menit: 10,
+      link: wa.portalLink('/' + dbm.portalSlugs().pegawai)
     }));
     const demoKode = (!sent.ok && dbm.getSetting('wa_demo_tampil', '1') === '1') ? o.kode : '';
     res.html(shell({
@@ -168,7 +173,50 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
     }));
   });
 
-  function piutangResult({ base, settings, pg }) {
+  /* ================= CATATAN PEGAWAI → BENDAHARA (portal publik) =================
+     Sama seperti kolom catatan pada portal tagihan siswa: pesan masuk ke Dashboard
+     Bendahara. Identitas pengirim otomatis = Nama pegawai hasil verifikasi OTP. */
+  function catatanLabel(sumber) {
+    return sumber === 'slip-pegawai' ? 'Slip Gaji Pegawai' : 'Piutang Pegawai';
+  }
+  function catatanForm({ base, kind, pg, token, periode = '', ok = '', err = '' }) {
+    const isSlip = kind === 'slip';
+    const sumber = isSlip ? 'slip-pegawai' : 'piutang-pegawai';
+    const list = db.prepare(`SELECT * FROM portal_pesan WHERE COALESCE(sumber,'siswa')=? AND CAST(ref AS TEXT)=?
+      ORDER BY id DESC LIMIT 3`).all(sumber, String(pg.id));
+    return `<div class="portal-card">
+      <h3>Kolom Catatan untuk Bendahara</h3>
+      <p class="muted small">Bila ada <b>kekeliruan data</b> ${isSlip ? 'slip gaji/honor' : 'piutang atau cicilan'} Anda, tuliskan di bawah ini.
+        Catatan langsung masuk ke <b>Dashboard Bendahara</b> untuk ditindaklanjuti. Nama &amp; jabatan pengirim tercatat otomatis.</p>
+      ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
+      ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
+      ${list.length ? `<div class="portal-note-list">${list.map(x => `<div class="pn-item">
+        <div class="pn-meta">${esc(String(x.created_at || '').slice(0, 16))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div>
+        <div class="pn-body">${esc(x.pesan)}</div></div>`).join('')}</div>` : ''}
+      <form method="post" action="${kindUrl(base, isSlip, '/pesan')}">
+        <input type="hidden" name="token" value="${esc(token || '')}">
+        ${isSlip ? `<input type="hidden" name="periode" value="${esc(periode)}">` : ''}
+        <div class="row2">
+          <div class="field"><label>Nama Pegawai (otomatis)</label>
+            <div class="catatan-locked-nama"><b>${esc(pg.nama)}</b> <span class="t-sub">${esc(pg.jabatan || '-')}</span></div></div>
+          <div class="field"><label>Nomor WhatsApp Terdaftar</label>
+            <input value="${esc(pg.whatsapp || '-')}" readonly></div>
+        </div>
+        <div class="field"><label>Terkait</label>
+          <select name="terkait">
+            <option value="${isSlip ? 'payroll' : 'piutang'}">${isSlip ? 'Slip Gaji / Honor' : 'Piutang &amp; Cicilan'}</option>
+            <option value="umum">Umum / lain-lain</option>
+          </select></div>
+        <div class="field"><label>Catatan / Detail Perbaikan <span style="color:var(--red)">*</span></label>
+          <textarea name="pesan" rows="4" required minlength="5" maxlength="2000" placeholder="${isSlip
+        ? 'Contoh: Potongan BPJS pada slip Oktober tertulis Rp 120.000, seharusnya Rp 90.000.'
+        : 'Contoh: Cicilan piutang saya tanggal 12/08 sebesar Rp 500.000 belum tercatat pada rincian.'}"></textarea></div>
+        <button class="btn btn-primary btn-block">${ui.icon('upload')}Kirim Catatan ke Bendahara</button>
+      </form>
+    </div>`;
+  }
+
+  function piutangResult({ base, settings, pg, token = '', ok = '', err = '' }) {
     // Sinkronkan status kolom + hitung agregat langsung dari tabel pembayaran (bukan cache),
     // sehingga transaksi yang sudah lunas TIDAK PERNAH muncul sebagai tagihan aktif.
     try { dbm.piutangSyncStatus(); } catch (e) { }
@@ -237,8 +285,9 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
           <div class="rc"><div class="lbl">Total Sisa Tagihan</div><div class="val" style="color:${sisaTotal > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(sisaTotal)}</div><div class="sm">saldo terhutang saat ini</div></div>
           <div class="rc"><div class="lbl">Sudah LUNAS</div><div class="val" style="color:var(--green)">${lunasCount}</div><div class="sm">transaksi berstatus LUNAS</div></div>
         </div>
-        <div class="center mt-2"><a class="btn" href="${base}/portal-pegawai">${ui.icon('search')}Kembali ke Halaman Pencarian</a></div>
-      </div>`;
+        <div class="center mt-2"><a class="btn" href="${pgUrl(base)}">${ui.icon('search')}Kembali ke Halaman Pencarian</a></div>
+      </div>
+      ${catatanForm({ base, kind: 'piutang', pg, token, ok, err })}`;
   }
 
   post('/portal-pegawai/verifikasi', (req, res) => {
@@ -259,7 +308,10 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       return res.html(shell({ base, settings, title: 'Data Tidak Ditemukan', aktif: 'piutang', content: searchBlock({ base, kind: 'piutang', err: 'Data pegawai tidak ditemukan.' }) }));
     }
     dbm.logAudit(null, 'PORTAL PIUTANG', 'piutang', `Portal publik: ${pg.nama} membuka rincian piutang via OTP WhatsApp`);
-    res.html(shell({ base, settings, title: 'Rincian Piutang', aktif: 'piutang', content: piutangResult({ base, settings, pg }) }));
+    res.html(shell({
+      base, settings, title: 'Rincian Piutang', aktif: 'piutang',
+      content: piutangResult({ base, settings, pg, token: hasil.row.token || token })
+    }));
   });
 
   /* ================= PORTAL SLIP GAJI ================= */
@@ -378,7 +430,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       const ada = adaData.has(`${selTahun}-${String(b).padStart(2, '0')}`);
       return `<option value="${b}" ${b === selBulan ? 'selected' : ''}>${bulanNama(b)}${ada ? ' •' : ''}</option>`;
     }).join('');
-    return `<form method="get" action="${base}/portal-slip/hasil" class="portal-period">
+    return `<form method="get" action="${slipUrl(base, '/hasil')}" class="portal-period">
       <input type="hidden" name="token" value="${esc(token)}">
       <div class="field" style="margin:0"><label>Bulan</label>
         <select name="bulan" data-autosubmit aria-label="Pilih bulan slip gaji">${opsiBulan}</select></div>
@@ -391,7 +443,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
     <div class="help small" style="margin-top:6px">Periode <b>•</b> = data slip gaji sudah tersedia. Pilihan tersimpan pada kombinasi bulan &amp; tahun di atas.</div>`;
   }
 
-  function slipResult({ base, settings, pg, token, periode: periodeRaw }) {
+  function slipResult({ base, settings, pg, token, periode: periodeRaw, ok = '', err = '' }) {
     const pick = pickPeriode(pg.nama, periodeRaw);
     const periode = pick.periode;
     const rec = slipRowOf(pg.nama, periode);
@@ -404,7 +456,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
         <div style="text-align:right">
           <div class="badge ${data ? 'green' : 'gray'}">Periode aktif: ${esc(labelPeriode)}</div>
           <div style="margin-top:6px">
-            <a class="btn btn-primary btn-sm" href="${base}/portal-slip/cetak?token=${encodeURIComponent(token)}&periode=${encodeURIComponent(periode)}" target="_blank">${ui.icon('printer')}Cetak Slip ${esc(labelPeriode)}</a>
+            <a class="btn btn-primary btn-sm" href="${slipUrl(base, '/cetak')}?token=${encodeURIComponent(token)}&periode=${encodeURIComponent(periode)}" target="_blank">${ui.icon('printer')}Cetak Slip ${esc(labelPeriode)}</a>
           </div>
         </div>
       </div>
@@ -421,8 +473,9 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
         : `<div class="alert info">${ui.icon('info')}<div><b>Data slip gaji untuk periode ${esc(labelPeriode)} belum tersedia.</b><br>
             <span class="small">Slip gaji periode ini belum diinput oleh Bendahara sekolah. Silakan pilih periode lain pada dropdown di atas,
             atau hubungi bendahara sekolah bila Anda merasa ini keliru.</span></div></div>`}
-      <div class="center mt-2"><a class="btn" href="${base}/portal-slip">${ui.icon('search')}Kembali ke Halaman Pencarian</a></div>
-    </div>`;
+      <div class="center mt-2"><a class="btn" href="${slipUrl(base)}">${ui.icon('search')}Kembali ke Halaman Pencarian</a></div>
+    </div>
+    ${catatanForm({ base, kind: 'slip', pg, token, periode, ok, err })}`;
     return head + body;
   }
 
@@ -441,7 +494,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       }));
     }
     const pg = db.prepare('SELECT * FROM pegawai WHERE id=?').get(Number(row.ref));
-    if (!pg) return res.redirect(base + '/portal-slip');
+    if (!pg) return res.redirect(slipUrl(base));
     const bulan = Number(req.query.get('bulan') || 0);
     const tahun = Number(req.query.get('tahun') || 0);
     const periodeParam = (bulan >= 1 && bulan <= 12 && tahun >= 2000)
@@ -449,7 +502,10 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       : (req.query.get('periode') || '');
     res.html(shell({
       base, settings, title: 'Slip Gaji ' + periodeLabelID(periodeParam || nowPeriode()), aktif: 'slip',
-      content: slipResult({ base, settings, pg, token: row.token, periode: periodeParam })
+      content: slipResult({
+        base, settings, pg, token: row.token, periode: periodeParam,
+        ok: String(req.query.get('ok') || ''), err: String(req.query.get('err') || '')
+      })
     }));
   });
 
@@ -483,12 +539,13 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
         content: `<div class="portal-card"><h2>Nomor WhatsApp belum terdaftar</h2>
           <p class="muted">Nomor WhatsApp aktif pegawai <b>${esc(pg.nama)}</b> belum tercatat pada master data sekolah, sehingga kode OTP tidak dapat dikirim.
           Silakan hubungi <b>bendahara sekolah</b> untuk memperbarui nomor WhatsApp Anda.</p>
-          <div class="center mt-2"><a class="btn" href="${base}/portal-slip">Kembali ke Halaman Pencarian</a></div></div>`
+          <div class="center mt-2"><a class="btn" href="${slipUrl(base)}">Kembali ke Halaman Pencarian</a></div></div>`
       }));
     }
     const o = dbm.otpCreate('slip', String(pg.id), phone, 10);
     const sent = await wa.sendWA(phone, wa.otpMessage({
-      kode: o.kode, keperluan: 'Slip Gaji Pegawai', sekolah: settings.sekolah_nama || 'Sekolah', menit: 10
+      kode: o.kode, keperluan: 'Slip Gaji Pegawai', sekolah: settings.sekolah_nama || 'Sekolah', menit: 10,
+      link: wa.portalLink('/' + dbm.portalSlugs().slip)
     }));
     const demoKode = (!sent.ok && dbm.getSetting('wa_demo_tampil', '1') === '1') ? o.kode : '';
     res.html(shell({
@@ -521,6 +578,49 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
     }));
   });
 
+  /* ---------- catatan pegawai dari portal publik → Dashboard Bendahara ---------- */
+  function handlePesan(req, res, kind) {
+    const settings = dbm.settingsAll();
+    const base = req.BASE;
+    const isSlip = kind === 'slip';
+    const token = String(req.body.token || '');
+    const row = dbm.otpGet(token);
+    // wajib sesi OTP yang sudah terverifikasi untuk pegawai ybs (tidak bisa kirim atas nama orang lain)
+    const pg = (row && Number(row.verified) === 1 && row.jenis === kind)
+      ? db.prepare('SELECT * FROM pegawai WHERE id=?').get(Number(row.ref)) : null;
+    const pesan = String(req.body.pesan || '').trim();
+    const periodeQ = /^\d{4}-\d{2}$/.test(String(req.body.periode || '')) ? String(req.body.periode) : '';
+    const gagal = msg => {
+      if (!pg) return res.html(shell({
+        base, settings, title: 'Akses Kedaluwarsa', aktif: kind,
+        content: searchBlock({ base, kind, err: 'Sesi verifikasi tidak valid atau sudah kedaluwarsa. Silakan ulangi pencarian.' })
+      }));
+      if (isSlip) {
+        return res.redirect(slipUrl(base, '/hasil') + `?token=${encodeURIComponent(token)}&periode=${encodeURIComponent(periodeQ)}&err=${encodeURIComponent(msg)}`);
+      }
+      return res.html(shell({ base, settings, title: 'Rincian Piutang', aktif: 'piutang', content: piutangResult({ base, settings, pg, token, err: msg }) }));
+    };
+    if (!pg) return gagal('Sesi verifikasi tidak valid.');
+    if (pesan.length < 5) return gagal('Catatan terlalu pendek — tuliskan minimal 5 karakter.');
+    const terkait = ['payroll', 'piutang', 'umum'].includes(String(req.body.terkait)) ? String(req.body.terkait) : (isSlip ? 'payroll' : 'piutang');
+    const sumber = isSlip ? 'slip-pegawai' : 'piutang-pegawai';
+    dbm.portalPesanAdd({
+      nama: pg.nama, kontak: pg.whatsapp || '', pesan: pesan.slice(0, 2000),
+      sumber, ref: String(pg.id), taId: dbm.taAutoId() || null
+    });
+    dbm.logAudit(null, 'CATATAN PEGAWAI', 'portal', `${catatanLabel(sumber)} — ${pg.nama}: ${pesan.slice(0, 140)}${periodeQ ? ' (' + periodeQ + ')' : ''}`);
+    const okMsg = 'Terima kasih, catatan Anda sudah dikirim ke bendahara sekolah.';
+    if (isSlip) {
+      return res.redirect(slipUrl(base, '/hasil') + `?token=${encodeURIComponent(token)}&periode=${encodeURIComponent(periodeQ)}&ok=${encodeURIComponent(okMsg)}`);
+    }
+    res.html(shell({
+      base, settings, title: 'Rincian Piutang', aktif: 'piutang',
+      content: piutangResult({ base, settings, pg, token, ok: okMsg })
+    }));
+  }
+  post('/portal-pegawai/pesan', (req, res) => handlePesan(req, res, 'piutang'));
+  post('/portal-slip/pesan', (req, res) => handlePesan(req, res, 'slip'));
+
   /* cetak semua slip pegawai (hasil verifikasi OTP) */
   get('/portal-slip/cetak', (req, res) => {
     const settings = dbm.settingsAll();
@@ -530,7 +630,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       return res.html(shell({ base, settings, title: 'Akses Kedaluwarsa', aktif: 'slip', content: searchBlock({ base, kind: 'slip', err: 'Sesi verifikasi tidak valid atau sudah kedaluwarsa. Silakan ulangi pencarian.' }) }));
     }
     const pg = db.prepare('SELECT * FROM pegawai WHERE id=?').get(Number(row.ref));
-    if (!pg) return res.redirect(base + '/portal-slip');
+    if (!pg) return res.redirect(slipUrl(base));
     /* cetak SESUAI periode terpilih (bulan & tahun pada dropdown portal).
        Tanpa parameter periode → cetak periode default (bulan berjalan / terakhir tersedia). */
     const cetakPeriode = String(req.query.get('periode') || '');
@@ -581,7 +681,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
     const slOrient = printcfg.orient(req, dbm, 'slip_honor');
     res.html(ui.printPage({
       settings, base, title: `Slip Gaji ${pg.nama} — ${labelCetak}`,
-      body, backHref: `/portal-slip/hasil?token=${encodeURIComponent(row.token)}&periode=${encodeURIComponent(periodeAktif)}`,
+      body, backHref: `/${dbm.portalSlugs().slip}/hasil?token=${encodeURIComponent(row.token)}&periode=${encodeURIComponent(periodeAktif)}`,
       backLabel: 'Kembali ke Portal',
       orient: slOrient, selfPath: req.url,
       pageCss: `@page{size:A4 ${slOrient === 'landscape' ? 'landscape' : 'portrait'};margin:10mm}

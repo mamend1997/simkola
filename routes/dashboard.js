@@ -112,13 +112,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const pesanBaru = dbm.portalPesanCount();
     const pesanList = dbm.portalPesanList({ limit: 6 });
     const pesanCard = `<div class="card mb-3" id="pesanOrangTua" style="${pesanBaru ? 'border-color:#F7DFB5;background:#FFFDF7' : ''}">
-      <div class="card-head"><div><h3>Pesan / Catatan Orang Tua ${pesanBaru ? `<span class="badge amber plain">${pesanBaru} baru</span>` : ''}</h3>
-        <div class="sub">Catatan yang dikirim orang tua/wali melalui portal cek tagihan publik</div></div>
+      <div class="card-head"><div><h3>Pesan / Catatan Orang Tua &amp; Pegawai ${pesanBaru ? `<span class="badge amber plain">${pesanBaru} baru</span>` : ''}</h3>
+        <div class="sub">Catatan dari portal publik: tagihan siswa, piutang pegawai &amp; slip gaji pegawai</div></div>
         <div class="toolbar"><a class="btn btn-sm" href="${c.base}/pesan-orangtua">${ui.icon('inbox')}Semua Pesan</a></div></div>
       ${pesanList.length ? `<div class="table-wrap"><table><thead><tr><th>Waktu</th><th>Siswa</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${pesanList.map(x => `<tr>
           <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
-          <td class="t-strong">${esc(x.nama || '-')}</td>
+          <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${x.sumber === 'slip-pegawai' ? 'Slip Pegawai' : x.sumber === 'piutang-pegawai' ? 'Piutang Pegawai' : 'Tagihan Siswa'}</div></td>
           <td style="max-width:420px">${esc(x.pesan)}</td>
           <td class="t-sub">${esc(x.kontak || '-')}</td>
           <td>${x.status === 'selesai' ? ui.badge('Selesai Ditindaklanjuti', 'green') : ui.badge('Baru', 'amber')}</td>
@@ -128,6 +128,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         </tr>`).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada catatan orang tua', 'Catatan dari portal cek tagihan publik akan muncul di sini otomatis.')}
     </div>`;
+
+    /* ---------- catatan pegawai kepada bendahara ---------- */
+    const pengelolaCatatan = c.can('catatan', 'edit');
+    const catatanBuka = pengelolaCatatan ? dbm.catatanCount(taId) : 0;
+    const catatanList = dbm.catatanList({ taId, userId: pengelolaCatatan ? null : req.user.id, limit: 4 });
+    const catatanCard = (catatanList.length || catatanBuka) ? `<div class="card mb-3" id="catatanPegawai" style="${catatanBuka ? 'border-color:#F7DFB5;background:#FFFDF7' : ''}">
+      <div class="card-head"><div><h3>${pengelolaCatatan ? 'Catatan Pegawai' : 'Catatan Saya untuk Bendahara'} ${catatanBuka ? `<span class="badge amber plain">${catatanBuka} perlu ditindaklanjuti</span>` : ''}</h3>
+        <div class="sub">Laporan kekeliruan data (mis. nominal honor) — nama pengirim tercatat otomatis dari sesi login</div></div>
+        <div class="toolbar"><a class="btn btn-sm" href="${c.base}/catatan-pegawai">${ui.icon('inbox')}Buka Catatan</a></div></div>
+      ${catatanList.length ? `<div class="table-wrap"><table><thead><tr><th>Waktu</th><th>Pegawai</th><th>Terkait</th><th>Catatan</th><th>Status</th></tr></thead><tbody>
+        ${catatanList.map(x => `<tr>
+          <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
+          <td class="t-strong">${esc(x.nama)}${x.jabatan ? `<div class="t-sub">${esc(x.jabatan)}</div>` : ''}</td>
+          <td class="t-sub">${esc(x.terkait || 'umum')}${x.periode ? ` · ${esc(dbm.periodeLabel(x.periode))}` : ''}</td>
+          <td style="max-width:420px">${esc(String(x.pesan).slice(0, 220))}</td>
+          <td>${x.status === 'selesai' ? ui.badge('Selesai', 'green') : x.status === 'diproses' ? ui.badge('Diproses', 'blue') : ui.badge('Baru', 'amber')}</td>
+        </tr>`).join('')}
+      </tbody></table></div>` : ui.emptyState('Belum ada catatan pegawai', 'Catatan dari pegawai akan muncul di sini otomatis.')}
+    </div>` : '';
 
     /* ---------- analitik iuran tahun pelajaran (ringkasan, matriks, metode, per grup) ---------- */
     const iur = ta ? dbm.iuranAnalytics(ta.id) : { summary: { tagihan: 0, terbayar: 0, potongan: 0, sisa: 0, siswa: 0 }, monthly: [], metode: [], grup: [], nonBulanan: { tagihan: 0, dibayar: 0 } };
@@ -253,6 +272,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
 
     ${iuranSection}
     ${pesanCard}
+    ${catatanCard}
 
     <div class="card mb-3">
       <div class="card-head">
@@ -423,8 +443,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const rows = dbm.portalPesanList({ status: st || undefined, limit: 300 });
     const baru = rows.filter(x => x.status === 'baru').length;
     const content = `<div class="card">
-      <div class="card-head"><div><h3>Pesan / Catatan Orang Tua</h3>
-        <div class="sub">${rows.length} catatan · ${baru} belum ditindaklanjuti · dikirim dari portal cek tagihan publik</div></div>
+      <div class="card-head"><div><h3>Pesan / Catatan Orang Tua &amp; Pegawai</h3>
+        <div class="sub">${rows.length} catatan · ${baru} belum ditindaklanjuti · dari portal publik (tagihan siswa, piutang &amp; slip pegawai)</div></div>
         <form method="get" action="${c.base}/pesan-orangtua" class="toolbar">
           <select name="status" data-autosubmit>
             <option value="">Semua Status</option>
@@ -432,19 +452,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
             <option value="selesai" ${st === 'selesai' ? 'selected' : ''}>Selesai Ditindaklanjuti</option>
           </select>
         </form></div>
-      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Siswa</th><th>Catatan Orang Tua</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
-        ${rows.map(x => `<tr>
+      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Sumber</th><th>Nama</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+        ${rows.map(x => {
+        const sumber = String(x.sumber || 'siswa');
+        const sumberBadge = sumber === 'slip-pegawai' ? ui.badge('Slip Pegawai', 'blue')
+          : sumber === 'piutang-pegawai' ? ui.badge('Piutang Pegawai', 'orange') : ui.badge('Tagihan Siswa', 'gray');
+        const tautan = sumber === 'siswa'
+          ? `<a href="${c.base}/iuran/data/${Number(x.siswa_id) || 0}">buka data iuran</a>`
+          : `<a href="${c.base}/pegawai">data pegawai</a>`;
+        return `<tr>
           <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
-          <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub"><a href="${c.base}/iuran/data/${Number(x.siswa_id) || 0}">buka data iuran</a></div></td>
+          <td>${sumberBadge}</td>
+          <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${tautan}</div></td>
           <td style="max-width:520px">${esc(x.pesan)}</td>
           <td class="t-sub">${esc(x.kontak || '-')}</td>
           <td>${x.status === 'selesai' ? ui.badge('Selesai Ditindaklanjuti', 'green') : ui.badge('Baru', 'amber')}
             ${x.status === 'selesai' ? `<div class="t-sub">${esc(String(x.selesai_at || '').slice(0, 16))} · ${esc(x.selesai_by || '')}</div>` : ''}</td>
           <td class="right nowrap">${x.status === 'selesai' ? '—'
-        : `<form method="post" action="${c.base}/pesan-orangtua/selesai" style="display:inline"><input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="/pesan-orangtua${st ? '?status=' + st : ''}"><button class="btn btn-sm btn-green">${ui.icon('check')}Tandai Selesai</button></form>`}</td>
-        </tr>`).join('')}
-      </tbody></table></div>` : ui.emptyState('Belum ada catatan', 'Catatan orang tua/wali dari portal publik akan tampil di sini.')}
-      <p class="help mt-2">Portal publik cek tagihan: <a href="${c.base}/portal" target="_blank">buka portal</a> — catatan orang tua otomatis masuk ke sini &amp; dashboard.</p>
+          : `<form method="post" action="${c.base}/pesan-orangtua/selesai" style="display:inline"><input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="/pesan-orangtua${st ? '?status=' + st : ''}"><button class="btn btn-sm btn-green">${ui.icon('check')}Tandai Selesai</button></form>`}</td>
+        </tr>`;
+      }).join('')}
+      </tbody></table></div>` : ui.emptyState('Belum ada catatan', 'Catatan orang tua/wali & pegawai dari portal publik akan tampil di sini.')}
+      <p class="help mt-2">Portal publik (alamat dapat diubah di menu <a href="${c.base}/sekolah">Identitas Sekolah</a>):
+        <a href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank">tagihan siswa</a> ·
+        <a href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank">piutang pegawai</a> ·
+        <a href="${c.base}/${dbm.portalSlugs().slip}" target="_blank">slip gaji pegawai</a>
+        — semua catatan otomatis masuk ke sini &amp; dashboard.</p>
     </div>`;
     page(req, res, { title: 'Pesan / Catatan Orang Tua', sub: 'Umpan balik orang tua/wali dari portal publik', active: 'pesan_orangtua', content });
   });

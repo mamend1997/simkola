@@ -1,6 +1,8 @@
 'use strict';
 const path = require('path');
 const fs = require('fs');
+// muat konfigurasi .env sebelum apa pun membaca process.env (DB_PATH, dsb.)
+require('./env');
 const Database = require('better-sqlite3');
 const { hashPassword, nowStamp, todayISO, parseMoney } = require('./lib');
 
@@ -147,9 +149,18 @@ CREATE INDEX IF NOT EXISTS idx_bs_siswa ON beasiswa_siswa(siswa_id);
 CREATE TABLE IF NOT EXISTS portal_pesan (
   id INTEGER PRIMARY KEY AUTOINCREMENT, siswa_id INTEGER, nama TEXT, kontak TEXT,
   pesan TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'baru',
-  tahun_ajaran_id INTEGER, created_at TEXT, selesai_at TEXT, selesai_by TEXT
+  tahun_ajaran_id INTEGER, created_at TEXT, selesai_at TEXT, selesai_by TEXT,
+  sumber TEXT DEFAULT 'siswa', ref TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pp_status ON portal_pesan(status);
+/* catatan / laporan kekeliruan dari pegawai (login) kepada bendahara */
+CREATE TABLE IF NOT EXISTS catatan_pegawai (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, nama TEXT NOT NULL, jabatan TEXT,
+  pesan TEXT NOT NULL, terkait TEXT, periode TEXT, status TEXT NOT NULL DEFAULT 'baru',
+  balasan TEXT, balas_oleh TEXT, balas_at TEXT, tahun_ajaran_id INTEGER,
+  created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cp_status ON catatan_pegawai(status);
 /* kode OTP portal publik (pegawai / slip gaji) */
 CREATE TABLE IF NOT EXISTS otp_code (
   token TEXT PRIMARY KEY, jenis TEXT NOT NULL, ref TEXT,
@@ -323,6 +334,7 @@ const MODULES = [
   { key: 'pegawai', label: 'Data Pegawai' },
   { key: 'payroll', label: 'Payroll & Leger Honor' },
   { key: 'rekon', label: 'Rekonsiliasi Bank' },
+  { key: 'catatan', label: 'Catatan Pegawai' },
   { key: 'laporan', label: 'Laporan & Export' },
   { key: 'audit', label: 'Audit Log' },
   { key: 'backup', label: 'Backup & Restore' }
@@ -335,14 +347,15 @@ function defaultAllowed(role, module, action) {
   if (role === 'super_admin') return 1;
   const AKADEMIK = ['siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran', 'ekskul'];
   if (role === 'kepala_sekolah') {
-    if (action === 'view') return ['dashboard', 'transaksi', 'laporan', 'bku', 'anggaran', 'piutang', 'piutang_lain', 'piutang_lainnya', 'sekolah', 'audit', 'tutup_bulanan', 'import', 'pegawai', 'payroll', 'beasiswa', 'mutasi_kas', ...AKADEMIK].includes(module) ? 1 : 0;
+    if (action === 'view') return ['dashboard', 'transaksi', 'laporan', 'bku', 'anggaran', 'piutang', 'piutang_lain', 'piutang_lainnya', 'sekolah', 'audit', 'tutup_bulanan', 'import', 'pegawai', 'payroll', 'beasiswa', 'mutasi_kas', 'catatan', ...AKADEMIK].includes(module) ? 1 : 0;
     if (action === 'approve' && module === 'transaksi') return 1;
+    if (action === 'edit' && module === 'catatan') return 1;
     if (action === 'export' && ['laporan', 'payroll', 'iuran'].includes(module)) return 1;
     return 0;
   }
   if (role === 'staff') {
-    if (action === 'view') return ['dashboard', 'transaksi', 'bku', 'piutang', 'piutang_lain', 'piutang_lainnya', 'saldo_awal', 'coa', 'aset', 'pegawai', 'beasiswa', 'mutasi_kas', ...AKADEMIK].includes(module) ? 1 : 0;
-    if (action === 'create') return ['transaksi', 'piutang', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa', 'ekskul'].includes(module) ? 1 : 0;
+    if (action === 'view') return ['dashboard', 'transaksi', 'bku', 'piutang', 'piutang_lain', 'piutang_lainnya', 'saldo_awal', 'coa', 'aset', 'pegawai', 'beasiswa', 'mutasi_kas', 'catatan', ...AKADEMIK].includes(module) ? 1 : 0;
+    if (action === 'create') return ['transaksi', 'piutang', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa', 'ekskul', 'catatan'].includes(module) ? 1 : 0;
     if (action === 'edit') return ['transaksi', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa'].includes(module) ? 1 : 0;
     return 0;
   }
@@ -423,6 +436,9 @@ function bootstrap() {
       kop_baris: 'PERWAKILAN YAYASAN PEMBINA LEMBAGA PENDIDIKAN\nPERSATUAN GURU REPUBLIK INDONESIA\n(YPLP-PGRI) KABUPATEN CIAMIS\nSEKOLAH MENENGAH KEJURUAN PGRI CIKONENG\nAKREDITASI : A - NPSN : 20211525\nJalan Raya No.144 Telp./Fax.:(0265)773258 e-mail:smkpgrickn@yahoo.co.id Cikoneng- Ciamis',
       kop_font: '10',
       kop_font_besar: '15',
+      // tempat yang dicetak sebelum tanggal pada semua dokumen ("Cikoneng, 2 November 2026")
+      print_tempat: 'Cikoneng',
+      print_design: '{}',
       // ukuran kertas kwitansi iuran (mm) — default 21 cm x 9,9 cm (1/3 F4)
       kwitansi_w_mm: '210',
       kwitansi_h_mm: '99',
@@ -430,6 +446,10 @@ function bootstrap() {
       portal_aktif: '1',
       portal_pegawai_aktif: '1',
       portal_slip_aktif: '1',
+      // alamat (slug) ujung URL portal publik — boleh diubah, default seperti di bawah
+      portal_slug: 'portal',
+      portal_pegawai_slug: 'portal-pegawai',
+      portal_slip_slug: 'portal-slip',
       // gateway WhatsApp untuk OTP portal publik (kosong = mode demo: kode ditampilkan di layar)
       wa_api_url: '',
       wa_api_token: '',
@@ -667,6 +687,11 @@ function bootstrap() {
     const ekCols = db.prepare('PRAGMA table_info(ekskul_honor)').all().map(c => c.name);
     if (!ekCols.includes('jenis')) db.exec("ALTER TABLE ekskul_honor ADD COLUMN jenis TEXT DEFAULT ''");
 
+    /* ---------- portal publik: sumber catatan (siswa / piutang pegawai / slip) ---------- */
+    const ppCols = db.prepare('PRAGMA table_info(portal_pesan)').all().map(c => c.name);
+    if (!ppCols.includes('sumber')) db.exec("ALTER TABLE portal_pesan ADD COLUMN sumber TEXT DEFAULT 'siswa'");
+    if (!ppCols.includes('ref')) db.exec('ALTER TABLE portal_pesan ADD COLUMN ref TEXT');
+
     // default ukuran kertas & kop (DB lama yang belum punya)
     {
       const setif2 = db.prepare('INSERT OR IGNORE INTO settings (k,v) VALUES (?,?)');
@@ -675,8 +700,16 @@ function bootstrap() {
       setif2.run('kwitansi_h_mm', '99');
       setif2.run('kwitansi_margin_mm', '6');
       setif2.run('portal_aktif', '1');
+      setif2.run('portal_pegawai_aktif', '1');
+      setif2.run('portal_slip_aktif', '1');
+      // alamat (slug) portal publik — dapat diubah di menu Identitas Sekolah
+      setif2.run('portal_slug', 'portal');
+      setif2.run('portal_pegawai_slug', 'portal-pegawai');
+      setif2.run('portal_slip_slug', 'portal-slip');
       setif2.run('kop_font', '10');
       setif2.run('kop_font_besar', '15');
+      // tempat cetak pada baris "Cikoneng, 2 November 2026" (dapat diubah di Desain Templat Cetak)
+      setif2.run('print_tempat', 'Cikoneng');
       if (!db.prepare("SELECT 1 FROM settings WHERE k='kop_baris'").get()) {
         setif2.run('kop_baris', 'PERWAKILAN YAYASAN PEMBINA LEMBAGA PENDIDIKAN\nPERSATUAN GURU REPUBLIK INDONESIA\n(YPLP-PGRI) KABUPATEN CIAMIS\nSEKOLAH MENENGAH KEJURUAN PGRI CIKONENG\nAKREDITASI : A - NPSN : 20211525\nJalan Raya No.144 Telp./Fax.:(0265)773258 e-mail:smkpgrickn@yahoo.co.id Cikoneng- Ciamis');
       }
@@ -775,11 +808,96 @@ function getSetting(k, d = '') {
 }
 function setSetting(k, v) {
   db.prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v ?? ''));
+  portalSlugCache = null;   // alamat portal publik bisa berubah → segarkan cache
 }
 function settingsAll() {
   const out = {};
   for (const r of db.prepare('SELECT k,v FROM settings').all()) out[r.k] = r.v;
   return out;
+}
+
+/* ==================================================================
+   ALAMAT (SLUG) PORTAL PUBLIK — dapat diubah dari menu Identitas Sekolah
+   ------------------------------------------------------------------
+   Tiga portal publik punya ujung alamat yang bisa diatur sendiri:
+     portal_slug          → default 'portal'          (tagihan iuran siswa)
+     portal_pegawai_slug  → default 'portal-pegawai'  (tagihan piutang pegawai)
+     portal_slip_slug     → default 'portal-slip'     (slip gaji / honor)
+   ================================================================== */
+const PORTAL_SLUG_KEYS = { siswa: 'portal_slug', pegawai: 'portal_pegawai_slug', slip: 'portal_slip_slug' };
+const PORTAL_SLUG_DEFAULT = { siswa: 'portal', pegawai: 'portal-pegawai', slip: 'portal-slip' };
+/** path aplikasi yang tidak boleh dipakai sebagai slug portal */
+const RESERVED_SLUGS = new Set(['login', 'logout', 'assets', 'favicon.ico', 'favicon.svg', 'favicon.png',
+  'transaksi', 'laporan', 'backup', 'pengguna', 'sekolah', 'siswa', 'iuran', 'payroll', 'pegawai', 'aset',
+  'coa', 'bku', 'import', 'audit', 'trash', 'approval', 'rekon', 'piutang', 'piutang-lain', 'piutang-lainnya',
+  'beasiswa', 'ekskul', 'tahun-ajaran', 'anggaran', 'saldo-awal', 'mutasi-kas', 'mutasi-kelas', 'kelas',
+  'program-keahlian', 'tutup-bulanan', 'desain-cetak', 'reset-tahun', 'audit-orphan', 'tampilan-menu',
+  'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip']);
+function normalizePortalSlug(raw, fallback) {
+  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  if (s.length < 3 || s.length > 40) return fallback;
+  return s;
+}
+let portalSlugCache = null;
+/** { siswa, pegawai, slip } — slug efektif (sudah tervalidasi & unik) */
+function portalSlugs() {
+  if (portalSlugCache) return portalSlugCache;
+  const raw = {};
+  for (const [k, key] of Object.entries(PORTAL_SLUG_KEYS)) {
+    const v = String(getSetting(key, '') || '').trim();
+    raw[k] = v ? normalizePortalSlug(v, PORTAL_SLUG_DEFAULT[k]) : PORTAL_SLUG_DEFAULT[k];
+  }
+  // pastikan unik antar portal & tidak menabrak path aplikasi
+  const used = new Set();
+  const out = {};
+  for (const k of ['siswa', 'pegawai', 'slip']) {
+    let s = raw[k];
+    if (RESERVED_SLUGS.has(s) && s !== PORTAL_SLUG_DEFAULT[k]) s = PORTAL_SLUG_DEFAULT[k];
+    let n = 2;
+    const base = s;
+    while (used.has(s)) s = `${base}-${n++}`;
+    used.add(s);
+    out[k] = s;
+  }
+  portalSlugCache = out;
+  return out;
+}
+/** true bila slug berbeda dari default (dipakai UI) */
+function portalSlugIsCustom(key) { return portalSlugs()[key] !== PORTAL_SLUG_DEFAULT[key]; }
+/**
+ * Path kanonik untuk sebuah request: slug kustom → path internal.
+ * Dipakai server.js sebelum pencocokan route (mis. /portal-slip-pegawai → /portal-slip).
+ */
+function portalRewrite(pathname) {
+  const p = String(pathname || '');
+  if (!p.startsWith('/')) return null;
+  const slugs = portalSlugs();
+  const seg = '/' + p.slice(1).split('/')[0];
+  for (const [key, canonical] of [['siswa', '/portal'], ['pegawai', '/portal-pegawai'], ['slip', '/portal-slip']]) {
+    if (slugs[key] !== PORTAL_SLUG_DEFAULT[key] && seg === '/' + slugs[key]) {
+      return canonical + p.slice(seg.length);
+    }
+  }
+  return null;
+}
+/** validasi slug yang diisi pengguna; null = valid */
+function portalSlugError(raw, key) {
+  const s = String(raw || '').trim();
+  if (!s) return null;   // kosong = pakai default
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s.toLowerCase())) {
+    return 'Alamat hanya boleh huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.';
+  }
+  const low = s.toLowerCase();
+  // nilai default portal ybs. selalu boleh dipakai kembali
+  if (low === PORTAL_SLUG_DEFAULT[key]) return null;
+  if (RESERVED_SLUGS.has(low)) return `Alamat "/${low}" dipakai halaman lain di aplikasi. Pilih kata lain.`;
+  const others = Object.entries(PORTAL_SLUG_KEYS).filter(([k]) => k !== key);
+  for (const [k, settingKey] of others) {
+    const otherRaw = String(getSetting(settingKey, '') || '').trim();
+    const other = otherRaw ? normalizePortalSlug(otherRaw, PORTAL_SLUG_DEFAULT[k]) : PORTAL_SLUG_DEFAULT[k];
+    if (other === low) return `Alamat "/${low}" sudah dipakai portal ${k}. Gunakan alamat berbeda.`;
+  }
+  return null;
 }
 function logAudit(user, aksi, modul, detail) {
   db.prepare('INSERT INTO audit (user_id,user_nama,aksi,modul,detail,created_at) VALUES (?,?,?,?,?,?)')
@@ -1533,19 +1651,19 @@ function periodeStatus(bkuId, periode) {
   return periode < currentPeriode() ? 'terlewat' : 'terbuka';
 }
 /**
- * Cek kunci periode. mode 'edit' = koreksi/hapus transaksi yang SUDAH ada:
- * periode 'terlewat' (bulan lalu belum ditutup) masih boleh dikoreksi,
- * karena penutupan bulanan justru butuh data yang sudah benar.
+ * Cek kunci periode. HANYA periode yang sudah resmi DITUTUP yang memblokir input.
+ * Bulan lalu yang belum ditutup ('terlewat') TIDAK lagi memblokir penambahan maupun
+ * posting transaksi baru — pengguna boleh mencatat transaksi lalu menutup bulan tersebut
+ * kapan saja (lihat menu Tutup BKU Bulanan). Untuk memposting ke bulan yang sudah
+ * ditutup, buka kembali periodenya lebih dulu lewat tombol "Buka Kembali".
+ * Parameter `mode` dipertahankan agar pemanggil lama tetap kompatibel.
  */
 function periodeLockError(bkuId, tanggal, mode) {
   const p = periodeOf(tanggal);
   if (!/^\d{4}-\d{2}$/.test(p)) return null;
   const st = periodeStatus(bkuId, p);
   if (st === 'ditutup') {
-    return `BKU bulan ${periodeLabel(p)} sudah ditutup. Transaksi pada periode tersebut terkunci — gunakan tombol "Buka Kembali" di menu Tutup BKU Bulanan bila perlu koreksi.`;
-  }
-  if (st === 'terlewat' && mode !== 'edit') {
-    return `Bulan ${periodeLabel(p)} sudah berganti dan BKU bulan tersebut belum ditutup. Wajib lakukan proses Tutup BKU Bulanan (dengan penyesuaian saldo awal) sebelum mencatat transaksi baru pada bulan itu.`;
+    return `BKU bulan ${periodeLabel(p)} sudah ditutup. Transaksi pada periode tersebut terkunci — gunakan tombol "Buka Kembali" pada menu Tutup BKU Bulanan bila perlu memposting transaksi pada bulan itu.`;
   }
   return null;
 }
@@ -2378,6 +2496,58 @@ function iuranNominalMap(grupId) {
   for (const r of db.prepare('SELECT * FROM iuran_nominal WHERE grup_id=?').all(grupId)) map[r.bulan || 0] = Number(r.nominal || 0);
   return map;
 }
+/**
+ * Rincian tagihan BULANAN satu tagihan/grup + alokasi pembayaran.
+ * Pembayaran yang menyebut bulan tertentu dialokasikan ke bulan itu dulu,
+ * sisanya (bulan NULL) FIFO dari bulan pertama.
+ * Dipakai halaman detail iuran, matriks bulanan, DAN portal publik orang tua
+ * agar angka di semua tempat selalu sama.
+ * @param {number} grupId
+ * @param {Array<{jumlah:number,bulan:(number|null)}>} payments
+ * @returns {Array<{bulan:number,tagihan:number,dibayar:number,sisa:number,status:string}>}
+ */
+function iuranMonthDetail(grupId, payments) {
+  const nom = iuranNominalMap(grupId);
+  const months = BULAN_TA.filter(b => Number(nom[b] || 0) > 0)
+    .map(b => ({ bulan: b, tagihan: Number(nom[b] || 0), dibayar: 0 }));
+  if (!months.length) return [];
+  let pool = 0;
+  for (const p of (payments || [])) {
+    const j = Number(p.jumlah || 0);
+    if (!(j > 0)) continue;
+    const m = p.bulan ? months.find(x => x.bulan === Number(p.bulan)) : null;
+    if (m) {
+      const add = Math.min(Math.max(0, m.tagihan - m.dibayar), j);
+      m.dibayar += add;
+      pool += j - add;
+    } else pool += j;
+  }
+  for (const m of months) {
+    if (pool <= 0) break;
+    const add = Math.min(Math.max(0, m.tagihan - m.dibayar), pool);
+    m.dibayar += add;
+    pool -= add;
+  }
+  return months.map(m => ({
+    ...m,
+    sisa: Math.max(0, m.tagihan - m.dibayar),
+    status: m.dibayar >= m.tagihan ? 'lunas' : m.dibayar > 0 ? 'sebagian' : 'belum'
+  }));
+}
+/** pembayaran (non-void) per tagihan untuk sekumpulan id tagihan → Map(tagihan_id → rows) */
+function iuranPaysMap(tagihanIds) {
+  const ids = [].concat(tagihanIds || []).map(Number).filter(Boolean);
+  const map = new Map();
+  if (!ids.length) return map;
+  const rows = db.prepare(`SELECT tagihan_id, jumlah, potongan, dibayar, bulan, tanggal, metode
+    FROM iuran_bayar WHERE status<>'void' AND tagihan_id IN (${ids.map(() => '?').join(',')})
+    ORDER BY tanggal, id`).all(...ids);
+  for (const r of rows) {
+    if (!map.has(r.tagihan_id)) map.set(r.tagihan_id, []);
+    map.get(r.tagihan_id).push(r);
+  }
+  return map;
+}
 /** tagihan + pembayaran (yang tidak di-void) */
 function iuranTagihanRows(opts = {}) {
   let sql = `SELECT t.*, s.nama siswa_nama, s.nisn, k.nama kelas_nama, k.tingkat, g.nama grup_nama, g.jenis grup_jenis,
@@ -2665,10 +2835,10 @@ function otpVerify(token, kode, maxTries = 5) {
 /* ==================================================================
    PESAN / CATATAN ORANG TUA (feedback loop)
    ================================================================== */
-function portalPesanAdd({ siswa_id, nama, kontak, pesan, taId }) {
-  const info = db.prepare(`INSERT INTO portal_pesan (siswa_id,nama,kontak,pesan,status,tahun_ajaran_id,created_at)
-    VALUES (?,?,?,?,'baru',?,?)`).run(siswa_id || null, String(nama || '').slice(0, 160), String(kontak || '').slice(0, 60),
-    String(pesan || ''), taId || null, nowStamp());
+function portalPesanAdd({ siswa_id, nama, kontak, pesan, taId, sumber, ref }) {
+  const info = db.prepare(`INSERT INTO portal_pesan (siswa_id,nama,kontak,pesan,status,tahun_ajaran_id,created_at,sumber,ref)
+    VALUES (?,?,?,?,'baru',?,?,?,?)`).run(siswa_id || null, String(nama || '').slice(0, 160), String(kontak || '').slice(0, 60),
+    String(pesan || ''), taId || null, nowStamp(), String(sumber || 'siswa').slice(0, 20), ref === undefined || ref === null ? '' : String(ref));
   return Number(info.lastInsertRowid);
 }
 function portalPesanList(opts = {}) {
@@ -2680,6 +2850,57 @@ function portalPesanList(opts = {}) {
 }
 function portalPesanCount() {
   return db.prepare("SELECT COUNT(*) c FROM portal_pesan WHERE status='baru'").get().c;
+}
+
+/* ==================================================================
+   CATATAN PEGAWAI → BENDAHARA
+   ------------------------------------------------------------------
+   Pegawai (pengguna yang login) melaporkan kekeliruan data (mis. nominal
+   leger honor). Nama & jabatan diambil otomatis dari sesi login di server,
+   pegawai hanya menulis isi pesan.
+   status: 'baru' (belum dilihat) · 'diproses' (sudah dibalas/ditinjau) · 'selesai'
+   ================================================================== */
+const CATATAN_STATUS = { baru: 'Baru', diproses: 'Diproses', selesai: 'Selesai' };
+function catatanAdd({ userId, nama, jabatan, pesan, terkait, periode, taId }) {
+  const info = db.prepare(`INSERT INTO catatan_pegawai (user_id,nama,jabatan,pesan,terkait,periode,status,tahun_ajaran_id,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,'baru',?,?,?)`).run(
+    userId || null, String(nama || '').slice(0, 120), String(jabatan || '').slice(0, 120),
+    String(pesan || ''), String(terkait || 'umum').slice(0, 40), String(periode || '').slice(0, 20),
+    taId || null, nowStamp(), nowStamp());
+  return Number(info.lastInsertRowid);
+}
+function catatanList(opts = {}) {
+  let sql = 'SELECT * FROM catatan_pegawai WHERE 1=1';
+  const args = [];
+  if (opts.userId) { sql += ' AND user_id=?'; args.push(opts.userId); }
+  if (opts.status) { sql += ' AND status=?'; args.push(opts.status); }
+  if (opts.taId) { sql += ' AND (tahun_ajaran_id=? OR tahun_ajaran_id IS NULL)'; args.push(opts.taId); }
+  if (opts.q) { sql += ' AND (nama LIKE ? OR pesan LIKE ? OR COALESCE(balasan,\'\') LIKE ?)'; args.push('%' + opts.q + '%', '%' + opts.q + '%', '%' + opts.q + '%'); }
+  sql += " ORDER BY (status='selesai'), id DESC LIMIT " + (Number(opts.limit) || 200);
+  return db.prepare(sql).all(...args);
+}
+function catatanCount(taId) {
+  return taId
+    ? db.prepare("SELECT COUNT(*) c FROM catatan_pegawai WHERE status<>'selesai' AND (tahun_ajaran_id=? OR tahun_ajaran_id IS NULL)").get(taId).c
+    : db.prepare("SELECT COUNT(*) c FROM catatan_pegawai WHERE status<>'selesai'").get().c;
+}
+function catatanReply(id, { balasan, oleh, status }) {
+  const row = db.prepare('SELECT * FROM catatan_pegawai WHERE id=?').get(id);
+  if (!row) return null;
+  const st = ['baru', 'diproses', 'selesai'].includes(status) ? status : (String(balasan || '').trim() ? 'diproses' : row.status);
+  db.prepare('UPDATE catatan_pegawai SET balasan=?, balas_oleh=?, balas_at=?, status=?, updated_at=? WHERE id=?')
+    .run(String(balasan || ''), String(oleh || ''), nowStamp(), st, nowStamp(), id);
+  return db.prepare('SELECT * FROM catatan_pegawai WHERE id=?').get(id);
+}
+function catatanStatus(id, status) {
+  const st = ['baru', 'diproses', 'selesai'].includes(status) ? status : 'baru';
+  db.prepare('UPDATE catatan_pegawai SET status=?, updated_at=? WHERE id=?').run(st, nowStamp(), id);
+  return db.prepare('SELECT * FROM catatan_pegawai WHERE id=?').get(id);
+}
+function catatanDelete(id) {
+  const row = db.prepare('SELECT * FROM catatan_pegawai WHERE id=?').get(id);
+  if (row) db.prepare('DELETE FROM catatan_pegawai WHERE id=?').run(id);
+  return row || null;
 }
 
 /* ==================================================================
@@ -2912,10 +3133,13 @@ module.exports = {
   taAutoFor, taAutoId, TRASH_DAYS, TRASH_LABEL, trashAdd, trashList, trashPurge, trashRestore,
   SISWA_STATUS, programList, kelasList, kelasById, siswaList,
   penempatanList, penempatanSet, siswaSyncCurrent, taSortKey,
-  BULAN_TA, iuranGrupList, iuranNominalMap, iuranTagihanRows, iuranRekapSiswa, iuranBayarRows,
+  BULAN_TA, iuranGrupList, iuranNominalMap, iuranMonthDetail, iuranPaysMap, iuranTagihanRows, iuranRekapSiswa, iuranBayarRows,
   ekskulRows, ekskulPending, dedupeAset,
   // ronde 9: analitik iuran, rekap sertifikasi, OTP portal, pesan orang tua, beasiswa siswa
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
+  portalSlugs, portalSlugIsCustom, portalRewrite, portalSlugError, normalizePortalSlug,
+  PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList,
+  CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,
   beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData
 };

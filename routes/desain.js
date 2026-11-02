@@ -51,6 +51,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           Kosongkan sebuah kolom untuk kembali ke teks default. Orientasi default dapat ditimpa per-cetak lewat tombol
           <b>Portrait / Landscape</b> di halaman cetak.</div></div>
         <form method="post" action="${c.base}/desain-cetak">
+          <div class="card mb-3">
+            <div class="card-head"><div><h3>Tempat pada Tanggal Cetak</h3>
+              <div class="sub">Dipakai di semua dokumen: kwitansi, bukti piutang, laporan, berita acara, dll.</div></div>
+              ${ui.badge('semua dokumen', 'orange', 'plain')}</div>
+            <div class="row2">
+              <div class="field"><label>Teks Tempat</label>
+                <input type="text" name="print_tempat" value="${esc(c.settings.print_tempat || printcfg.TEMPAT_DEFAULT)}"
+                  placeholder="${esc(printcfg.TEMPAT_DEFAULT)}" ${ro ? 'readonly' : ''}>
+                <div class="hint">Contoh hasil cetak: <b>${esc(c.settings.print_tempat || printcfg.TEMPAT_DEFAULT)}, ${esc(tglID(lib.todayISO()))}</b>.
+                  Kosongkan untuk kembali ke <b>${esc(printcfg.TEMPAT_DEFAULT)}</b>.</div></div>
+              <div class="field"><label>Baris Tanggal Kwitansi Pengeluaran</label>
+                <div class="catatan-locked-nama" style="min-height:38px">${esc(printcfg.fill(printcfg.labels(dbm, 'kwitansi_trx').nilai_dari_keluar || 'Bendahara {sekolah}', { sekolah: c.settings.sekolah_nama || 'Sekolah' }))}</div>
+                <div class="hint">Contoh isi baris <b>${esc(printcfg.labels(dbm, 'kwitansi_trx').dari_keluar || 'Telah diterima dari')}</b> pada kwitansi pengeluaran
+                  (ubah teksnya di kartu <b>Kwitansi Transaksi</b> di bawah).</div></div>
+            </div>
+          </div>
           ${cards}
           <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan Desain</button>`}</div>
         </form>

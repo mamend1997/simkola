@@ -109,7 +109,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('kwitansi: 3 header TTD sejajar horizontal', ttdY.length === 3 && new Set(ttdY).size === 1, JSON.stringify(ttdY));
   const nmY = await page.evaluate(() => Array.from(document.querySelectorAll('.kwit-sign .sig .nm')).map(e => Math.round(e.getBoundingClientRect().top)));
   ok('kwitansi: 3 nama TTD sejajar horizontal', nmY.length === 3 && new Set(nmY).size === 1, JSON.stringify(nmY));
-  ok('kwitansi: label terima = Bendahara Sekolah', /Bendahara Sekolah/.test(await page.locator('.kwit-body').innerText()));
+  // ronde 19: label bawaan baris "diterima dari" pengeluaran = "Telah diterima dari",
+  // isinya "Bendahara <nama sekolah>" (dapat diubah di Desain Templat Cetak).
+  const kwBody = await page.locator('.kwit-body').innerText();
+  ok('kwitansi: label terima = "Telah diterima dari"', /Telah diterima dari/.test(kwBody), kwBody.replace(/\n/g, ' | ').slice(0, 120));
+  ok('kwitansi: isi baris terima = Bendahara + nama sekolah', /Bendahara\s+\S/.test(kwBody));
   await page.click('.orient-switch a[href*="orient=landscape"]');
   await page.waitForLoadState('load');
   ok('kwitansi: toggle landscape bekerja', (await page.evaluate(() => document.body.dataset.orient)) === 'landscape');

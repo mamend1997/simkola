@@ -736,18 +736,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       || db.prepare("SELECT * FROM bku WHERE jenis='umum' AND COALESCE(auto_mode,0)=0 AND tahun_ajaran_id=? ORDER BY (status='aktif') DESC, id LIMIT 1").get(taPost ? taPost.id : 0);
     if (!bkuUmum) return res.redirect(flash(back, 'err', 'BKU Umum tidak ditemukan.'));
     if (bkuUmum.status !== 'aktif') return res.redirect(flash(back, 'err', 'BKU Umum sudah ditutup.'));
-    // Tanggal pembukuan: akhir bulan leger. Bila bulan tersebut sudah berganti tetapi BKU-nya
-    // belum ditutup (status 'terlewat'), honor dibukukan pada bulan berjalan agar draf lama
-    // tetap bisa diposting tanpa memaksa Tutup BKU bulan lalu lebih dulu.
-    let tanggal = dbm.periodeEnd(periode);
-    let catatanTanggal = '';
-    if (dbm.periodeStatus(bkuUmum.id, dbm.periodeOf(tanggal)) === 'terlewat') {
-      const tglKini = todayISO();
-      if (dbm.periodeStatus(bkuUmum.id, dbm.periodeOf(tglKini)) !== 'terlewat') {
-        tanggal = tglKini;
-        catatanTanggal = ` Honor periode ${dbm.periodeLabel(periode)} dibukukan pada BKU ${dbm.periodeLabel(dbm.periodeOf(tanggal))} (bulan leger sudah berganti).`;
-      }
-    }
+    // Tanggal pembukuan: akhir bulan leger. Bulan leger yang belum ditutup tidak lagi
+    // memblokir posting, jadi honor selalu dibukukan pada periode leger itu sendiri
+    // (hanya periode yang sudah resmi DITUTUP yang harus dibuka kembali lebih dulu).
+    const tanggal = dbm.periodeEnd(periode);
     const lock = dbm.periodeLockError(bkuUmum.id, tanggal);
     if (lock) return res.redirect(flash(back, 'err', lock));
     const coaHonor = db.prepare("SELECT * FROM coa WHERE kode='5.1.01'").get();
@@ -789,7 +781,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       '');
     res.redirect(flash(back, 'ok', `Posting berhasil: 1 baris pengeluaran ${rupiah(tot.penerimaan)} (Transfer Bank) di BKU Umum` +
       `${trxSosial ? ` + potongan dana sosial ${rupiah(tot.danaSosial)} ke BKU Dana Sosial` : ''}. Leger periode ini kini TERKUNCI.` +
-      (tot.kasbon ? ` Kasbon ${rupiah(tot.kasbon)} tetap hanya tercatat di slip (tidak memotong piutang).` : '') + catatanTanggal));
+      (tot.kasbon ? ` Kasbon ${rupiah(tot.kasbon)} tetap hanya tercatat di slip (tidak memotong piutang).` : '')));
   });
 
   post('/payroll/batal-posting', (req, res) => {

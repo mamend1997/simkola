@@ -3,6 +3,20 @@
 module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID } = lib;
+  /** alamat portal dapat diubah di menu Identitas Sekolah (default: portal) */
+  const slug = () => dbm.portalSlugs().siswa;
+  const url = (base, sub = '') => `${base}/${slug()}${sub}`;
+
+  const NAMA_BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+  const bulanNama = m => NAMA_BULAN[(Number(m) - 1 + 12) % 12] || '-';
+  /** label bulan mengikuti tahun ajaran grup ("Juli 2025") */
+  function bulanTahun(bulan, ta) {
+    const b = Number(bulan) || 0;
+    const start = String((ta && ta.tanggal_mulai) || '').slice(0, 10);
+    const sy = start ? Number(start.slice(0, 4)) : new Date().getFullYear();
+    const sm = start ? Number(start.slice(5, 7)) : 7;
+    return `${bulanNama(b)} ${b >= sm ? sy : sy + 1}`;
+  }
 
   function normalizeDate(s) {
     const v = String(s || '').trim();
@@ -41,15 +55,16 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
 </body></html>`;
   }
 
-  function searchForm({ settings, base, nama = '', lahir = '', err = '' }) {
+  function searchForm({ settings, base, nama = '', lahir = '', err = '', ok = '' }) {
     return `<div class="portal-card">
       <h2>Cek Tagihan Iuran</h2>
       <p class="muted small">Masukkan <b>nama siswa</b> dan <b>tanggal lahir</b> sesuai data sekolah untuk melihat tagihan. Kedua data harus cocok (verifikasi 2 faktor sederhana).</p>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
-      <form method="get" action="${base}/portal">
+      ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
+      <form method="get" action="${url(base)}">
         <div class="field"><label>Nama Siswa</label>
           <input name="nama" value="${esc(nama)}" required placeholder="Ketik minimal 3 huruf nama siswa" autocomplete="off"
-            data-autocomplete="${base}/portal/siswa" data-autocomplete-min="3">
+            data-autocomplete="${url(base, '/siswa')}" data-autocomplete-min="3">
           <div class="ac-list" data-ac-list></div>
           <div class="hint">Pilihan nama muncul otomatis setelah Anda mengetik 3 huruf.</div></div>
         <div class="field"><label>Tanggal Lahir Siswa</label>
@@ -72,20 +87,55 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
         byTa.get(key).push(t);
       }
       let body = '';
-      for (const [taId, tags] of byTa) {
-        const ta = taList.find(t => Number(t.id) === Number(taId));
-        const tag = tags.reduce((a, t) => a + Number(t.nominal || 0), 0);
-        const bay = tags.reduce((a, t) => a + Number(t.terbayar || 0), 0);
-        const sisa = tags.reduce((a, t) => a + Number(t.sisa || 0), 0);
-        const pot = tags.reduce((a, t) => a + Number(t.total_potongan || 0), 0);
+      /* urutan tahun pelajaran: TERLAMA di paling atas (2024/2025, 2025/2026, …) */
+      const entries = [...byTa.entries()]
+        .map(([tid, tags]) => ({ taId: tid, tags, ta: taList.find(t => Number(t.id) === Number(tid)) }))
+        .sort((a, b) => {
+          const ka = dbm.taSortKey(a.ta), kb = dbm.taSortKey(b.ta);
+          if (ka === kb) return Number(a.taId) - Number(b.taId);
+          if (!ka) return 1;         // tagihan tanpa tahun pelajaran diletakkan paling bawah
+          if (!kb) return -1;
+          return ka.localeCompare(kb);
+        });
+      for (const { tags, ta } of entries) {
+        const payMap = dbm.iuranPaysMap(tags.map(t => t.id));
+        /* ---- baris tampilan: grup bulanan dijabarkan per bulan (SPP - Juli 2025, …) ---- */
+        const rows = [];
+        for (const t of tags) {
+          const pays = payMap.get(t.id) || [];
+          const isMonthly = t.grup_jenis === 'bulanan';
+          const months = isMonthly ? dbm.iuranMonthDetail(t.grup_id, pays) : [];
+          if (months.length) {
+            for (const m of months) {
+              rows.push({
+                label: `${t.grup_nama} - ${bulanTahun(m.bulan, ta)}`, jenis: 'Bulanan', isMonth: true,
+                grup: t.grup_nama, tagihan: m.tagihan, dibayar: m.dibayar, potongan: 0, sisa: m.sisa,
+                status: m.status, writeoff: t.writeoff || ''
+              });
+            }
+            continue;
+          }
+          rows.push({
+            label: t.grup_nama, jenis: isMonthly ? 'Bulanan' : 'Non-Bulanan', isMonth: false,
+            grup: t.grup_nama, tagihan: Number(t.nominal || 0), dibayar: Number(t.terbayar || 0),
+            potongan: Number(t.total_potongan || 0), sisa: Number(t.sisa || 0), status: '', writeoff: t.writeoff || ''
+          });
+        }
+        // subtotal per grup (baris ringkas sebelum rincian bulanan agar total 1 tahun tetap terlihat)
+        const tag = rows.reduce((a, r) => a + Number(r.tagihan || 0), 0);
+        const bay = rows.reduce((a, r) => a + Number(r.dibayar || 0), 0);
+        const pot = rows.reduce((a, r) => a + Number(r.potongan || 0), 0);
+        const sisa = rows.reduce((a, r) => a + Number(r.sisa || 0), 0);
         grandTagihan += tag; grandBayar += bay; grandSisa += sisa;
         body += `<div class="portal-ta">
           <div class="ta-head"><b>Tahun Pelajaran ${esc(ta ? ta.nama : '-')}</b>
             <span class="badge ${sisa > 0 ? 'amber' : 'green'}">${sisa > 0 ? 'Ada tunggakan' : 'Lunas'}</span></div>
-          <div class="table-wrap"><table><thead><tr><th>Jenis Grup Iuran</th><th>Jenis</th><th class="num">Total Tagihan</th><th class="num">Sudah Dibayar</th><th class="num">Potongan</th><th class="num">Sisa Terhutang</th></tr></thead><tbody>
-          ${tags.map(t => `<tr><td class="t-strong">${esc(t.grup_nama)}</td><td>${t.grup_jenis === 'bulanan' ? 'Bulanan' : 'Non-Bulanan'}</td>
-            <td class="num">${rupiah(t.nominal)}</td><td class="num">${rupiah(t.terbayar)}</td><td class="num">${rupiah(t.total_potongan)}</td>
-            <td class="num" style="color:${t.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(t.sisa)}${t.writeoff === 'pemutihan' ? ' <span class="badge blue plain">Di-pemutihan</span>' : ''}</td></tr>`).join('')}
+          <div class="table-wrap"><table class="tbl-modern portal-bill"><thead><tr><th>Jenis Grup Iuran</th><th>Jenis</th><th class="num">Total Tagihan</th><th class="num">Sudah Dibayar</th><th class="num">Potongan</th><th class="num">Sisa Terhutang</th></tr></thead><tbody>
+          ${rows.map(r => `<tr class="${r.isMonth ? 'month-line' : ''}">
+            <td class="${r.isMonth ? 'ml-label' : 't-strong'}">${r.isMonth ? `<span class="ml-arrow">↳</span> ${esc(r.label)}` : esc(r.label)}</td>
+            <td>${esc(r.jenis)}${r.status === 'lunas' ? ' <span class="badge green plain">Lunas</span>' : r.status === 'sebagian' ? ' <span class="badge amber plain">Sebagian</span>' : ''}</td>
+            <td class="num">${rupiah(r.tagihan)}</td><td class="num">${rupiah(r.dibayar)}</td><td class="num">${rupiah(r.potongan)}</td>
+            <td class="num" style="color:${r.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(r.sisa)}${r.writeoff === 'pemutihan' ? ' <span class="badge blue plain">Di-pemutihan</span>' : ''}</td></tr>`).join('')}
           </tbody><tfoot><tr><td colspan="2">Subtotal ${esc(ta ? ta.nama : '')}</td><td class="num">${rupiah(tag)}</td><td class="num">${rupiah(bay)}</td><td class="num">${rupiah(pot)}</td><td class="num">${rupiah(sisa)}</td></tr></tfoot></table></div>
         </div>`;
       }
@@ -113,7 +163,7 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
           <div class="rc"><div class="lbl">Total Sudah Dibayar</div><div class="val" style="color:var(--green)">${rupiah(grandBayar)}</div><div class="sm">termasuk potongan</div></div>
           <div class="rc"><div class="lbl">Total Sisa Terhutang</div><div class="val" style="color:${grandSisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(grandSisa)}</div><div class="sm">tunggakan seluruh tahun</div></div>
         </div>
-        <div class="center mt-2"><a class="btn" href="${base}/portal">${ui.icon('search')}Kembali ke Halaman Pencarian</a></div>
+        <div class="center mt-2"><a class="btn" href="${url(base)}">${ui.icon('search')}Kembali ke Halaman Pencarian</a></div>
       </div>
       ${feedbackForm({ base, students, pesanOk, pesanErr })}`;
   }
@@ -121,13 +171,17 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
   /** form catatan / umpan balik orang tua (masuk ke Dashboard admin) */
   function feedbackForm({ base, students, pesanOk = '', pesanErr = '' }) {
     const s = students[0] || {};
+    const others = s.id
+      ? db.prepare(`SELECT * FROM portal_pesan WHERE siswa_id=? AND COALESCE(sumber,'siswa')='siswa' ORDER BY id DESC LIMIT 3`).all(s.id)
+      : [];
     return `<div class="portal-card">
       <h3>Kolom Catatan Orang Tua / Wali</h3>
       <p class="muted small">Bila terdapat kekeliruan data tagihan atau pembayaran, tuliskan catatan Anda di bawah ini.
         Catatan akan masuk ke <b>Dashboard Bendahara</b> untuk ditindaklanjuti petugas.</p>
       ${pesanOk ? `<div class="alert ok">${ui.icon('check')}<div>${esc(pesanOk)}</div></div>` : ''}
       ${pesanErr ? `<div class="alert err">${ui.icon('alert')}<div>${esc(pesanErr)}</div></div>` : ''}
-      <form method="post" action="${base}/portal/pesan">
+      ${others.length ? `<div class="portal-note-list">${others.map(x => `<div class="pn-item"><div class="pn-meta">${esc(String(x.created_at || '').slice(0, 16))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div><div class="pn-body">${esc(x.pesan)}</div></div>`).join('')}</div>` : ''}
+      <form method="post" action="${url(base, '/pesan')}">
         <input type="hidden" name="siswa_id" value="${esc(s.id || '')}">
         <div class="field"><label>Nama Siswa</label><input value="${esc(s.nama || '')}" readonly></div>
         <div class="field"><label>Nomor WhatsApp / Telepon (opsional)</label>
@@ -149,7 +203,7 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
     const lahirRaw = String(req.query.get('lahir') || '').trim();
     const pesanOk = String(req.query.get('ok') || '').trim();
     const pesanErr = String(req.query.get('err') || '').trim();
-    if (!nama && !lahirRaw) return res.html(shell({ base, settings, title: 'Cek Tagihan', content: searchForm({ settings, base }) }));
+    if (!nama && !lahirRaw) return res.html(shell({ base, settings, title: 'Cek Tagihan', content: searchForm({ settings, base, err: pesanErr, ok: pesanOk }) }));
     const lahir = normalizeDate(lahirRaw) || (/^\d{4}-\d{2}-\d{2}$/.test(lahirRaw) ? lahirRaw : null);
     if (!nama || !lahir) {
       return res.html(shell({ base, settings, title: 'Cek Tagihan', content: searchForm({ settings, base, nama, lahir: lahirRaw, err: 'Nama dan tanggal lahir wajib diisi dengan benar.' }) }));
@@ -184,16 +238,19 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
     const pesan = String(req.body.pesan || '').trim();
     const kontak = String(req.body.kontak || '').trim();
     const siswaRow = sid ? db.prepare('SELECT * FROM siswa WHERE id=?').get(sid) : null;
-    const backTo = nm => base + '/portal?nama=' + encodeURIComponent(nm || '') + '&lahir=' + encodeURIComponent(String((siswaRow || {}).tanggal_lahir || ''));
-    if (!siswaRow) return res.redirect(base + '/portal?err=' + encodeURIComponent('Sesi pencarian berakhir. Silakan cari data tagihan kembali, lalu kirim catatan.'));
+    const backTo = nm => url(base) + '?nama=' + encodeURIComponent(nm || '') + '&lahir=' + encodeURIComponent(String((siswaRow || {}).tanggal_lahir || ''));
+    if (!siswaRow) return res.redirect(url(base) + '?err=' + encodeURIComponent('Sesi pencarian berakhir. Silakan cari data tagihan kembali, lalu kirim catatan.'));
     if (pesan.length < 5) return res.redirect(backTo(siswaRow.nama) + '&err=' + encodeURIComponent('Catatan terlalu pendek — tuliskan minimal 5 karakter.'));
-    dbm.portalPesanAdd({ siswa_id: siswaRow.id, nama: siswaRow.nama, kontak, pesan, taId: (dbm.activeTahun() || {}).id });
+    dbm.portalPesanAdd({
+      siswa_id: siswaRow.id, nama: siswaRow.nama, kontak, pesan, sumber: 'siswa', ref: String(siswaRow.id),
+      taId: (dbm.activeTahun() || {}).id
+    });
     dbm.logAudit(null, 'PESAN ORANG TUA', 'portal', `Catatan orang tua/wali ${siswaRow.nama}: ${pesan.slice(0, 140)}`);
     res.redirect(backTo(siswaRow.nama) + '&ok=' + encodeURIComponent('Terima kasih, catatan Anda sudah dikirim ke bendahara sekolah.'));
   });
 
   post('/portal/cari', (req, res) => {
     const qs = new URLSearchParams({ nama: String(req.body.nama || ''), lahir: String(req.body.lahir || '') });
-    res.redirect(req.BASE + '/portal?' + qs.toString().replace(/\+/g, '%20'));
+    res.redirect(url(req.BASE) + '?' + qs.toString().replace(/\+/g, '%20'));
   });
 };

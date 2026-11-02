@@ -800,3 +800,62 @@ tr.month-row:hover > td{background:#FFF4E9}
 .portal-period label{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .portal-period select{width:100%;padding:9px 11px;border-radius:10px;border:1px solid var(--line-2);background:#fff;font-weight:600;font-size:13.5px;color:var(--ink)}
 @media (max-width:620px){.portal-period .field{min-width:0;flex:1 1 140px}}
+
+/* ===== ronde 17: rincian iuran bulanan (deret Juli … Juni) ===== */
+.bulanan-tbl{table-layout:auto;min-width:1180px}
+.bulanan-tbl th.bulan-head{text-align:center;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;line-height:1.15;min-width:74px}
+.bulanan-tbl th.bulan-head .t-sub{font-size:10px;letter-spacing:0;text-transform:none;font-weight:600}
+.bulanan-tbl td.bulan-cell{white-space:nowrap;font-size:11.5px;font-variant-numeric:tabular-nums;padding:6px 7px;text-align:right;cursor:help}
+.bulanan-tbl td.bulan-cell .bc-mark{display:inline-block;margin-left:4px;font-weight:800;font-size:10.5px}
+.bulanan-tbl td.bulan-cell.lunas{background:#F0FDF4;color:#15803D}
+.bulanan-tbl td.bulan-cell.sebagian{background:#FFF7ED;color:#B45309}
+.bulanan-tbl td.bulan-cell.kurang{background:#FEF2F2;color:#B91C1C}
+.bulanan-tbl td.bulan-cell.kosong{background:#FBF9F7;color:var(--muted)}
+.bulanan-tbl td.sticky-col,.bulanan-tbl th.sticky-col{position:sticky;left:0;background:#FFFDFB;z-index:3;width:44px}
+.bulanan-tbl td.sticky-col2,.bulanan-tbl th.sticky-col2{position:sticky;left:44px;background:#FFFDFB;z-index:3;min-width:180px;box-shadow:1px 0 0 var(--line)}
+.bulanan-tbl thead th{background:#FDF7F2;position:sticky;top:0;z-index:4}
+.bulanan-tbl thead th.sticky-col,.bulanan-tbl thead th.sticky-col2{z-index:6}
+.bulanan-tbl tfoot td{background:#FFF3E6;font-weight:800}
+tr.row-muted>td{background:#FCFAF8;color:var(--muted)}
+
+/* ===== ronde 17: catatan pegawai ===== */
+.catatan-item{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:#fff}
+.catatan-item+.catatan-item{margin-top:12px}
+.catatan-item .ci-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.catatan-item .ci-nama{font-weight:800;color:var(--ink)}
+.catatan-item .ci-meta{font-size:11.5px;color:var(--muted)}
+.catatan-item .ci-pesan{margin-top:8px;white-space:pre-wrap;line-height:1.55}
+.catatan-item .ci-balas{margin-top:10px;padding:10px 12px;border-radius:11px;background:#F0FDF4;border:1px solid #BBF7D0}
+.catatan-item .ci-balas .lbl{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#15803D}
+.catatan-list{display:flex;flex-direction:column}
+.catatan-locked-nama{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:11px;border:1px dashed var(--line-2);background:#FBF9F7}
+.catatan-locked-nama b{color:var(--ink)}
+.catatan-locked-nama .t-sub{font-size:11.5px}
+.env-tbl td:first-child{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:nowrap}
+.env-on{color:#15803D;font-weight:800}
+.env-off{color:var(--muted)}
+.catatan-reply{display:inline-block}
+.catatan-reply > summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px}
+.catatan-reply > summary::-webkit-details-marker{display:none}
+.catatan-reply[open]{display:block;width:100%}
+.catatan-reply[open] > summary{margin-bottom:6px}
+
+/* ===== ronde 18: portal publik — rincian bulanan & catatan terkirim ===== */
+.portal-bill tr.month-line > td{background:#FCFAF7;font-size:12.5px}
+.portal-bill tr.month-line > td.ml-label{padding-left:22px;color:var(--ink-2);font-weight:600}
+.portal-bill tr.month-line .ml-arrow{color:var(--o-500);font-weight:800}
+.portal-bill tfoot td{background:#FFF6EE;font-weight:800}
+.portal-note-list{display:flex;flex-direction:column;gap:8px;margin:4px 0 14px}
+.portal-note-list .pn-item{border:1px solid var(--line);border-radius:11px;padding:9px 12px;background:#FBF9F7}
+.portal-note-list .pn-meta{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.02em}
+.portal-note-list .pn-body{font-size:13px;margin-top:3px;white-space:pre-wrap;line-height:1.5}
+
+/* ===== ronde 19: ikon inline pada teks bantuan/hint =====
+   <svg> tanpa atribut width/height akan melebar mengikuti kontainer (mis. di portal
+   slip muncul ikon "!" raksasa pada keterangan periode). Batasi ukurannya. */
+.help svg,.hint svg,.help svg.i,.hint svg.i{width:13px;height:13px;flex:0 0 13px;vertical-align:-2px;margin-right:2px}
+.help,.hint{line-height:1.5}
+p.help svg,p.hint svg,.portal-card .help svg,.portal-card .hint svg{width:13px;height:13px;flex:0 0 13px;vertical-align:-2px}
+/* ikon peringatan/info di dalam kartu portal dibuat proporsional terhadap teks */
+.portal-card .alert svg{width:15px;height:15px;flex:0 0 15px;margin-top:2px}
+.portal-card .alert{font-size:12.5px;padding:11px 13px;gap:9px}

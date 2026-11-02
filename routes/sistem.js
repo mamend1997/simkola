@@ -1,5 +1,8 @@
 'use strict';
 const X = require('../xlsx-read');
+const fs = require('fs');
+const path = require('path');
+const envCfg = require('../env');
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMatrix, uploadMedia }) => {
   const { db } = dbm;
@@ -8,7 +11,107 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     'transaksi', 'piutang', 'piutang_bayar', 'spp', 'aset', 'pinjaman_mutasi', 'rekon_saldo', 'koreksi',
     'bku_import', 'audit', 'pegawai', 'payroll', 'payroll_post', 'payroll_draft', 'beasiswa', 'piutang_lain', 'piutang_lain_bayar',
     'trash', 'program_keahlian', 'kelas', 'siswa', 'siswa_mutasi', 'siswa_penempatan', 'iuran_grup', 'iuran_nominal', 'iuran_tagihan',
-    'iuran_bayar', 'ekskul_honor', 'mutasi_kas', 'piutang_kategori', 'piutang_lainnya', 'piutang_lainnya_bayar'];
+    'iuran_bayar', 'ekskul_honor', 'mutasi_kas', 'piutang_kategori', 'piutang_lainnya', 'piutang_lainnya_bayar',
+    'catatan_pegawai', 'portal_pesan', 'otp_code'];
+
+  /* ------------------------------------------------------------------
+     EXPORT DATABASE (.sql) — dump SQL portabel, bisa diimpor ke
+     SQLite/MySQL (dengan penyesuaian tipe) di hosting lain.
+     ------------------------------------------------------------------ */
+  function sqlValue(v) {
+    if (v === null || v === undefined) return 'NULL';
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL';
+    if (Buffer.isBuffer(v)) return "X'" + v.toString('hex') + "'";
+    return "'" + String(v).replace(/'/g, "''") + "'";
+  }
+  function sqlDump() {
+    const out = [];
+    out.push('-- ================================================================');
+    out.push('-- SIMKEU Sekolah — Export Database');
+    out.push('-- Dibuat: ' + nowStamp());
+    out.push('-- Berkas ini berisi struktur + seluruh isi tabel (portabel).');
+    out.push('-- Impor: sqlite3 keuangan.sqlite < database.sql');
+    out.push('-- ================================================================');
+    out.push('PRAGMA foreign_keys=OFF;');
+    out.push('BEGIN TRANSACTION;');
+    const objs = db.prepare(`SELECT type,name,sql FROM sqlite_master
+      WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+      ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`).all();
+    for (const o of objs) {
+      if (o.type === 'table') out.push(`DROP TABLE IF EXISTS "${o.name}";`);
+      if (o.type === 'index') out.push(`DROP INDEX IF EXISTS "${o.name}";`);
+    }
+    const tables = objs.filter(o => o.type === 'table');
+    for (const o of tables) out.push(o.sql.trim() + ';');
+    for (const o of objs) if (o.type !== 'table') out.push(o.sql.trim() + ';');
+    let total = 0;
+    for (const o of tables) {
+      let rows = [];
+      try { rows = db.prepare(`SELECT * FROM "${o.name}"`).all(); } catch (e) { continue; }
+      if (!rows.length) continue;
+      const cols = Object.keys(rows[0]);
+      const colSql = cols.map(c => `"${c}"`).join(',');
+      for (const r of rows) {
+        out.push(`INSERT INTO "${o.name}" (${colSql}) VALUES (${cols.map(c => sqlValue(r[c])).join(',')});`);
+        total++;
+      }
+    }
+    out.push('COMMIT;');
+    out.push(`-- total ${total} baris dari ${tables.length} tabel`);
+    return { sql: out.join('\n') + '\n', rows: total, tables: tables.length };
+  }
+
+  /* ------------------------------------------------------------------
+     DOWNLOAD SOURCE CODE (.zip) — seluruh berkas program aplikasi
+     (kode server, routes, aset publik, tes, dokumentasi). Berkas
+     rahasia (.env) & database TIDAK disertakan.
+     ------------------------------------------------------------------ */
+  const SRC_INCLUDE_FILES = [
+    'server.js', 'env.js', 'db.js', 'lib.js', 'ui.js', 'wa.js', 'xlsx-read.js',
+    'importer.js', 'impcache.js', 'printcfg.js', 'package.json', 'package-lock.json',
+    '.env.example', '.gitignore', 'AGENTS.md', 'README.md'
+  ];
+  const SRC_INCLUDE_DIRS = ['routes', 'public', 'dev-tests'];
+  const SRC_EXCLUDE_FILES = new Set(['.env', '.env.local', '.vibecoder-media-token']);
+  const SRC_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'data', '.cache', '.vscode']);
+  const MAX_SRC_BYTES = 3 * 1024 * 1024;
+  function collectSource() {
+    const files = [];
+    const root = path.join(__dirname, '..');
+    const put = (abs, rel) => {
+      try {
+        const st = fs.statSync(abs);
+        if (!st.isFile() || st.size > MAX_SRC_BYTES) return;
+        files.push({ name: rel.replace(/\\/g, '/'), data: fs.readFileSync(abs) });
+      } catch (e) { }
+    };
+    const walk = (dirAbs, dirRel) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dirAbs, { withFileTypes: true }); } catch (e) { return; }
+      for (const en of entries) {
+        const abs = path.join(dirAbs, en.name);
+        const rel = dirRel ? dirRel + '/' + en.name : en.name;
+        if (en.isDirectory()) {
+          if (SRC_EXCLUDE_DIRS.has(en.name)) continue;
+          walk(abs, rel);
+        } else if (en.isFile()) {
+          if (SRC_EXCLUDE_FILES.has(en.name)) continue;
+          if (/\.(sqlite|sqlite3|db)(-wal|-shm)?$/i.test(en.name)) continue;
+          if (/^\.tmp-/.test(en.name)) continue;
+          put(abs, rel);
+        }
+      }
+    };
+    for (const f of SRC_INCLUDE_FILES) {
+      const abs = path.join(root, f);
+      if (fs.existsSync(abs)) put(abs, f);
+    }
+    for (const d of SRC_INCLUDE_DIRS) {
+      const abs = path.join(root, d);
+      if (fs.existsSync(abs)) walk(abs, d);
+    }
+    return files;
+  }
 
   function dumpAll() {
     const dump = { app: 'simkeu-sekolah', version: 2, created_at: nowStamp(), tables: {} };
@@ -164,12 +267,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         <div class="row2">
           <div class="field"><label>Portal Cek Tagihan Siswa</label>
             <label class="check"><input type="checkbox" name="portal_aktif" value="1" ${dbm.getSetting('portal_aktif', '1') === '1' ? 'checked' : ''}> Aktifkan portal tagihan siswa (orang tua)</label>
-            <div class="hint">Alamat: <a href="${c.base}/portal" target="_blank">${c.base}/portal</a></div></div>
+            <div class="hint">Alamat: <a href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank">${c.base}/${dbm.portalSlugs().siswa}</a>
+              — ubah di menu <a href="${c.base}/sekolah">Identitas Sekolah</a></div></div>
           <div class="field"><label>Portal Pegawai</label>
             <label class="check"><input type="checkbox" name="portal_pegawai_aktif" value="1" ${dbm.getSetting('portal_pegawai_aktif', '1') === '1' ? 'checked' : ''}> Aktifkan portal piutang pegawai</label>
-            <div class="hint">Alamat: <a href="${c.base}/portal-pegawai" target="_blank">${c.base}/portal-pegawai</a></div>
+            <div class="hint">Alamat: <a href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank">${c.base}/${dbm.portalSlugs().pegawai}</a></div>
             <label class="check"><input type="checkbox" name="portal_slip_aktif" value="1" ${dbm.getSetting('portal_slip_aktif', '1') === '1' ? 'checked' : ''}> Aktifkan portal slip gaji pegawai</label>
-            <div class="hint">Alamat: <a href="${c.base}/portal-slip" target="_blank">${c.base}/portal-slip</a></div></div>
+            <div class="hint">Alamat: <a href="${c.base}/${dbm.portalSlugs().slip}" target="_blank">${c.base}/${dbm.portalSlugs().slip}</a></div></div>
         </div>
         <div class="row2">
           <div class="field"><label>URL Gateway WhatsApp (OTP)</label>
@@ -399,15 +503,33 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     const backups = db.prepare("SELECT * FROM audit WHERE aksi IN ('BACKUP','RESTORE') ORDER BY id DESC LIMIT 6").all();
     const content = `<div class="split">
       <div class="card">
-        <div class="card-head"><div><h3>Backup Database Keseluruhan</h3><div class="sub">Satu berkas ZIP berisi seluruh basis data website + rekap CSV</div></div></div>
+        <div class="card-head"><div><h3>Backup Menyeluruh — Database &amp; Source Code</h3><div class="sub">Satu berkas ZIP berisi seluruh basis data website + rekap CSV</div></div></div>
         <div class="alert info">${ui.icon('info')}<div>Berkas ZIP memuat <b>seluruh basis data</b>: akun &amp; hak akses, BKU umum/kegiatan, transaksi, aset &amp; pinjaman, payroll, piutang, SPP &amp; beasiswa, nota (tautan), serta log aktivitas. Nama berkas otomatis memakai tanggal ekspor.</div></div>
         <div class="table-wrap mb-2"><table><thead><tr><th>Tabel</th><th class="num">Jumlah baris</th></tr></thead><tbody>
           ${counts.map(x => `<tr><td class="mono">${esc(x.t)}</td><td class="num">${x.n}</td></tr>`).join('')}
         </tbody></table></div>
         <a class="btn btn-primary btn-block" href="${c.base}/backup/download-zip" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Backup Database Keseluruhan (.ZIP)</a>
+        <div class="row2 mt-2">
+          <a class="btn btn-block" href="${c.base}/backup/export-database" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('database')}Export Database (.sql)</a>
+          <a class="btn btn-block" href="${c.base}/backup/download-source" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Download Source Code (.zip)</a>
+        </div>
         <a class="btn btn-block mt-1" href="${c.base}/backup/download" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Unduh Backup (.json)</a>
+        <div class="alert warn mt-2">${ui.icon('alert')}<div><b>Export Database (.sql)</b> berisi struktur + seluruh isi tabel sebagai perintah SQL — cocok untuk migrasi ke hosting/VPS lain.
+          <b>Download Source Code</b> memuat seluruh kode program (server, routes, aset publik, tes, dokumentasi) <b>tanpa</b> database, <code>node_modules</code>, dan berkas rahasia <code>.env</code>. Sertakan <code>.env.example</code> lalu isi kredensial di server baru.</div></div>
       </div>
       <div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Konfigurasi Lingkungan (.env)</h3><div class="sub">Portable — pindah hosting tanpa mengubah kode</div></div></div>
+          <div class="alert info">${ui.icon('info')}<div>Kredensial database, API key WhatsApp, endpoint media, dan URL domain dibaca dari variabel lingkungan.
+            Buat berkas <code>.env</code> di folder aplikasi (contoh lengkap: <code>.env.example</code>). Nilai dari <code>.env</code> diutamakan di atas pengaturan di halaman ini.</div></div>
+          <div class="table-wrap"><table class="env-tbl"><thead><tr><th>Variabel</th><th>Nilai aktif</th><th>Keterangan</th></tr></thead><tbody>
+            ${envCfg.describe().map(x => `<tr>
+              <td>${esc(x.key)}</td>
+              <td class="${x.fromEnv ? 'env-on' : 'env-off'}">${esc(String(x.value || '(kosong)'))}${x.fromEnv ? '' : ' <span class="t-sub">(default/pengaturan)</span>'}</td>
+              <td class="t-sub">${esc(x.note)}</td></tr>`).join('')}
+          </tbody></table></div>
+          <p class="help mt-1">Berkas <code>.env</code> tidak disertakan pada Download Source Code (aman dari kebocoran kredensial).</p>
+        </div>
         <div class="card mb-3">
           <div class="card-head"><div><h3>Restore Data</h3><div class="sub">Pulihkan dari berkas ZIP / JSON cadangan</div></div></div>
           <div class="alert warn">${ui.icon('alert')}<div><b>Peringatan:</b> restore akan <b>mengganti seluruh data</b> saat ini dengan isi berkas cadangan. Buat backup terbaru terlebih dahulu. Sistem otomatis menyimpan snapshot pra-restore.</div></div>
@@ -473,6 +595,50 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     const rowsCount = TABLES.reduce((s, t) => s + (dump.tables[t] || []).length, 0);
     dbm.logAudit(req.user, 'BACKUP', 'backup', `Membuat backup database keseluruhan (.zip): ${rowsCount} baris dari ${TABLES.length} tabel`);
     res.file(buf, `backup-simkeu-${stamp}.zip`, 'application/zip');
+  });
+
+  /** Export database penuh sebagai perintah SQL (portabel untuk hosting lain) */
+  get('/backup/export-database', (req, res) => {
+    if (!guard(req, res, 'backup', 'create')) return;
+    const dump = sqlDump();
+    dbm.logAudit(req.user, 'EXPORT DATABASE', 'backup', `Export database .sql: ${dump.rows} baris dari ${dump.tables} tabel`);
+    const stamp = nowStamp().slice(0, 10).replace(/-/g, '');
+    res.file(Buffer.from(dump.sql, 'utf8'), `simkeu-database-${stamp}.sql`, 'application/sql; charset=utf-8');
+  });
+
+  /** Download source code aplikasi (.zip) — tanpa database, node_modules, dan .env */
+  get('/backup/download-source', (req, res) => {
+    if (!guard(req, res, 'backup', 'create')) return;
+    const files = collectSource();
+    const readme = [
+      'SIMKEU SEKOLAH — SOURCE CODE APLIKASI',
+      'Dibuat: ' + nowStamp(),
+      '',
+      'Isi berkas:',
+      '  server.js, db.js, lib.js, ui.js, wa.js, env.js, xlsx-read.js, importer.js, impcache.js, printcfg.js',
+      '  routes/     = seluruh modul halaman & proses',
+      '  public/     = aset CSS & JS',
+      '  dev-tests/  = skrip pengujian otomatis (node dev-tests/regress.js)',
+      '  package.json & package-lock.json',
+      '  .env.example = contoh konfigurasi lingkungan',
+      '',
+      'CARA PASANG DI VPS / HOSTING BARU',
+      '  1. Salin seluruh isi ZIP ke folder aplikasi.',
+      '  2. npm install   (butuh better-sqlite3 versi 12.9.0).',
+      '  3. Salin .env.example menjadi .env lalu isi DB_PATH, APP_BASE_URL,',
+      '     APP_MEDIA_URL/APP_MEDIA_TOKEN, dan WA_API_URL/WA_API_TOKEN.',
+      '  4. Pindahkan berkas database hasil menu "Export Database (.sql)" atau',
+      '     "Backup Database Keseluruhan (.ZIP)" ke folder data/.',
+      '  5. Jalankan: npm start   (port mengikuti variabel PORT).',
+      '',
+      'CATATAN: database, node_modules, dan berkas .env sengaja TIDAK disertakan.',
+      'Gunakan menu Backup & Restore untuk memindahkan data keuangan.'
+    ].join('\r\n');
+    files.push({ name: 'README-SOURCE.txt', data: readme });
+    const buf = lib.zip(files);
+    const stamp = nowStamp().slice(0, 10).replace(/-/g, '');
+    dbm.logAudit(req.user, 'DOWNLOAD SOURCE', 'backup', `Mengunduh source code aplikasi (.zip): ${files.length} berkas`);
+    res.file(buf, `simkeu-source-${stamp}.zip`, 'application/zip');
   });
 
   post('/backup/restore', (req, res) => {

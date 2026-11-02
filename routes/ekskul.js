@@ -36,7 +36,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const rows = db.prepare('SELECT * FROM ekskul_honor WHERE transaksi_id=?').all(trxId);
     if (!rows.length) { db.prepare('DELETE FROM transaksi WHERE id=?').run(trxId); return { deleted: true }; }
     const total = rows.reduce((s, r) => s + jumlahOf(r), 0);
-    const uraian = `Honor Pembina Ekstrakurikuler ${dbm.periodeLabel(rows[0].periode)} (${rows.length} pembina)`;
+    const jenisBatch = String(rows[0].jenis || '').trim();
+    const uraian = `Honor Pembina Ekstrakurikuler${jenisBatch ? ' ' + jenisBatch : ''} ${dbm.periodeLabel(rows[0].periode)} (${rows.length} pembina)`;
     db.prepare('UPDATE transaksi SET nominal=?, uraian=? WHERE id=?').run(total, uraian, trxId);
     return { total, trx };
   }
@@ -117,7 +118,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         ${editable ? `<button class="btn btn-primary" data-open="mAddEkskul">${ui.icon('plus')}Input Honor (Tabel Grid)</button>` : ''}
       </div>
     </div>
-    <div class="alert info mb-3">${ui.icon('info')}<div>Input honor di sini <b>tidak langsung</b> memotong BKU. Data masuk ke <b>Antrean Posting Honor Ekskul</b> untuk ditinjau, lalu diposting ke BKU sasaran.</div></div>
+    <div class="alert info mb-3">${ui.icon('info')}<div>Input honor di sini <b>tidak langsung</b> memotong BKU. Data masuk ke <b>Antrean Posting Honor Ekskul</b> untuk ditinjau, lalu diposting ke BKU sasaran.
+      Saat posting, setiap <b>jenis ekstrakurikuler</b> (mis. Pramuka &amp; Paskibra) dibuat sebagai <b>transaksi BKU tersendiri</b> — tidak digabung.</div></div>
     <div class="card">
       <div class="card-head"><div><h3>Honor Pembina Ekstrakurikuler — ${esc(dbm.periodeLabel(periode))}</h3><div class="sub">${rows.length} pembina · total ${rupiah(total)}</div></div></div>
       ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr>
@@ -210,6 +212,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         if (String(periode) !== String(row.periode)) {
           return res.redirect(back + '&err=' + encodeURIComponent('Periode item yang sudah terposting tidak dapat diubah. Hapus transaksi lalu input ulang bila perlu.'));
         }
+        if (String(jenis) !== String(row.jenis || '')) {
+          return res.redirect(back + '&err=' + encodeURIComponent('Jenis ekstrakurikuler item yang sudah terposting tidak dapat diubah (satu transaksi BKU = satu jenis). Hapus transaksi lalu input ulang bila perlu.'));
+        }
       }
       let synced = null;
       db.transaction(() => {
@@ -271,14 +276,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const bkuList = bukuss(c.taId);
     const editable = c.can('ekskul', 'edit');
     const late = modalCollector();
-    // kelompokkan per periode
+    /* kelompokkan per PERIODE + JENIS ekstrakurikuler:
+       Pramuka & Paskibra (dan jenis lain) diposting sebagai transaksi BKU TERPISAH,
+       bukan digabung menjadi satu transaksi. */
     const map = new Map();
     for (const r of pending) {
-      if (!map.has(r.periode)) map.set(r.periode, { periode: r.periode, rows: [], total: 0 });
-      const g = map.get(r.periode);
+      const jenis = String(r.jenis || '').trim();
+      const key = r.periode + '|' + jenis;
+      if (!map.has(key)) map.set(key, { periode: r.periode, jenis, rows: [], total: 0 });
+      const g = map.get(key);
       g.rows.push(r); g.total += r.jumlah;
     }
-    const groups = Array.from(map.values()).sort((a, b) => (a.periode < b.periode ? 1 : -1));
+    const groups = Array.from(map.values()).sort((a, b) => {
+      if (a.periode !== b.periode) return a.periode < b.periode ? 1 : -1;
+      return String(a.jenis).localeCompare(String(b.jenis), 'id');
+    });
+    const jenisSet = [...new Set(pending.map(r => String(r.jenis || '').trim()))];
     // batasi riwayat terposting agar halaman tetap ringan (modal edit ikut dirender per baris)
     const postedAll = dbm.ekskulRows().filter(r => r.status === 'posted')
       .sort((a, b) => String(b.posted_at || '').localeCompare(String(a.posted_at || '')));
@@ -303,16 +316,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </form>`;
 
     const content = `<div class="between mb-2">
-      <div class="toolbar"><span class="badge ${groups.length ? 'amber' : 'green'}">${groups.length} periode menunggu posting</span></div>
+      <div class="toolbar"><span class="badge ${groups.length ? 'amber' : 'green'}">${groups.length} kelompok menunggu posting</span>
+        <span class="badge gray plain">${jenisSet.length} jenis ekstrakurikuler</span></div>
       <div class="toolbar"><a class="btn btn-sm" href="${c.base}/ekskul">${ui.icon('plus')}Input Honor</a></div>
     </div>
-    ${groups.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Ada ${pending.length} draf honor ekskul belum terposting ke BKU.</b> Tinjau total akumulasi per periode lalu pilih BKU tujuan sebelum posting.</div></div>` : ''}
+    ${groups.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Ada ${pending.length} draf honor ekskul belum terposting ke BKU.</b>
+      Setiap <b>jenis ekstrakurikuler</b> diposting sebagai <b>transaksi BKU tersendiri</b> (Pramuka, Paskibra, dst. tidak digabung dalam satu transaksi).
+      Tinjau total per jenis, lalu pilih BKU tujuan sebelum posting.</div></div>` : ''}
     ${groups.map((g, i) => `
     <div class="card mb-3">
-      <div class="card-head"><div><h3>Periode ${esc(dbm.periodeLabel(g.periode))}</h3><div class="sub">${g.rows.length} pembina · total ${rupiah(g.total)}</div></div>
+      <div class="card-head"><div><h3>${g.jenis ? esc(g.jenis) : 'Tanpa Jenis'} — Periode ${esc(dbm.periodeLabel(g.periode))}</h3>
+        <div class="sub">${g.rows.length} pembina · total ${rupiah(g.total)} · diposting sebagai 1 transaksi BKU</div></div>
         <div class="toolbar">
-          <form method="post" action="${c.base}/ekskul/antrean/posting" class="flex" style="gap:6px;align-items:flex-end" data-confirm="Posting ${esc(dbm.periodeLabel(g.periode))} sebesar ${rupiah(g.total)} ke BKU?">
+          <form method="post" action="${c.base}/ekskul/antrean/posting" class="flex" style="gap:6px;align-items:flex-end" data-confirm="Posting honor ${esc(g.jenis || 'ekskul')} ${esc(dbm.periodeLabel(g.periode))} sebesar ${rupiah(g.total)} ke BKU (transaksi terpisah per jenis)?">
             <input type="hidden" name="periode" value="${esc(g.periode)}">
+            <input type="hidden" name="jenis" value="${esc(g.jenis)}">
             <div class="field" style="margin:0"><label>BKU Tujuan</label><select name="bku_id" required style="min-width:200px">
               <option value="">— Pilih BKU —</option>${bkuList.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}</select></div>
             ${editable ? `<button class="btn btn-primary btn-sm">${ui.icon('save')}Posting ke BKU</button>` : ''}
@@ -329,7 +347,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         title: 'Edit Honor Antrean — ' + r.nama_pembina, body: editForm(r, 'fqe' + r.id), wide: true,
         footer: `<button class="btn" data-close="mQe${r.id}">Batal</button><button class="btn btn-primary" form="fqe${r.id}">Simpan</button>`
       }) : ''}`).join('')}
-      </tbody><tfoot><tr><td colspan="5">TOTAL AKUMULASI</td><td class="num">${rupiah(g.total)}</td><td></td></tr></tfoot></table></div>
+      </tbody><tfoot><tr><td colspan="5">TOTAL ${esc((g.jenis || 'EKSPUL').toUpperCase())} ${esc(dbm.periodeLabel(g.periode))}</td><td class="num">${rupiah(g.total)}</td><td></td></tr></tfoot></table></div>
     </div>`).join('')}
     ${groups.length ? '' : ui.emptyState('Antrean posting kosong', 'Semua honor pembina ekstrakurikuler sudah diposting ke BKU.')}
     <div class="card">
@@ -360,7 +378,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     guard(req, res, 'ekskul', 'edit');
     const back = req.BASE + '/ekskul/antrean';
     const periode = req.body.periode;
-    const rows = db.prepare("SELECT * FROM ekskul_honor WHERE periode=? AND status='pending'").all(periode);
+    // satu transaksi per JENIS ekstrakurikuler (jenis kosong = tanpa jenis)
+    const adaJenis = req.body.jenis !== undefined && req.body.jenis !== null;
+    const jenis = String(req.body.jenis || '').trim();
+    const rows = adaJenis
+      ? db.prepare("SELECT * FROM ekskul_honor WHERE periode=? AND COALESCE(TRIM(jenis),'')=? AND status='pending'").all(periode, jenis)
+      : db.prepare("SELECT * FROM ekskul_honor WHERE periode=? AND status='pending'").all(periode);
     if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Tidak ada draf honor untuk periode tersebut.'));
     const bku = db.prepare('SELECT * FROM bku WHERE id=?').get(req.body.bku_id);
     if (!bku) return res.redirect(back + '?err=' + encodeURIComponent('BKU tujuan wajib dipilih.'));
@@ -373,6 +396,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const total = rows.reduce((s, r) => s + jumlahOf(r), 0);
     if (!(total > 0)) return res.redirect(back + '?err=' + encodeURIComponent('Total honor Rp 0 — periksa kehadiran & harga satuan.'));
     const coa = db.prepare("SELECT * FROM coa WHERE kode='5.1.01'").get() || db.prepare("SELECT * FROM coa WHERE kategori='pengeluaran' ORDER BY kode LIMIT 1").get();
+    const jenisBatch = rows.every(r => String(r.jenis || '').trim() === String(rows[0].jenis || '').trim())
+      ? String(rows[0].jenis || '').trim() : '';
     const ym = String(last).slice(0, 7).replace('-', '');
     const seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bku.id).c + 1;
     const noBukti = `${bku.kode || 'BKU'}/EKS/${ym}/${String(seq).padStart(3, '0')}`;
@@ -380,14 +405,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       const info = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
         VALUES (?,?,'pengeluaran','tunai',?,?,?,?,?,'posted',?,?)`)
         .run(bku.id, last, noBukti, coa ? coa.id : null, total,
-          `Honor Pembina Ekstrakurikuler ${dbm.periodeLabel(periode)} (${rows.length} pembina)`, 'Pembina Ekskul', req.user.id, nowStamp());
+          `Honor Pembina Ekstrakurikuler${jenisBatch ? ' ' + jenisBatch : ''} ${dbm.periodeLabel(periode)} (${rows.length} pembina)`,
+          jenisBatch || 'Pembina Ekskul', req.user.id, nowStamp());
       const id = Number(info.lastInsertRowid);
       const upd = db.prepare("UPDATE ekskul_honor SET status='posted',bku_id=?,transaksi_id=?,posted_at=?,posted_by=? WHERE id=?");
       for (const r of rows) upd.run(bku.id, id, nowStamp(), req.user.nama, r.id);
       return id;
     })();
-    dbm.logAudit(req.user, 'POSTING EKSKUL', 'ekskul', `Honor ekskul ${dbm.periodeLabel(periode)} ${rupiah(total)} → ${bku.nama} (${noBukti})`);
-    res.redirect(back + '?ok=' + encodeURIComponent(`Honor ${dbm.periodeLabel(periode)} ${rupiah(total)} diposting ke ${bku.nama} (${noBukti}).`));
+    dbm.logAudit(req.user, 'POSTING EKSKUL', 'ekskul',
+      `Honor ekskul${jenisBatch ? ' ' + jenisBatch : ''} ${dbm.periodeLabel(periode)} ${rupiah(total)} → ${bku.nama} (${noBukti})`);
+    res.redirect(back + '?ok=' + encodeURIComponent(`Honor ${jenisBatch ? jenisBatch + ' ' : ''}${dbm.periodeLabel(periode)} ${rupiah(total)} diposting ke ${bku.nama} (${noBukti}) — transaksi terpisah per jenis ekskul.`));
   });
 
   /* ================= CETAK ================= */
@@ -411,7 +438,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="nm">${esc(c.settings.sekolah_kepala || '...............................')}</div>
           <div>NIP. ${esc(c.settings.sekolah_nip_kepala || '.......................')}</div></div>
         <div class="sig"><div class="sig-head"><div>&nbsp;</div><div>&nbsp;</div></div><div class="space"></div><div class="nm">&nbsp;</div><div>&nbsp;</div></div>
-        <div class="sig"><div class="sig-head"><div>${esc(tglID(todayISO()))}</div><div style="font-weight:600">${esc(EL.ttd_bendahara || 'Bendahara')}</div></div><div class="space"></div>
+        <div class="sig"><div class="sig-head"><div>${esc(printcfg.tempatTanggal(dbm, tglID(todayISO())))}</div><div style="font-weight:600">${esc(EL.ttd_bendahara || 'Bendahara')}</div></div><div class="space"></div>
           <div class="nm">${esc(c.settings.sekolah_bendahara || '...............................')}</div>
           <div>NIP. ${esc(c.settings.sekolah_nip_bendahara || '.......................')}</div></div>
       </div>`;

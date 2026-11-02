@@ -668,7 +668,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const isIn = t.jenis === 'pemasukan';
     const L = printcfg.labels(dbm, 'kwitansi_trx');
     const orient = printcfg.orient(req, dbm, 'kwitansi_trx');
-    const kota = [c.settings.sekolah_nama || '', tglID(t.tanggal)].filter(Boolean).join(', ');
+    // baris "Tempat, tanggal transaksi" — teks tempat diatur di Desain Templat Cetak
+    const kota = printcfg.tempatTanggal(dbm, tglID(t.tanggal));
+    /* pengeluaran: "Telah diterima dari" → "Bendahara <nama sekolah>"
+       (isi baris dapat diubah di Desain Templat Cetak, placeholder {sekolah}) */
+    const dariKeluar = printcfg.fill(L.nilai_dari_keluar || 'Bendahara {sekolah}', {
+      sekolah: c.settings.sekolah_nama || 'Sekolah'
+    });
     /* TTD tiga kolom dibuat SEJAJAR: header 2 baris dengan tinggi tetap,
        ruang tanda tangan tetap, lalu nama + NIP pada baris yang sama. */
     const sigCol = (head1, head2, nama, nip) => `<div class="sig">
@@ -682,8 +688,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       <div class="kwit-box">
         <div class="head"><span>${esc(isIn ? L.judul_masuk : L.judul_keluar)}</span><span>No. ${esc(t.no_bukti || '-')}</span></div>
         <div class="kwit-body">
-          <div class="k">${esc(isIn ? L.dari_masuk : (L.dari_keluar || 'Bendahara Sekolah'))}</div>
-          <div class="v">${esc(isIn ? (t.nama_pihak || '.....................................') : (L.dari_keluar || 'Bendahara Sekolah'))}</div>
+          <div class="k">${esc(isIn ? L.dari_masuk : L.dari_keluar)}</div>
+          <div class="v">${esc(isIn ? (t.nama_pihak || '.....................................') : dariKeluar)}</div>
           <div class="k">${esc(L.sejumlah)}</div>
           <div class="v" style="font-style:italic">${esc(terbilangRupiah(t.nominal))}</div>
           <div class="k">${esc(L.untuk)}</div>

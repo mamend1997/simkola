@@ -91,6 +91,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const ro = !c.can('sekolah', 'edit');
     const field = (label, name, val, type = 'text', hint = '') => `<div class="field"><label>${esc(label)}</label>
       <input type="${type}" name="${name}" value="${esc(val)}" ${ro ? 'readonly' : ''}>${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+    // host publik untuk pratinjau alamat portal (APP_BASE_URL dari .env bila ada)
+    const portalHost = String(process.env.APP_BASE_URL || req.BASE || '').replace(/\/+$/, '') || '(domain ini)';
     const content = `<div class="split">
       <div class="card">
         <div class="card-head"><div><h3>Identitas Sekolah</h3><div class="sub">Tampil otomatis sebagai kop pada setiap cetakan</div></div>
@@ -132,6 +134,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
             <div class="field"><label>Margin (mm)</label><input type="number" step="0.5" min="0" name="kwitansi_margin_mm" value="${esc(s.kwitansi_margin_mm || 6)}" ${ro ? 'readonly' : ''}></div>
           </div>
           <label class="check"><input type="checkbox" name="portal_aktif" value="1" ${s.portal_aktif === '1' ? 'checked' : ''} ${ro ? 'disabled' : ''}> Aktifkan <b>Portal Cek Tagihan Orang Tua</b> (publik, tanpa login)</label>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Alamat (URL) Portal Publik</h3>
+            <div class="sub">Ujung alamat ketiga portal dapat diubah sendiri, mis. <code>portal-slip</code> → <code>portal-slip-pegawai</code></div></div></div>
+          <div class="row3">
+            <div class="field"><label>Portal Tagihan Siswa</label>
+              <input name="portal_slug" value="${esc(s.portal_slug || 'portal')}" ${ro ? 'readonly' : ''} placeholder="portal">
+              <div class="hint">Contoh alamat: <code>${esc(portalHost)}/${esc(s.portal_slug || 'portal')}</code></div></div>
+            <div class="field"><label>Portal Piutang Pegawai</label>
+              <input name="portal_pegawai_slug" value="${esc(s.portal_pegawai_slug || 'portal-pegawai')}" ${ro ? 'readonly' : ''} placeholder="portal-pegawai">
+              <div class="hint">Contoh alamat: <code>${esc(portalHost)}/${esc(s.portal_pegawai_slug || 'portal-pegawai')}</code></div></div>
+            <div class="field"><label>Portal Slip Gaji Pegawai</label>
+              <input name="portal_slip_slug" value="${esc(s.portal_slip_slug || 'portal-slip')}" ${ro ? 'readonly' : ''} placeholder="portal-slip">
+              <div class="hint">Contoh alamat: <code>${esc(portalHost)}/${esc(s.portal_slip_slug || 'portal-slip')}</code></div></div>
+          </div>
+          <div class="alert info">${ui.icon('info')}<div>Gunakan huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.
+            Alamat lama (default) tetap dapat dibuka. Perubahan langsung berlaku tanpa restart server.</div></div>
           <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Identitas</button>`}</div>
         </form>
       </div>
@@ -161,6 +179,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
 
   post('/sekolah', (req, res) => {
     if (!guard(req, res, 'sekolah', 'edit')) return;
+    /* validasi dulu alamat (slug) portal publik sebelum menulis setting apa pun */
+    const slugBaru = {};
+    for (const [key, settingKey] of Object.entries(dbm.PORTAL_SLUG_KEYS)) {
+      if (req.body[settingKey] === undefined) continue;
+      const raw = String(req.body[settingKey] || '').trim().toLowerCase();
+      const errSlug = raw ? dbm.portalSlugError(raw, key) : null;
+      if (errSlug) return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent(errSlug));
+      slugBaru[settingKey] = raw || dbm.PORTAL_SLUG_DEFAULT[key];
+    }
     const keys = ['sekolah_nama', 'sekolah_alamat', 'sekolah_kepala', 'sekolah_nip_kepala', 'sekolah_bendahara', 'sekolah_nip_bendahara'];
     for (const k of keys) if (req.body[k] !== undefined) dbm.setSetting(k, String(req.body[k]).trim());
     if (req.body.honor_tugas_jam !== undefined) {
@@ -179,6 +206,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
       }
     }
     if (req.body.portal_aktif !== undefined) dbm.setSetting('portal_aktif', req.body.portal_aktif ? '1' : '0');
+    for (const [settingKey, v] of Object.entries(slugBaru)) dbm.setSetting(settingKey, v);
     dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Memperbarui identitas sekolah / kop surat');
     res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Identitas sekolah berhasil disimpan.'));
   });

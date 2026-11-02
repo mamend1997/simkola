@@ -105,40 +105,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     return map;
   }
   /**
-   * rincian bulanan sebuah tagihan + alokasi pembayaran:
-   * pembayaran yang menyebut bulan tertentu dialokasikan ke bulan itu dulu,
-   * sisanya (bulan NULL) FIFO dari bulan pertama.
+   * rincian bulanan sebuah tagihan + alokasi pembayaran (memakai helper bersama di db.js
+   * agar angka portal publik, detail siswa, dan matriks bulanan selalu identik).
    */
   function monthlyDetail(tagihan, grup, payments) {
     if (!grup || grup.jenis !== 'bulanan') return [];
-    const nom = dbm.iuranNominalMap(grup.id);
     const list = payments || db.prepare(`SELECT jumlah, potongan, bulan FROM iuran_bayar
       WHERE tagihan_id=? AND status<>'void' ORDER BY tanggal, id`).all(tagihan.id);
-    const months = BULAN_TA.filter(b => Number(nom[b] || 0) > 0)
-      .map(b => ({ bulan: b, label: bulanLabel(b), tagihan: Number(nom[b] || 0), dibayar: 0 }));
-    if (!months.length) return [];
-    let pool = 0;
-    for (const p of list) {
-      const j = Number(p.jumlah || 0);
-      if (!(j > 0)) continue;
-      const m = p.bulan ? months.find(x => x.bulan === Number(p.bulan)) : null;
-      if (m) {
-        const add = Math.min(Math.max(0, m.tagihan - m.dibayar), j);
-        m.dibayar += add;
-        pool += j - add;
-      } else pool += j;
-    }
-    for (const m of months) {
-      if (pool <= 0) break;
-      const add = Math.min(Math.max(0, m.tagihan - m.dibayar), pool);
-      m.dibayar += add;
-      pool -= add;
-    }
-    return months.map(m => ({
-      ...m,
-      sisa: Math.max(0, m.tagihan - m.dibayar),
-      status: m.dibayar >= m.tagihan ? 'lunas' : m.dibayar > 0 ? 'sebagian' : 'belum'
-    }));
+    return dbm.iuranMonthDetail(grup.id, list)
+      .map(m => ({ ...m, label: bulanLabel(m.bulan) }));
   }
   /** tagihan satu bulan tertentu (dipakai form bayar per bulan) */
   function monthRow(tagihan, grup, bulan, payments) {
@@ -626,6 +601,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <div class="card-head"><div><h3>Data Iuran &amp; Rekapitulasi Tagihan Siswa</h3>
         <div class="sub">${d.rekap.length} siswa · total tagihan ${rupiah(totalTagih)} · sudah dibayar ${rupiah(totalBayar)}</div></div>
         <div class="toolbar">
+          <a class="btn btn-sm" href="${c.base}/iuran/bulanan?ta=${d.taId || ''}">${ui.icon('calendar')}Rincian Bulanan</a>
           ${canExport ? `<form method="get" action="${c.base}/iuran/export" id="fExpIuran" style="display:inline-flex;gap:6px">${keepHidden}
             <button class="btn btn-sm" name="format" value="xlsx">${ui.icon('download')}Export Excel</button>
             <button class="btn btn-sm" name="format" value="pdf" formtarget="_blank">${ui.icon('printer')}Export PDF</button>
@@ -820,13 +796,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
               <button type="button" class="btn btn-sm" data-open="mRiwayat${t.id}">${ui.icon('clock')}Riwayat</button>
               ${editable && t.sisa > 0 && !lockedTag ? `<button type="button" class="btn btn-sm btn-primary" data-open="mBayar${t.id}">${ui.icon('coins')}${bulanan ? 'Bayar Semua Bulan' : 'Bayar'}</button>` : ''}
             </td></tr>`;
-      // rincian per bulan (grup bulanan): satu baris per bulan, masing-masing punya ceklis & bisa dibayar sendiri
-      const monthRows = bulanan ? det.map(m => {
+      // rincian per bulan (grup bulanan): deret LENGKAP Juli … Juni, masing-masing bisa dibayar sendiri
+      const detMap = new Map(det.map(m => [m.bulan, m]));
+      const monthRows = bulanan ? BULAN_TA.map(mb => {
+        const m = detMap.get(mb);
+        const label = `${t.grup_nama} - ${bulanTahunLabel(mb, taOfGrup(grupObj))}`;
+        if (!m) {
+          return `<tr class="month-row row-muted${lockedTag ? ' row-locked' : ''}">
+            <td></td>
+            <td class="month-cell">↳ <b>${esc(label)}</b></td>
+            <td class="t-sub">Bulanan</td>
+            <td><span class="badge gray plain">Tidak ditagihkan</span></td>
+            <td class="t-sub">—</td><td class="num t-sub">—</td><td class="num t-sub">—</td>
+            <td class="num t-sub">—</td><td class="num t-sub">—</td><td></td></tr>`;
+        }
         const lastM = m.dibayar > 0 ? payments.filter(p => Number(p.bulan) === m.bulan).map(p => p.tanggal).sort().pop()
           || payments.map(p => p.tanggal).sort().pop() : null;
         return `<tr class="month-row${lockedTag ? ' row-locked' : ''}">
-          <td><input type="checkbox" name="item" value="m:${t.id}:${m.bulan}" data-label="${esc(t.grup_nama + ' - ' + bulanTahunLabel(m.bulan, taOfGrup(grupObj)))}" data-sisa="${Number(m.sisa) || 0}" ${lockedTag ? 'disabled' : ''}></td>
-          <td class="month-cell">↳ <b>${esc(t.grup_nama)} - ${esc(bulanTahunLabel(m.bulan, taOfGrup(grupObj)))}</b></td>
+          <td><input type="checkbox" name="item" value="m:${t.id}:${m.bulan}" data-label="${esc(label)}" data-sisa="${Number(m.sisa) || 0}" ${lockedTag ? 'disabled' : ''}></td>
+          <td class="month-cell">↳ <b>${esc(label)}</b></td>
           <td class="t-sub">Bulanan</td>
           <td>${statusBadge(m.status)}</td>
           <td class="nowrap t-sub">${lastM ? tglID(lastM) : '-'}</td>
@@ -884,6 +872,152 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     }) : ''}
     </div>`;
     page(req, res, { title: 'Detail Iuran Siswa', sub: 'Tagihan, riwayat & pembayaran', active: 'iuran_data', content });
+  });
+
+  /* =========================================================
+     RINCIAN IURAN BULANAN — deret bulan eksplisit Juli … Juni
+     Satu baris per siswa, satu kolom per bulan tahun pelajaran.
+     ========================================================= */
+  get('/iuran/bulanan', (req, res) => {
+    guard(req, res, 'iuran', 'view');
+    const c = ctx(req);
+    const taList = dbm.allTahun();
+    const taId = Number(req.query.get('ta') || c.taId || 0) || (taList[0] ? taList[0].id : null);
+    const taRow = taId ? dbm.tahunById(taId) : null;
+    const q = String(req.query.get('q') || '').trim();
+    const siswaId = Number(req.query.get('siswa') || 0) || null;
+    const kelasIds = (req.query.getAll ? req.query.getAll('kelas') : []).map(Number).filter(Boolean);
+    const grupIds = (req.query.getAll ? req.query.getAll('grup') : []).map(Number).filter(Boolean);
+    const grupAll = grupList(taId).filter(g => g.jenis === 'bulanan');
+    const grupSel = grupIds.length ? grupAll.filter(g => grupIds.includes(Number(g.id))) : grupAll;
+    const kelasAll = dbm.kelasList(taId, {});
+
+    const tags = dbm.iuranTagihanRows({
+      taId, q, aktifOnly: true,
+      kelasId: kelasIds.length ? kelasIds : undefined,
+      grupId: grupSel.length ? grupSel.map(g => g.id) : [-1]
+    }).filter(t => grupSel.some(g => Number(g.id) === Number(t.grup_id)));
+
+    // seluruh pembayaran (non-void) pada TA ini dikelompokkan per tagihan
+    // (satu query per TA — hindari daftar parameter IN yang bisa sangat panjang di sekolah besar)
+    const payMap = new Map();
+    if (tags.length) {
+      const tagSet = new Set(tags.map(t => Number(t.id)));
+      const rows = db.prepare(`SELECT b.tagihan_id, b.jumlah, b.potongan, b.bulan, b.tanggal
+        FROM iuran_bayar b JOIN iuran_tagihan t ON t.id=b.tagihan_id
+        WHERE b.status<>'void' AND t.tahun_ajaran_id=? ORDER BY b.tanggal, b.id`).all(taId);
+      for (const r of rows) {
+        if (!tagSet.has(Number(r.tagihan_id))) continue;
+        if (!payMap.has(r.tagihan_id)) payMap.set(r.tagihan_id, []);
+        payMap.get(r.tagihan_id).push(r);
+      }
+    }
+
+    // grupkan tagihan per siswa
+    const bySiswa = new Map();
+    for (const t of tags) {
+      if (!bySiswa.has(t.siswa_id)) bySiswa.set(t.siswa_id, { id: t.siswa_id, nama: t.siswa_nama || t.nama, nisn: t.nisn, kelas: t.kelas_nama, tags: [] });
+      bySiswa.get(t.siswa_id).tags.push(t);
+    }
+    let students = Array.from(bySiswa.values()).sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
+    if (siswaId) students = students.filter(s => Number(s.id) === siswaId);
+
+    const bulanHead = BULAN_TA.map(b => bulanTahunLabel(b, taRow));
+    const rows = students.map(s => {
+      const cells = BULAN_TA.map(b => ({ bulan: b, tagihan: 0, dibayar: 0 }));
+      for (const t of s.tags) {
+        const g = grupSel.find(x => Number(x.id) === Number(t.grup_id)) || {};
+        const det = monthlyDetail(t, g, payMap.get(t.id) || []);
+        for (const m of det) {
+          const cell = cells.find(x => x.bulan === m.bulan);
+          if (!cell) continue;
+          cell.tagihan += Number(m.tagihan || 0);
+          cell.dibayar += Number(m.dibayar || 0);
+        }
+      }
+      const tagihan = cells.reduce((a, x) => a + x.tagihan, 0);
+      const dibayar = cells.reduce((a, x) => a + x.dibayar, 0);
+      return { ...s, cells, tagihan, dibayar, sisa: Math.max(0, tagihan - dibayar) };
+    });
+
+    const sumTagihan = rows.reduce((a, r) => a + r.tagihan, 0);
+    const sumBayar = rows.reduce((a, r) => a + r.dibayar, 0);
+    // pagination 80 siswa/halaman (matriks 12 bulan bisa sangat panjang pada sekolah besar)
+    const perPage = 80;
+    const totalSiswa = rows.length;
+    const totalHal = Math.max(1, Math.ceil(totalSiswa / perPage));
+    const hal = Math.min(totalHal, Math.max(1, Number(req.query.get('hal') || 1)));
+    const pageRows = rows.slice((hal - 1) * perPage, hal * perPage);
+    const qsBase = (() => {
+      const usp = new URLSearchParams();
+      usp.set('ta', taId || '');
+      if (q) usp.set('q', q);
+      if (siswaId) usp.set('siswa', siswaId);
+      for (const id of kelasIds) usp.append('kelas', id);
+      for (const id of grupIds) usp.append('grup', id);
+      return usp.toString();
+    })();
+    const pager = totalHal > 1 ? `<div class="between mt-2">
+      <div class="small muted">Menampilkan ${(hal - 1) * perPage + 1}–${Math.min(totalSiswa, hal * perPage)} dari ${totalSiswa} siswa</div>
+      <div class="toolbar">
+        ${hal > 1 ? `<a class="btn btn-sm" href="${c.base}/iuran/bulanan?${qsBase}&hal=${hal - 1}">‹ Sebelumnya</a>` : ''}
+        <span class="badge gray plain">Halaman ${hal} / ${totalHal}</span>
+        ${hal < totalHal ? `<a class="btn btn-sm" href="${c.base}/iuran/bulanan?${qsBase}&hal=${hal + 1}">Berikutnya ›</a>` : ''}
+      </div></div>` : '';
+    const keepHidden = `<input type="hidden" name="ta" value="${taId || ''}"><input type="hidden" name="q" value="${esc(q)}">
+      ${kelasIds.map(id => `<input type="hidden" name="kelas" value="${id}">`).join('')}
+      ${grupIds.map(id => `<input type="hidden" name="grup" value="${id}">`).join('')}`;
+    const cellHtml = (cell) => {
+      if (!cell.tagihan) return '<td class="num bulan-cell kosong"><span class="t-sub">—</span></td>';
+      const lunas = cell.dibayar >= cell.tagihan;
+      const sebagian = cell.dibayar > 0 && !lunas;
+      const cls = lunas ? 'lunas' : sebagian ? 'sebagian' : 'kurang';
+      const mark = lunas ? '✓' : sebagian ? '½' : '!';
+      const title = `${bulanLabel(cell.bulan)}: tagihan ${rupiah(cell.tagihan)} · dibayar ${rupiah(cell.dibayar)} · sisa ${rupiah(Math.max(0, cell.tagihan - cell.dibayar))}`;
+      return `<td class="num bulan-cell ${cls}" title="${esc(title)}"><span class="bc-nom">${num(cell.tagihan)}</span><span class="bc-mark">${mark}</span></td>`;
+    };
+
+    const content = `<div class="card mb-3">
+      <div class="card-head"><div><h3>Rincian Iuran Bulanan per Siswa</h3>
+        <div class="sub">${rows.length} siswa · ${esc(grupSel.map(g => g.nama).join(', ') || 'belum ada grup bulanan')} · total tagihan ${rupiah(sumTagihan)} · sudah dibayar ${rupiah(sumBayar)}</div></div>
+        <div class="toolbar"><a class="btn btn-sm" href="${c.base}/iuran/data?ta=${taId || ''}">${ui.icon('card')}Kembali ke Data Iuran</a></div></div>
+      <form method="get" action="${c.base}/iuran/bulanan" class="filterbar">
+        <div class="field"><label>Tahun Pelajaran</label><select name="ta" data-autosubmit>${taList.map(t => `<option value="${t.id}" ${String(taId) === String(t.id) ? 'selected' : ''}>${esc(t.nama)}</option>`).join('')}</select></div>
+        <div class="field"><label>Nama / NISN</label><input name="q" value="${esc(q)}" placeholder="Cari siswa" data-table-search="#tblBulanan" autocomplete="off"></div>
+        ${multiPick('kelas', 'Kelas (multi-pilih)', kelasAll, kelasIds)}
+        ${multiPick('grup', 'Grup Bulanan (multi-pilih)', grupAll, grupIds)}
+        <button class="btn">${ui.icon('search')}Terapkan</button>
+        ${kelasIds.length || grupIds.length || q ? `<a class="btn" href="${c.base}/iuran/bulanan?ta=${taId || ''}">Reset</a>` : ''}
+      </form>
+      <div class="alert info mb-2">${ui.icon('info')}<div>Setiap kolom adalah <b>bulan tagihan</b> pada tahun pelajaran ini (Juli s.d. Juni).
+        Tanda <b>✓</b> = lunas, <b>½</b> = dibayar sebagian, <b>!</b> = belum dibayar, <b>—</b> = bulan tersebut tidak ditagihkan.</div></div>
+      ${rows.length ? `<div class="table-scroll tall" id="tblBulanan"><table class="bulanan-tbl"><thead><tr>
+        <th class="sticky-col">No</th><th class="sticky-col2">Nama Siswa</th><th>Kelas</th>
+        ${bulanHead.map((l, i) => `<th class="num bulan-head" title="${esc(l)}">${esc(bulanLabel(BULAN_TA[i]))}<div class="t-sub">${esc((l.match(/\d{4}$/) || [''])[0])}</div></th>`).join('')}
+        <th class="num">Total Tagihan</th><th class="num">Sudah Dibayar</th><th class="num">Terhutang</th><th class="right">Aksi</th>
+      </tr></thead><tbody>
+      ${pageRows.map((r, i) => `<tr>
+        <td class="num sticky-col">${(hal - 1) * perPage + i + 1}</td>
+        <td class="sticky-col2"><a class="link-strong" href="${c.base}/iuran/data/${r.id}?ta=${taId || ''}">${esc(r.nama)}</a><div class="t-sub mono">${esc(r.nisn || '')}</div></td>
+        <td>${esc(r.kelas || '-')}</td>
+        ${r.cells.map(cellHtml).join('')}
+        <td class="num">${rupiah(r.tagihan)}</td>
+        <td class="num" style="color:var(--green)">${rupiah(r.dibayar)}</td>
+        <td class="num" style="color:${r.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(r.sisa)}</td>
+        <td class="right"><a class="btn btn-sm" href="${c.base}/iuran/data/${r.id}?ta=${taId || ''}">${ui.icon('coins')}Bayar</a></td>
+      </tr>`).join('')}
+      </tbody><tfoot><tr><td colspan="3">TOTAL</td>
+        ${BULAN_TA.map(b => {
+      const t = rows.reduce((a, r) => a + (r.cells.find(x => x.bulan === b) || {}).tagihan, 0);
+      return `<td class="num">${t ? num(t) : '—'}</td>`;
+    }).join('')}
+        <td class="num">${rupiah(sumTagihan)}</td><td class="num">${rupiah(sumBayar)}</td>
+        <td class="num">${rupiah(Math.max(0, sumTagihan - sumBayar))}</td><td></td></tr></tfoot></table></div>
+        ${pager}
+        <p class="help mt-2">Klik nama siswa untuk membuka rincian &amp; form pembayaran per bulan. Ekspor daftar ini memakai tombol <b>Export Excel</b> pada menu Data Iuran.</p>`
+        : ui.emptyState('Belum ada tagihan bulanan', 'Tetapkan grup iuran bulanan (mis. SPP) ke siswa terlebih dahulu.')}
+    </div>`;
+    page(req, res, { title: 'Rincian Iuran Bulanan', sub: 'Deret tagihan bulanan Juli s.d. Juni per siswa', active: 'iuran_bulanan', content });
   });
 
   function riwayatHtml(t, c, grupObj) {
@@ -1198,7 +1332,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <tfoot><tr><td colspan="4">GRAND TOTAL</td><td class="num">${num(totalJumlah)}</td><td class="num">${num(totalPotongan)}</td><td class="num">${num(grand)}</td></tr></tfoot></table>
         <div class="ki-terbilang"><b>Terbilang:</b> ${esc(terbilangRupiah(grand))}</div>
         <div class="ki-sign single">
-          <div>${esc(s.sekolah_nama || '')}, ${tglID(siswa.tanggal)}<br><b>${esc(siswa.pencatat || req.user.nama)}</b><div class="sp"></div><div class="ln">${esc(KW.pencatat || 'Pencatat')}</div></div>
+          <div>${esc(s.print_tempat || 'Cikoneng')}, ${tglID(siswa.tanggal)}<br><b>${esc(siswa.pencatat || req.user.nama)}</b><div class="sp"></div><div class="ln">${esc(KW.pencatat || 'Pencatat')}</div></div>
         </div>
       </div>`;
     }
@@ -1327,7 +1461,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <div class="terbilang"><b>Terbilang:</b> ${esc(terbilangRupiah(grand))}</div>
       ${skipped ? `<div class="note">Catatan: ${skipped} item yang dipilih belum dibayar sehingga tidak dimuat pada kwitansi ini.</div>` : ''}
       <div class="sign">
-        <div>${esc(c.settings.sekolah_nama || '')}, ${tglID(paid[0].tanggal || todayISO())}<br><b>${esc(pencatat)}</b><div class="sp"></div><div class="ln">${esc(printcfg.labels(dbm, 'kwitansi_iuran').pencatat || 'Pencatat')}</div></div>
+        <div>${esc(c.settings.print_tempat || 'Cikoneng')}, ${tglID(paid[0].tanggal || todayISO())}<br><b>${esc(pencatat)}</b><div class="sp"></div><div class="ln">${esc(printcfg.labels(dbm, 'kwitansi_iuran').pencatat || 'Pencatat')}</div></div>
       </div>`;
     dbm.logAudit(req.user, 'CETAK KWITANSI', 'iuran', `Cetak kwitansi selektif ${s.nama}: ${paid.length} item, ${rupiah(grand)}`);
     const selOrient = printcfg.orient(req, dbm, 'kwitansi_iuran');
@@ -1580,11 +1714,42 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const taId = c.taId;
     const queue = queueRows(taId);
     const pendingRows = dbm.iuranBayarRows({ taId, status: 'pending' });
+    // penerimaan yang sengaja disimpan sebagai DATA SAJA (non-BKU) — bisa dibuka & dikembalikan
+    const nonBkuRows = dbm.iuranBayarRows({ taId, status: 'manual' }).slice(0, 30);
     const bukuss = db.prepare("SELECT * FROM bku WHERE status='aktif' AND tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY jenis DESC, urutan").all(taId || 0);
     const editable = c.can('iuran', 'edit');
     const coaDef = coaIuran();
+    const coaDefId = coaDef ? coaDef.id : '';
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     const late = modalCollector();
+    /** modal edit satu penerimaan: ubah nominal / tanggal / atau ubah status menjadi Non-BKU */
+    function editModal(b) {
+      return {
+        title: 'Edit Penerimaan Iuran', body: `<form method="post" action="${c.base}/iuran/antrean/edit" id="fe${b.id}">
+          <input type="hidden" name="id" value="${b.id}">
+          <input type="hidden" name="back" value="/iuran/antrean">
+          <div class="row2">
+            <div class="field"><label>Jumlah Iuran (Rp)</label>${ui.moneyInput('jumlah', b.jumlah)}</div>
+            <div class="field"><label>Potongan (Rp)</label>${ui.moneyInput('potongan', b.potongan)}</div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Tanggal Bayar</label><input type="date" name="tanggal" value="${esc(b.tanggal)}"></div>
+            <div class="field"><label>Status Pembukuan</label>
+              <select name="status_tujuan">
+                <option value="pending" ${b.status !== 'manual' ? 'selected' : ''}>Antrean Posting BKU</option>
+                <option value="manual" ${b.status === 'manual' ? 'selected' : ''}>Non-BKU (data saja, tidak masuk BKU)</option>
+              </select>
+              <div class="hint">Pilih <b>Non-BKU</b> bila penerimaan ini tidak boleh menambah kas BKU.</div></div>
+          </div>
+          <div class="field"><label>BKU Sasaran (dipakai bila status Antrean Posting)</label>
+            <select name="bku_id"><option value="">— Pilih BKU —</option>
+              ${bukuss.map(x => `<option value="${x.id}" ${String(x.id) === String(b.bku_id) ? 'selected' : ''}>${esc(x.nama)}</option>`).join('')}
+            </select></div>
+          <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(b.keterangan || '')}"></div>
+        </form>`,
+        footer: `<button class="btn" data-close="mE${b.id}">Batal</button><button class="btn btn-primary" form="fe${b.id}">Simpan Perubahan</button>`
+      };
+    }
 
     const content = `<div class="between mb-2">
       <div class="toolbar">
@@ -1594,7 +1759,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </div>
     ${queue.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Terdapat ${queue.length} penerimaan grup iuran belum di-posting ke BKU.</b>
       ${queue.filter(q => q.tanggal <= yesterday).length ? `Termasuk ${queue.filter(q => q.tanggal <= yesterday).length} kelompok dari hari sebelumnya.` : ''}
-      Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.</div></div>` : ''}
+      Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.
+      Bila penerimaan tersebut memang <b>tidak boleh masuk BKU</b>, pilih <b>Hanya Simpan Data (Non-BKU)</b>.</div></div>` : ''}
     <div class="card mb-3">
       <div class="card-head"><div><h3>Antrean Posting BKU</h3><div class="sub">Akumulasi penerimaan harian per grup iuran</div></div></div>
       ${queue.length ? `<div class="table-wrap sticky-head"><table><thead><tr>
@@ -1605,18 +1771,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td class="t-strong">${esc(q.grup_nama)}</td>
         <td>${esc(q.bku_nama)}</td>
         <td class="num">${q.n}</td><td class="num t-strong">${rupiah(q.total)}</td>
-        <td class="right nowrap">
-          <button class="btn btn-sm" data-open="mQ${i}">${ui.icon('edit')}Tinjau / Edit</button>
-          ${editable ? `<form method="post" action="${c.base}/iuran/antrean/posting" class="flex" style="gap:6px;justify-content:flex-end" data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?">
-            <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}"><input type="hidden" name="bku_id" value="${q.bku_id || ''}">
-            <select name="coa_id" title="Kode rekening penerimaan" style="max-width:220px">${coaOptions(q.coa_id)}</select>
-            <button class="btn btn-sm btn-green">${ui.icon('save')}Posting ke BKU</button></form>` : ''}
+        <td class="right">
+          <div class="toolbar" style="justify-content:flex-end;gap:6px;flex-wrap:wrap">
+            <button class="btn btn-sm" data-open="mQ${i}">${ui.icon('edit')}Tinjau / Edit</button>
+            ${editable ? `<form method="post" action="${c.base}/iuran/antrean/posting" data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?">
+              <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
+              <input type="hidden" name="bku_id" value="${q.bku_id || ''}">
+              <input type="hidden" name="coa_id" value="${q.coa_id || coaDefId}">
+              <button class="btn btn-sm btn-green">${ui.icon('check')}Posting ke BKU</button></form>
+            <form method="post" action="${c.base}/iuran/antrean/nonbku" data-confirm="Simpan ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} (${rupiah(q.total)}) sebagai DATA SAJA tanpa mencatat ke BKU?">
+              <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
+              <button class="btn btn-sm">${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button></form>` : ''}
+          </div>
         </td></tr>
         ${late('mQ' + i, {
         title: 'Tinjau Penerimaan — ' + q.grup_nama, wide: true,
         body: `<form method="post" action="${c.base}/iuran/antrean/posting" id="fq${i}">
           <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
-          <div class="alert info">${ui.icon('info')}<div>Tinjau penerimaan lalu tentukan <b>Kode Akun</b> yang dipakai saat posting. Default: <b>${esc((coaDef || {}).kode || '4.1.07')} · ${esc((coaDef || {}).nama || 'Penerimaan Kegiatan Siswa')}</b> — bisa diubah per posting.</div></div>
+          <div class="alert info">${ui.icon('info')}<div>Tinjau penerimaan lalu tentukan <b>Kode Akun</b> yang dipakai saat posting. Default: <b>${esc((coaDef || {}).kode || '4.1.07')} · ${esc((coaDef || {}).nama || 'Penerimaan Kegiatan Siswa')}</b> — bisa diubah per posting.
+            Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> bila penerimaan ini tidak boleh menambah kas BKU.</div></div>
           <div class="row2">
             <div class="field"><label>BKU Sasaran</label><select name="bku_id" required>${bukuss.map(b => `<option value="${b.id}" ${String(b.id) === String(q.bku_id) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}</select></div>
             <div class="field"><label>Kode Akun / Rekening Penerimaan</label><select name="coa_id" required>${coaOptions(q.coa_id)}</select>
@@ -1627,32 +1800,33 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             <td class="num">${rupiah(r.jumlah)}</td><td class="num">${rupiah(r.potongan)}</td><td class="num t-strong">${rupiah(r.dibayar)}</td></tr>`).join('')}
           </tbody><tfoot><tr><td colspan="4">TOTAL</td><td class="num">${rupiah(q.total)}</td></tr></tfoot></table></div>
         </form>`,
-        footer: `<button class="btn" data-close="mQ${i}">Tutup</button>${editable ? `<button class="btn btn-primary" form="fq${i}">${ui.icon('save')}Posting ke BKU</button>` : ''}`
+        footer: `<button class="btn" data-close="mQ${i}">Tutup</button>${editable ? `<button class="btn" form="fq${i}" formaction="${c.base}/iuran/antrean/nonbku" formmethod="post">${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button>
+          <button class="btn btn-green" form="fq${i}">${ui.icon('check')}Posting ke BKU</button>` : ''}`
       })}`).join('')}
-      </tbody></table></div>` : ui.emptyState('Antrean kosong', 'Semua penerimaan iuran sudah diposting ke BKU.')}
-      ${late.html()}
+      </tbody></table></div>` : ui.emptyState('Antrean kosong', 'Semua penerimaan iuran sudah diposting ke BKU atau disimpan sebagai data non-BKU.')}
     </div>
     <div class="card">
-      <div class="card-head"><div><h3>Rincian Penerimaan Belum Terposting</h3><div class="sub">${pendingRows.length} pembayaran · dapat diedit bila ada kekeliruan</div></div></div>
+      <div class="card-head"><div><h3>Rincian Penerimaan Belum Terposting</h3><div class="sub">${pendingRows.length} pembayaran · dapat diedit atau diubah menjadi Non-BKU</div></div></div>
       ${pendingRows.length ? `<div class="table-scroll short"><table><thead><tr><th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Jumlah</th><th class="num">Potongan</th><th class="num">Dibayar</th><th></th></tr></thead><tbody>
         ${pendingRows.map(b => `<tr><td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
           <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
           <td class="num">${rupiah(b.jumlah)}</td><td class="num">${rupiah(b.potongan)}</td><td class="num t-strong">${rupiah(b.dibayar)}</td>
-          <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}">${ui.icon('edit')}</button>` : ''}</td></tr>
-          ${late('mE' + b.id, {
-        title: 'Edit Penerimaan Iuran', body: `<form method="post" action="${c.base}/iuran/antrean/edit" id="fe${b.id}">
-          <input type="hidden" name="id" value="${b.id}">
-          <div class="row2">
-            <div class="field"><label>Jumlah Iuran (Rp)</label>${ui.moneyInput('jumlah', b.jumlah)}</div>
-            <div class="field"><label>Potongan (Rp)</label>${ui.moneyInput('potongan', b.potongan)}</div>
-          </div>
-          <div class="field"><label>Tanggal Bayar</label><input type="date" name="tanggal" value="${esc(b.tanggal)}"></div>
-          <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(b.keterangan || '')}"></div>
-        </form>`,
-        footer: `<button class="btn" data-close="mE${b.id}">Batal</button><button class="btn btn-primary" form="fe${b.id}">Simpan</button>`
-      })}`).join('')}
+          <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}" title="Edit / jadikan Non-BKU">${ui.icon('edit')}</button>` : ''}</td></tr>
+          ${late('mE' + b.id, editModal(b))}`).join('')}
       </tbody></table></div>` : ui.emptyState('Tidak ada penerimaan tertunda')}
-    </div>`;
+    </div>
+    <div class="card mt-3">
+      <div class="card-head"><div><h3>Penerimaan Non-BKU (Data Saja)</h3>
+        <div class="sub">${nonBkuRows.length} penerimaan terakhir · tidak masuk BKU, hanya mengurangi tagihan siswa</div></div></div>
+      ${nonBkuRows.length ? `<div class="table-scroll short"><table><thead><tr><th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Dibayar</th><th>Status</th><th></th></tr></thead><tbody>
+        ${nonBkuRows.map(b => `<tr><td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
+          <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
+          <td class="num t-strong">${rupiah(b.dibayar)}</td><td>${bayarStatusBadge(b.status, b.sumber)}</td>
+          <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}" title="Edit / kembalikan ke antrean BKU">${ui.icon('edit')}</button>` : ''}</td></tr>
+          ${late('mE' + b.id, editModal(b))}`).join('')}
+      </tbody></table></div>` : `<div class="help">Belum ada penerimaan yang disimpan sebagai Non-BKU. Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> pada antrean di atas, atau centang Non-BKU saat mencatat pembayaran.</div>`}
+    </div>
+    ${late.html()}`;
     page(req, res, { title: 'Antrean Posting BKU', sub: 'Penerimaan iuran yang belum masuk BKU', active: 'iuran_queue', content });
   });
 
@@ -1660,15 +1834,45 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     guard(req, res, 'iuran', 'edit');
     const b = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(req.body.id);
     const back = req.BASE + '/iuran/antrean';
-    if (!b || b.status !== 'pending') return res.redirect(back + '?err=' + encodeURIComponent('Penerimaan tidak ditemukan atau sudah terposting.'));
+    if (!b || !['pending', 'manual', 'nonbku'].includes(b.status)) return res.redirect(back + '?err=' + encodeURIComponent('Penerimaan tidak ditemukan atau sudah terposting.'));
     const jumlah = lib.parseMoney(req.body.jumlah);
     const potongan = Math.max(0, lib.parseMoney(req.body.potongan));
     if (jumlah <= 0) return res.redirect(back + '?err=' + encodeURIComponent('Jumlah iuran harus lebih dari 0.'));
     const p = Math.min(potongan, jumlah);
-    db.prepare('UPDATE iuran_bayar SET jumlah=?,potongan=?,dibayar=?,tanggal=?,keterangan=? WHERE id=?')
-      .run(jumlah, p, jumlah - p, req.body.tanggal || b.tanggal, req.body.keterangan || '', b.id);
-    dbm.logAudit(req.user, 'EDIT', 'iuran', `Koreksi penerimaan ${b.kwitansi_no}: ${rupiah(b.dibayar)} → ${rupiah(jumlah - p)}`);
-    res.redirect(back + '?ok=' + encodeURIComponent('Penerimaan iuran diperbarui.'));
+    // status tujuan: 'manual' = Non-BKU (data saja) · selain itu kembali ke antrean posting BKU
+    const nonbku = String(req.body.status_tujuan || '') === 'manual';
+    let bkuId = b.bku_id || null;
+    if (!nonbku) {
+      const pilih = Number(req.body.bku_id || 0);
+      const bkuRow = pilih ? db.prepare('SELECT * FROM bku WHERE id=?').get(pilih) : null;
+      if (!bkuRow) return res.redirect(back + '?err=' + encodeURIComponent('Pilih BKU sasaran terlebih dahulu bila status Antrean Posting BKU.'));
+      if (bkuRow.status !== 'aktif') return res.redirect(back + '?err=' + encodeURIComponent('BKU sasaran sudah ditutup.'));
+      bkuId = bkuRow.id;
+    } else bkuId = null;
+    db.prepare('UPDATE iuran_bayar SET jumlah=?,potongan=?,dibayar=?,tanggal=?,keterangan=?,status=?,bku_id=? WHERE id=?')
+      .run(jumlah, p, jumlah - p, req.body.tanggal || b.tanggal, req.body.keterangan || '',
+        nonbku ? 'manual' : 'pending', bkuId, b.id);
+    dbm.logAudit(req.user, 'EDIT', 'iuran', `Koreksi penerimaan ${b.kwitansi_no}: ${rupiah(b.dibayar)} → ${rupiah(jumlah - p)}` +
+      (nonbku ? ' · diubah menjadi NON-BKU (data saja)' : ' · masuk antrean posting BKU'));
+    res.redirect(back + '?ok=' + encodeURIComponent(`Penerimaan iuran diperbarui${nonbku ? ' sebagai Non-BKU (data saja, tidak masuk BKU)' : ' dan masuk antrean posting BKU'}.`));
+  });
+
+  /** simpan penerimaan terpilih sebagai DATA SAJA (Non-BKU) — tanpa transaksi BKU */
+  post('/iuran/antrean/nonbku', (req, res) => {
+    guard(req, res, 'iuran', 'edit');
+    const back = req.BASE + '/iuran/antrean';
+    const ids = [].concat(req.body.ids || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return res.redirect(back + '?err=' + encodeURIComponent('Tidak ada penerimaan yang dipilih.'));
+    const rows = db.prepare(`SELECT * FROM iuran_bayar WHERE id IN (${ids.map(() => '?').join(',')}) AND status='pending'`).all(...ids);
+    if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Semua penerimaan sudah diproses sebelumnya.'));
+    const total = rows.reduce((s, r) => s + Number(r.dibayar || 0), 0);
+    db.transaction(() => {
+      const upd = db.prepare("UPDATE iuran_bayar SET status='manual', transaksi_id=NULL, bku_id=NULL, posted_at=NULL WHERE id=?");
+      for (const r of rows) upd.run(r.id);
+    })();
+    dbm.logAudit(req.user, 'NON-BKU IURAN', 'iuran',
+      `${rows.length} penerimaan iuran (${rupiah(total)}) disimpan sebagai DATA SAJA — tidak dicatat ke BKU`);
+    res.redirect(back + '?ok=' + encodeURIComponent(`${rows.length} penerimaan (${rupiah(total)}) disimpan sebagai data saja (Non-BKU) — BKU tidak bertambah.`));
   });
 
   post('/iuran/antrean/posting', (req, res) => {

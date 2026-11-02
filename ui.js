@@ -100,8 +100,15 @@ const NAV = [
     id: 'iuran', group: 'Iuran Siswa', icon: 'coins', items: [
       { href: '/iuran', key: 'iuran', label: 'Grup Iuran', icon: 'coins' },
       { href: '/iuran/data', key: 'iuran', activeKey: 'iuran_data', label: 'Data Iuran', icon: 'card' },
+      { href: '/iuran/bulanan', key: 'iuran', activeKey: 'iuran_bulanan', label: 'Rincian Iuran Bulanan', icon: 'calendar' },
       { href: '/iuran/transaksi', key: 'iuran', activeKey: 'iuran_trx', label: 'Transaksi Iuran', icon: 'receipt' },
       { href: '/iuran/antrean', key: 'iuran', activeKey: 'iuran_queue', label: 'Antrean Posting Iuran', icon: 'clock' }
+    ]
+  },
+  {
+    id: 'komunikasi', group: 'Komunikasi Internal', icon: 'inbox', items: [
+      { href: '/catatan-pegawai', key: 'catatan', activeKey: 'catatan', label: 'Catatan Pegawai', icon: 'inbox' },
+      { href: '/pesan-orangtua', key: 'dashboard', activeKey: 'pesan_orangtua', label: 'Pesan Orang Tua', icon: 'inbox' }
     ]
   },
   {
@@ -132,7 +139,6 @@ const NAV = [
       { href: '/tarif-honor', key: 'tarif_honor', label: 'Nominal Tunjangan & Honor', icon: 'wallet' },
       { href: '/pengguna', key: 'pengguna', label: 'Pengguna & Hak Akses', icon: 'users' },
       { href: '/tampilan-menu', key: 'pengguna', activeKey: 'tampilan_menu', label: 'Pengaturan Tampilan Menu', icon: 'menu' },
-      { href: '/pesan-orangtua', key: 'dashboard', activeKey: 'pesan_orangtua', label: 'Pesan Orang Tua', icon: 'inbox' },
       { href: '/desain-cetak', key: 'sekolah', activeKey: 'desain_cetak', label: 'Desain Templat Cetak', icon: 'printer' },
       { href: '/trash', key: 'trash', label: 'Kotak Sampah', icon: 'inbox' },
       { href: '/audit', key: 'audit', label: 'Audit Log', icon: 'shield' },
@@ -459,12 +465,14 @@ function moneyInput(name, value, extra = '') {
 }
 function signBlock(settings, opts = {}) {
   const tgl = opts.tanggal || '';
-  const tempat = opts.tempat || '';
+  // tempat default mengikuti setting print_tempat ("Cikoneng") — dapat diubah di Desain Templat Cetak
+  const place = String(opts.tempat || (settings && settings.print_tempat) || 'Cikoneng').trim();
+  const tanggalBaris = [place, tgl].filter(Boolean).join(', ');
   return `<div class="sign-grid" style="grid-template-columns:1fr 1fr">
     <div class="sig"><div>Mengetahui,</div><div style="font-weight:600">Kepala ${esc(settings.sekolah_nama || 'Sekolah')}</div><div class="space"></div>
       <div class="nm">${esc(settings.sekolah_kepala || '...............................')}</div>
       <div>NIP. ${esc(settings.sekolah_nip_kepala || '.......................')}</div></div>
-    <div class="sig"><div>${esc(tempat)} ${esc(tgl)}</div><div style="font-weight:600">Bendahara</div><div class="space"></div>
+    <div class="sig"><div>${esc(tanggalBaris)}</div><div style="font-weight:600">Bendahara</div><div class="space"></div>
       <div class="nm">${esc(settings.sekolah_bendahara || '...............................')}</div>
       <div>NIP. ${esc(settings.sekolah_nip_bendahara || '.......................')}</div></div>
   </div>`;

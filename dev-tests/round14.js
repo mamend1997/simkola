@@ -140,7 +140,9 @@ const today = new Date().toISOString().slice(0, 10);
     potongan: '0', metode: 'tunai', bku_id: bku.id, back: `/iuran/data/${sA.id}?ta=${taA.id}`
   });
   ok('pembayaran di periode lama tidak diblokir', bayarBku.status === 303 && /kwitansi/.test(bayarBku.loc), bayarBku.loc + ' ' + decodeURIComponent(bayarBku.loc).slice(0, 160));
-  ok('catatan periode disertakan sebagai info', /Catatan/.test(decodeURIComponent(bayarBku.loc)));
+  // ronde 17: bulan lalu yang belum ditutup TIDAK lagi memblokir/memberi peringatan kunci
+  ok('tanpa peringatan kunci periode (validasi tutup bulan dilonggarkan)', !/sudah berganti|Wajib lakukan proses Tutup BKU/.test(decodeURIComponent(bayarBku.loc)),
+    decodeURIComponent(bayarBku.loc).slice(0, 160));
 
   /* ================= 4. PENETAPAN GRUP KE KELAS ================= */
   // TA A: siswa sudah pindah cache ke TA B, tapi penempatan TA A tetap ada
