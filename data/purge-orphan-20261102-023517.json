@@ -1,0 +1,584 @@
+{
+  "created_at": "2026-11-02 02:35:17",
+  "keterangan": "Cadangan baris data hantu (orphan/phantom) sebelum dihapus permanen",
+  "tables": {
+    "aset": [
+      {
+        "id": 6,
+        "nama": "Kas Bank",
+        "jenis": "bank",
+        "saldo": 31088016,
+        "keterangan": "Saldo awal dari tahun ajaran 2026/2027",
+        "tahun_ajaran_id": 3,
+        "tampil": 1
+      },
+      {
+        "id": 7,
+        "nama": "Kas Tunai",
+        "jenis": "tunai",
+        "saldo": 28945066,
+        "keterangan": "Saldo awal dari tahun ajaran 2026/2027",
+        "tahun_ajaran_id": 3,
+        "tampil": 1
+      },
+      {
+        "id": 8,
+        "nama": "Pinjaman Revitalisasi",
+        "jenis": "pinjaman",
+        "saldo": 12755788,
+        "keterangan": "Saldo awal dari tahun ajaran 2026/2027",
+        "tahun_ajaran_id": 3,
+        "tampil": 1
+      },
+      {
+        "id": 9,
+        "nama": "Kas Bank",
+        "jenis": "bank",
+        "saldo": 31088016,
+        "keterangan": "Saldo awal dari tahun ajaran 2027/2028",
+        "tahun_ajaran_id": 4,
+        "tampil": 1
+      },
+      {
+        "id": 10,
+        "nama": "Kas Tunai",
+        "jenis": "tunai",
+        "saldo": 28945066,
+        "keterangan": "Saldo awal dari tahun ajaran 2027/2028",
+        "tahun_ajaran_id": 4,
+        "tampil": 1
+      },
+      {
+        "id": 11,
+        "nama": "Pinjaman Revitalisasi",
+        "jenis": "pinjaman",
+        "saldo": 12755788,
+        "keterangan": "Saldo awal dari tahun ajaran 2027/2028",
+        "tahun_ajaran_id": 4,
+        "tampil": 1
+      },
+      {
+        "id": 13,
+        "nama": "Kas Bank",
+        "jenis": "bank",
+        "saldo": 34481735,
+        "keterangan": "Saldo awal dari tahun ajaran 2026/2027",
+        "tahun_ajaran_id": 5,
+        "tampil": 1
+      },
+      {
+        "id": 14,
+        "nama": "Kas Tunai",
+        "jenis": "tunai",
+        "saldo": 48608196,
+        "keterangan": "Saldo awal dari tahun ajaran 2026/2027",
+        "tahun_ajaran_id": 5,
+        "tampil": 1
+      },
+      {
+        "id": 15,
+        "nama": "Pinjaman Revitalisasi",
+        "jenis": "pinjaman",
+        "saldo": 13255788,
+        "keterangan": "Saldo awal dari tahun ajaran 2026/2027",
+        "tahun_ajaran_id": 5,
+        "tampil": 1
+      }
+    ],
+    "beasiswa": [
+      {
+        "id": 3,
+        "nama": "fsdfafas",
+        "tahun_ajaran_id": 5,
+        "nominal": 2131312,
+        "keterangan": null,
+        "aktif": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "deskripsi": "",
+        "grup_id": null,
+        "bulan_mask": "",
+        "persen": 0
+      },
+      {
+        "id": 8,
+        "nama": "Beasiswa Prestasi Voli",
+        "tahun_ajaran_id": 6,
+        "nominal": 900000,
+        "keterangan": null,
+        "aktif": 1,
+        "created_at": "2026-11-01 12:33:38",
+        "deskripsi": "",
+        "grup_id": null,
+        "bulan_mask": "",
+        "persen": 0
+      }
+    ],
+    "piutang_lain": [
+      {
+        "id": 17,
+        "nama": "JAYA NURSANJAYA, S.Pd., M.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 500000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 18,
+        "nama": "JAYA NURSANJAYA, S.Pd., M.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1200000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 19,
+        "nama": "NADILLA CHITRA F, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 500000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 20,
+        "nama": "NADILLA CHITRA F, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1200000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 21,
+        "nama": "WILDAN RAHMAN H, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 250000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 22,
+        "nama": "WILDAN RAHMAN H, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1200000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 23,
+        "nama": "ASEP NUGRAHA, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 600000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 24,
+        "nama": "ASEP NUGRAHA, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1200000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 25,
+        "nama": "DITHA AULIA S, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1000000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 26,
+        "nama": "HILDA SEPTIANI, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 600000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 27,
+        "nama": "HILDA SEPTIANI, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1200000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 28,
+        "nama": "RIZKA SITI FAZRIAH, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 600000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      },
+      {
+        "id": 29,
+        "nama": "RIZKA SITI FAZRIAH, S.Pd.",
+        "kategori": "Sertifikasi",
+        "tanggal": "2027-07-01",
+        "nominal": 1200000,
+        "keterangan": "Saldo awal TA 2027/2028 — piutang sertifikasi",
+        "status": "belum",
+        "tanggal_bayar": null,
+        "bku_id": null,
+        "created_at": "2026-10-31 13:45:46",
+        "tahun_ajaran_id": 5
+      }
+    ],
+    "iuran_grup": [
+      {
+        "id": 6,
+        "nama": "PSAS",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 5,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "coa_id": null
+      },
+      {
+        "id": 7,
+        "nama": "SPMB",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 5,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "coa_id": null
+      },
+      {
+        "id": 8,
+        "nama": "SPP",
+        "jenis": "bulanan",
+        "tahun_ajaran_id": 5,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "coa_id": null
+      },
+      {
+        "id": 9,
+        "nama": "UKK",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 5,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "coa_id": null
+      },
+      {
+        "id": 10,
+        "nama": "US",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 5,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-10-31 13:45:46",
+        "coa_id": null
+      },
+      {
+        "id": 11,
+        "nama": "PSAS",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 6,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-11-01 12:33:38",
+        "coa_id": null
+      },
+      {
+        "id": 12,
+        "nama": "SPMB",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 6,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-11-01 12:33:38",
+        "coa_id": null
+      },
+      {
+        "id": 13,
+        "nama": "SPP",
+        "jenis": "bulanan",
+        "tahun_ajaran_id": 6,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-11-01 12:33:38",
+        "coa_id": null
+      },
+      {
+        "id": 14,
+        "nama": "UKK",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 6,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-11-01 12:33:38",
+        "coa_id": null
+      },
+      {
+        "id": 15,
+        "nama": "US",
+        "jenis": "nonbulanan",
+        "tahun_ajaran_id": 6,
+        "keterangan": "",
+        "aktif": 1,
+        "created_at": "2026-11-01 12:33:38",
+        "coa_id": null
+      }
+    ],
+    "iuran_nominal": [
+      {
+        "id": 17,
+        "grup_id": 6,
+        "bulan": null,
+        "nominal": 75000
+      },
+      {
+        "id": 18,
+        "grup_id": 7,
+        "bulan": null,
+        "nominal": 600000
+      },
+      {
+        "id": 19,
+        "grup_id": 8,
+        "bulan": 1,
+        "nominal": 150000
+      },
+      {
+        "id": 20,
+        "grup_id": 8,
+        "bulan": 2,
+        "nominal": 150000
+      },
+      {
+        "id": 21,
+        "grup_id": 8,
+        "bulan": 3,
+        "nominal": 150000
+      },
+      {
+        "id": 22,
+        "grup_id": 8,
+        "bulan": 4,
+        "nominal": 150000
+      },
+      {
+        "id": 23,
+        "grup_id": 8,
+        "bulan": 5,
+        "nominal": 150000
+      },
+      {
+        "id": 24,
+        "grup_id": 8,
+        "bulan": 6,
+        "nominal": 150000
+      },
+      {
+        "id": 25,
+        "grup_id": 8,
+        "bulan": 7,
+        "nominal": 150000
+      },
+      {
+        "id": 26,
+        "grup_id": 8,
+        "bulan": 8,
+        "nominal": 150000
+      },
+      {
+        "id": 27,
+        "grup_id": 8,
+        "bulan": 9,
+        "nominal": 150000
+      },
+      {
+        "id": 28,
+        "grup_id": 8,
+        "bulan": 10,
+        "nominal": 150000
+      },
+      {
+        "id": 29,
+        "grup_id": 8,
+        "bulan": 11,
+        "nominal": 150000
+      },
+      {
+        "id": 30,
+        "grup_id": 8,
+        "bulan": 12,
+        "nominal": 150000
+      },
+      {
+        "id": 31,
+        "grup_id": 9,
+        "bulan": null,
+        "nominal": 450000
+      },
+      {
+        "id": 32,
+        "grup_id": 10,
+        "bulan": null,
+        "nominal": 300000
+      },
+      {
+        "id": 33,
+        "grup_id": 11,
+        "bulan": null,
+        "nominal": 75000
+      },
+      {
+        "id": 34,
+        "grup_id": 12,
+        "bulan": null,
+        "nominal": 600000
+      },
+      {
+        "id": 35,
+        "grup_id": 13,
+        "bulan": 1,
+        "nominal": 150000
+      },
+      {
+        "id": 36,
+        "grup_id": 13,
+        "bulan": 2,
+        "nominal": 150000
+      },
+      {
+        "id": 37,
+        "grup_id": 13,
+        "bulan": 3,
+        "nominal": 150000
+      },
+      {
+        "id": 38,
+        "grup_id": 13,
+        "bulan": 4,
+        "nominal": 150000
+      },
+      {
+        "id": 39,
+        "grup_id": 13,
+        "bulan": 5,
+        "nominal": 150000
+      },
+      {
+        "id": 40,
+        "grup_id": 13,
+        "bulan": 6,
+        "nominal": 150000
+      },
+      {
+        "id": 41,
+        "grup_id": 13,
+        "bulan": 7,
+        "nominal": 150000
+      },
+      {
+        "id": 42,
+        "grup_id": 13,
+        "bulan": 8,
+        "nominal": 150000
+      },
+      {
+        "id": 43,
+        "grup_id": 13,
+        "bulan": 9,
+        "nominal": 150000
+      },
+      {
+        "id": 44,
+        "grup_id": 13,
+        "bulan": 10,
+        "nominal": 150000
+      },
+      {
+        "id": 45,
+        "grup_id": 13,
+        "bulan": 11,
+        "nominal": 150000
+      },
+      {
+        "id": 46,
+        "grup_id": 13,
+        "bulan": 12,
+        "nominal": 150000
+      },
+      {
+        "id": 47,
+        "grup_id": 14,
+        "bulan": null,
+        "nominal": 450000
+      },
+      {
+        "id": 48,
+        "grup_id": 15,
+        "bulan": null,
+        "nominal": 300000
+      }
+    ]
+  }
+}
