@@ -57,6 +57,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(base + '/login');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
+  // login multi-tenant: kode sekolah wajib diisi pada form
+  await page.fill('input[name=kode]', 'SK01').catch(() => {});
   await page.fill('input[name=password]', 'admin123');
   await Promise.all([page.waitForNavigation(), page.click('button[type=submit]')]);
 
@@ -113,6 +115,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   p2.on('pageerror', e => errors.push(String(e.message)));
   await p2.goto(base + '/login');
   await p2.fill('input[name=email]', 'admin@sekolah.sch.id');
+  // login multi-tenant: kode sekolah wajib diisi pada form
+  await p2.fill('input[name=kode]', 'SK01').catch(() => {});
   await p2.fill('input[name=password]', 'admin123');
   await Promise.all([p2.waitForNavigation(), p2.click('button[type=submit]')]);
   for (const u of ['/iuran/bulanan', '/iuran/antrean', '/catatan-pegawai', '/backup']) {

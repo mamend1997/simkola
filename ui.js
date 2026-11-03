@@ -153,7 +153,8 @@ const NAV = [
       { href: '/audit-orphan', key: 'sekolah', activeKey: 'audit_orphan', label: 'Audit Data Tersembunyi', icon: 'search' },
       { href: '/reset-tahun', key: 'sekolah', activeKey: 'reset_tahun', label: 'Reset Data Tahun Ajaran', icon: 'refresh' },
       { href: '/backup', key: 'backup', label: 'Backup & Restore', icon: 'database' },
-      { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Backup', icon: 'cloud' }
+      { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Backup', icon: 'cloud' },
+      { href: '/info-layanan', key: 'layanan', label: 'Info Layanan & Perpanjangan', icon: 'shield' }
     ]
   },
   {
@@ -253,7 +254,7 @@ function navOrdered(cfg) {
   return groups;
 }
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', demoMode = false }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', demoMode = false, features = null, tenantInfo = null, impersonate = null }) {
   const initials = (user?.nama || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
   const hidden = navVisibility(navHidden);
   const linkOf = (i) => {
@@ -267,7 +268,8 @@ function layout({ title, sub = '', user, active, base = '', content, query, role
   const groups = navOrdered(navCfg);
   let nav = '';
   for (const g of groups) {
-    const items = g.items.filter(i => !hidden.has(i.href) && (!can || (i.action ? can(i.key, i.action) : can(i.key))));
+    const featureOn = (i) => !features || i.key === 'layanan' || features.includes(i.key);
+    const items = g.items.filter(i => featureOn(i) && !hidden.has(i.href) && (!can || (i.action ? can(i.key, i.action) : can(i.key))));
     if (!items.length) continue;
     const isOpen = items.some(i => active === (i.activeKey || i.key));
     if (items.length === 1) {
@@ -305,6 +307,7 @@ ${themeCss(tema)}
       <div><div class="brand-name">${esc(appName)}</div><div class="brand-sub">Sistem Keuangan</div></div>
     </div>
     ${demoMode ? `<div class="demo-chip" title="Akun demo memakai database dummy terpisah">${icon('info', 'i-sm')} Mode Demo · data dummy</div>` : ''}
+    ${impersonate ? `<div class="demo-chip" style="background:#EEF2FF;color:#4338CA;border-color:#C7D2FE">${icon('shield', 'i-sm')} Mode bantuan Super Admin</div>` : ''}
     <nav class="nav">${nav}</nav>
     <div class="side-foot">v1.0 · ${new Date().getFullYear()} © ${esc(appName.slice(0, 18))}</div>
   </aside>
@@ -332,6 +335,12 @@ ${themeCss(tema)}
       </div>
     </header>
     <main class="content">
+      ${impersonate ? `<div class="alert info" style="display:flex;align-items:center;gap:12px">
+        ${icon('shield')}
+        <div style="flex:1"><b>Mode bantuan teknis.</b> Anda masuk sebagai ${esc((tenantInfo && tenantInfo.nama) || 'sekolah ini')}
+          atas nama ${esc(impersonate.nama)} (Super Admin Pusat). Tindakan tercatat pada audit log sekolah.</div>
+        <a class="btn btn-sm" href="${base}/super-admin/kembali">Kembali ke Super Admin</a>
+      </div>` : ''}
       ${flashBlock(query || new URLSearchParams())}
       ${content}
     </main>

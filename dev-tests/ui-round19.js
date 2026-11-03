@@ -77,6 +77,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   /* ---------- 1. kwitansi pengeluaran ---------- */
   await page.goto(base + '/login');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
+  // login multi-tenant: kode sekolah wajib diisi pada form
+  await page.fill('input[name=kode]', 'SK01').catch(() => {});
   await page.fill('input[name=password]', 'admin123');
   await Promise.all([page.waitForNavigation(), page.click('button[type=submit]')]);
   await page.goto(`${base}/transaksi/${trx.id}/kwitansi`);

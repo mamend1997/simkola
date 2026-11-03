@@ -1,6 +1,6 @@
 'use strict';
 
-module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
+module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
   const { db } = dbm;
   const { rupiah, esc, tglID, rpShort } = lib;
 
@@ -243,6 +243,28 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         <td class="num" data-foot-total>${rupiah(iur.grup.reduce((a, g) => a + g.total.tunai + g.total.transfer, 0))}</td></tr></tfoot></table></div>
     </div>`;
 
+    /* kartu Info Layanan (multi-tenant): status langganan sekolah ini */
+    const ten = req.tenant || null;
+    const tenStatus = ten && saas ? saas.statusOf(ten) : null;
+    const layananCard = (ten && tenStatus) ? `<div class="card mb-3" id="infoLayanan">
+      <div class="card-head">
+        <div><h3>${ui.icon('shield', 'i-sm')} Info Layanan Sekolah</h3><div class="sub">${esc(ten.nama)} · Kode <b class="mono">${esc(ten.school_code)}</b></div></div>
+        ${ui.badge(tenStatus.label, tenStatus.color)}
+      </div>
+      <div class="split-2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px">
+        <div><div class="t-sub">Paket</div><div style="font-weight:700">${esc((saas.PAKET[ten.paket] || ten.paket))}</div></div>
+        <div><div class="t-sub">Masa Aktif</div><div style="font-weight:700">${Number(ten.is_lifetime_free) ? 'Lifetime' : esc(tglID(ten.expires_at || '-'))}</div></div>
+        <div><div class="t-sub">Nominal Tagihan</div><div style="font-weight:700">${rupiah(saas.priceOf(30))} / bulan</div></div>
+        <div><div class="t-sub">Status</div><div>${tenStatus.key === 'lifetime'
+        ? '<b>Aktif (Lifetime)</b> — bebas tagihan'
+        : (tenStatus.daysLeft === null ? esc(tenStatus.label) : (tenStatus.daysLeft < 0 ? `Lewat ${Math.abs(tenStatus.daysLeft)} hari` : `Sisa ${tenStatus.daysLeft} hari`))}</div></div>
+      </div>
+      <div class="flex mt-2" style="gap:10px;flex-wrap:wrap">
+        <a class="btn btn-sm" href="${c.base}/info-layanan">Detail Layanan</a>
+        ${Number(ten.is_lifetime_free) ? '' : `<a class="btn btn-sm btn-primary" href="${c.base}/perpanjang">Perpanjang Masa Aktif</a>`}
+      </div>
+    </div>` : '';
+
     const content = `
     <div class="card hero mb-3" style="padding:26px 28px">
       <div style="position:relative;z-index:1" class="between">
@@ -263,6 +285,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         </div>
       </div>
     </div>
+
+    ${layananCard}
 
     ${queueAlerts.length ? `<div class="alert warn mb-3">${ui.icon('bell')}<div><b>Notifikasi Antrean Posting.</b><ul style="margin:6px 0 0 16px;padding:0">${queueAlerts.map(x => `<li>${x}</li>`).join('')}</ul></div></div>` : ''}
 
@@ -426,7 +450,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     `;
     page(req, res, { title: 'Dashboard', sub: `Ringkasan eksekutif keuangan · ${ta ? 'TA ' + ta.nama : 'belum ada tahun ajaran'}`, active: 'dashboard', content });
     if (approvalAlert && req.sessionRow) {
-      dbm.db.prepare('UPDATE sessions SET alert_pending=0 WHERE token=?').run(req.sessionRow.token);
+      dbm.controlDb.prepare('UPDATE sessions SET alert_pending=0 WHERE token=?').run(req.sessionRow.token);
     }
   });
 

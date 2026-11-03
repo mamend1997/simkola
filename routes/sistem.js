@@ -789,7 +789,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
       }
     })();
     // sesi lama dihapus agar konsisten dengan data pengguna hasil restore
-    db.prepare('DELETE FROM sessions').run();
+    dbm.controlDb.prepare('DELETE FROM sessions WHERE tenant_id=?').run(req.tenant ? req.tenant.id : 1);
     dbm.logAudit(null, 'RESTORE', 'backup', `Restore data dari berkas backup (${restored} baris)`);
     res.set('Set-Cookie', 'simkeu_sid=; Path=/; Max-Age=0');
     res.redirect(req.BASE + '/login?ok=' + encodeURIComponent('Restore berhasil. Silakan masuk kembali.'));

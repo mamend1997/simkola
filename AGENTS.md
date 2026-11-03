@@ -599,3 +599,111 @@ node dev-tests/ui-round21.js  # 23 cek Playwright: tema live preview, drag & dro
                               # state form beasiswa tidak reset saat filter kelas, embed video petunjuk, mobile 390px
 ```
 - Tes lama yang disesuaikan karena perubahan perilaku **disengaja**: `round9.js` (judul kartu catatan orang tua, atribut form beasiswa), `round15.js` (label pencarian beasiswa), `round17.js` (judul "Rekap Catatan Pegawai").
+
+---
+
+## Ronde 22 — ARSITEKTUR SAAS MULTI-TENANT & PORTAL SUPER ADMIN
+
+### Model isolasi (penting, jangan diubah tanpa alasan kuat)
+- **Satu database per sekolah**: `data/tenants/tenant-<id>.db`. Sekolah pertama tetap memakai
+  `data/keuangan.sqlite` (data produksi tidak disalin, hanya dimigrasi).
+- **Control plane** `data/saas.db` (env `SAAS_DB_PATH`) berisi `tenants`, `saas_users`, `sessions`,
+  `saas_payments`, `saas_settings`, `saas_audit`, `saas_backup_log` — TIDAK berisi data keuangan.
+- Default `SAAS_DB_PATH` = `path.dirname(DB_PATH)/saas.db`; default tenant file = `path.dirname(DB_PATH)/tenants/*.db`.
+  Karena itu **tes dengan `DB_PATH` sementara otomatis terisolasi** (jangan kembalikan ke `DATA_DIR`).
+- **Ekstensi `.db`, bukan `.sqlite`**: berkas `*.sqlite` di folder app yang sudah publish diproteksi
+  read-only oleh platform (muncul sebagai mount `ro` di `/proc/mounts`) → pembuatan tenant gagal
+  (`SQLITE_READONLY`). Jangan pernah menaruh database baru dengan ekstensi `.sqlite`.
+- `dbm.mainDb` sekarang **proxy** (sama seperti `dbm.db`): di dalam request tenant mengarah ke database
+  sekolah itu; di luar konteks mengarah ke `rootDb` (tenant 1). `dbm.controlDb` = control plane.
+- Konteks request: `dbm.runAsTenant(tenant, fn)` (AsyncLocalStorage). Akun demo tetap memakai
+  `dbm.runAsDemo()` (database dummy) — `isDemoContext()` memakai penanda `conn.__demoConn`.
+
+### Kolom tenant_id (Tahap 1)
+- `migrateTenantColumns(conn, tenantId)` (dipanggil saat start untuk tenant 1 + setiap tenant baru)
+  menambahkan kolom `tenant_id` ke SEMUA tabel dan mengisi baris yang masih NULL. Idempoten.
+- `users.username` ditambahkan di bootstrap (login boleh pakai email atau username).
+
+### Login & registrasi (Tahap 2)
+- `POST /login` sekarang: **kode sekolah (4 karakter) + username/email + password**.
+  Bila kode KOSONG → fallback ke sekolah pertama (kompatibilitas tautan/bookmark lama + tes lama).
+- `GET/POST /register` (+ alias `/daftar`): mendaftarkan sekolah baru → tenant + database + akun admin
+  + masa uji coba (`saas_settings.trial_hari`), lalu menampilkan kode sekolah.
+- Sesi SEMUA login ada di `sessions` (control plane) dengan kolom `tenant_id`, `kind` ('tenant'|'saas'),
+  `imp_by`. Kode yang dulu memakai `dbm.mainDb` untuk sesi sudah dipindah ke `saas.*Session()`:
+  `server.setSession`, `readSession`, `/ta/pilih`, `routes/dashboard.js` (alert_pending),
+  `routes/sistem.js` (hapus semua sesi → hanya tenant aktif).
+- Halaman login memakai branding layanan (`saas.appName/appLogo/tema`); bila hanya ada SATU sekolah,
+  logo & nama sekolah itu ditampilkan agar tampilan lama tetap terasa.
+
+### Portal Super Admin (Tahap 3) — `/super-admin*`
+- `routes/superadmin.js`, cookie `simkeu_saas`, akun `saas_users` (bukan akun sekolah).
+  Akun awal: `SAAS_ADMIN_EMAIL` / `SAAS_ADMIN_PASSWORD` (default `super@simkeu.id` / `SuperAdmin2026!`)
+  — dibuat otomatis saat start pertama; **ganti sandinya lewat DB/env setelah dipakai**.
+- Request `/super-admin*` ditangani SEBELUM resolusi tenant (tidak pernah masuk konteks sekolah).
+- Dashboard juga memuat kartu **Keamanan Akun Super Admin** (`POST /super-admin/password`: sandi lama
+  divalidasi, minimal 8 karakter) — ganti sandi bawaan setelah pemasangan.
+- Halaman: dashboard (KPI), `/sekolah` (tabel + modal tambah), `/sekolah/:id` (edit, feature flag,
+  lifetime, login-as, hapus), `/pembayaran` (approve/reject + lightbox bukti), `/qris` (unggah QRIS,
+  nama/nomor/instruksi, harga & masa uji coba), `/backup` (SMTP backup seluruh SaaS).
+- **Feature flag**: `saas.FEATURES` (std/pro) + `saas.PATH_FEATURES` (peta URL→fitur).
+  `saas.blockedFeature(tenant, path)` dipakai server.js (403 halaman "fitur belum tersedia") dan
+  `ui.layout()` menyembunyikan item menu yang fiturnya mati (`features` dari `page()`).
+  Item menu `layanan` selalu tampil. Super Admin SaaS tidak bisa dimatikan dari sini.
+- **Lifetime** (`is_lifetime_free`) → status "Aktif (Lifetime)", `expires_at=NULL`, kebal auto-suspend,
+  tombol perpanjangan disembunyikan.
+- **Login As Tenant** → sesi `kind='tenant'` untuk akun super_admin sekolah + `imp_by`;
+  `ui.layout()` menampilkan banner "Mode bantuan" dan tautan `/super-admin/kembali`.
+- **Cron harian** (`saas.runDailyJobs`, penanda `saas_settings.last_daily`): tagihan H-7
+  (`saas_payments.jenis='tagihan'`, dedupe per `periode_mulai`=tanggal berakhir) + auto-suspend bila
+  lewat masa aktif (lifetime dikecualikan). Tagihan tetap diterbitkan walau sekolah sudah kedaluwarsa.
+
+### Pembayaran QRIS (Tahap 4 & 5)
+- Pengaturan QRIS/harga di `/super-admin/qris` (gambar diunggah lewat media proxy → URL disimpan di
+  `saas_settings.qris_image`; harga `harga_bulan`/`harga_tahun`, `trial_hari`, `saas_nama`).
+- Sisi sekolah: `/info-layanan` (kartu status, nominal tagihan, riwayat, pengaturan backup email) dan
+  `/perpanjang` (checkout: QRIS + unduh, pilihan 1/12 bulan, unggah bukti, catatan).
+  **Tombol kirim dikunci** selama masih ada pengajuan `pending` (anti double submission).
+- `saas.submitPayment/approvePayment/rejectPayment`. Approve = `+durasi` hari dihitung dari
+  `max(expires_at, hari ini)`, `status='active'` (un-suspend), tagihan `issued` lama ikut ditutup.
+  Reject = alasan wajib, tampil di Info Layanan sekolah untuk unggah ulang.
+- Status pembayaran: `pending` · `approved` · `rejected` · `issued` (tagihan cron) — label UI di `saas.PAY_STATUS`.
+
+### Auto-backup database via email (Tahap 6)
+- `mailer.js`: klien SMTP sendiri (net/tls, EHLO → STARTTLS bila ditawarkan → AUTH LOGIN → DATA),
+  lampiran base64. **Tanpa dependency baru.**
+- Konfigurasi per sekolah: `settings.mail_to|mail_host|mail_port|mail_secure|mail_from|mail_user|mail_pass|mail_aktif`
+  (form di `/info-layanan`); untuk Super Admin: `saas_settings` dengan kunci sama (`mail_*`, `backup_slots`).
+- `mailer.checkSchedules(dbm, saas)` (interval 5 menit, toleransi 45 menit) menjalankan slot `06:00` & `15:00`
+  sekali per hari; `mailer.sendTenantBackup` menulis ZIP ke `os.tmpdir()` lalu **selalu `unlink`**
+  setelah kirim (auto-cleanup). Nama berkas `Backup_SIMKEU_DDMMYYYY_HHMM.zip` (`bd.backupFileName`).
+- Backup SaaS menggabungkan `saas/control-plane.json` + `sekolah/<kode>/database.json` tiap sekolah.
+- Riwayat: tabel `cloud_backup` (per sekolah) & `saas_backup_log` (SaaS).
+
+### Alamat portal publik per sekolah (penyesuaian)
+- Prompt publik tanpa sesi: `server.portalSlugMap()` memetakan slug kustom semua sekolah → route kanonik.
+  Bila slug tidak ditemukan, peta dibangun ulang sekali (slug baru langsung berlaku).
+  Perhatikan `pathname0.slice(first.length + 1)` (karakter `/` di depan ikut dihitung).
+- `?kode=SK02` pada URL portal memilih sekolah tertentu; tanpa kode → sekolah pertama.
+
+### Alur penting saat menambah sekolah
+`saas.createTenant` → baris `tenants` (kode 4 karakter via `nextSchoolCode`, default `SK01`, `SK02`, …)
+→ `dbm.createTenantDatabase` (bootstrap skema + master, `migrateTenantColumns`, ganti akun bawaan
+dengan admin sekolah) → audit `saas_audit`.
+
+### Tes
+```bash
+node dev-tests/saas.js     # 100 cek: migrasi tenant_id, login kode sekolah, registrasi, isolasi data,
+                           # super admin (tabel/modal/fitur/lifetime/login-as), QRIS & approve/reject,
+                           # auto-suspend & tagihan H-7, info layanan, backup email (SMTP tiruan) + auto-cleanup,
+                           # ganti password super admin
+node dev-tests/ui-saas.js  # 29 cek Playwright: portal super admin (desktop+mobile 390px, modal, tanpa error JS),
+                           # dashboard kartu Info Layanan, halaman info-layanan & checkout
+```
+
+### Catatan lingkungan (penting)
+- Berkas `data/tenants/tenant-2.sqlite`, `tenant-3.sqlite`, `coba.db` adalah **sisa uji coba** yang
+  terlanjur dibuat di folder app dan diproteksi platform (read-only, tidak bisa dihapus dari sandbox).
+  Tidak dipakai kode (sekarang memakai `.db`), aman dibiarkan.
+- Bila suatu saat muncul `SQLITE_READONLY` pada control plane/tenant: pindahkan `SAAS_DB_PATH` dan
+  folder `tenants/` ke direktori di luar folder aplikasi lewat `.env`.

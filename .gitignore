@@ -1,6 +1,11 @@
 node_modules/
 *.sqlite-wal
 *.sqlite-shm
+# multi-tenant: control plane SaaS + database tiap sekolah
+data/saas.db*
+data/tenants/
+*.db-wal
+*.db-shm
 *.sqlite3-wal
 *.sqlite3-shm
 .vibecoder-media-token

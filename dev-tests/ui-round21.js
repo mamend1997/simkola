@@ -28,6 +28,8 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
 
   await go('/login');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
+  // login multi-tenant: kode sekolah wajib diisi pada form
+  await page.fill('input[name=kode]', 'SK01').catch(() => {});
   await page.fill('input[name=password]', 'admin123');
   await page.click('button[type=submit]');
   await page.waitForLoadState('domcontentloaded');
@@ -129,6 +131,8 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
   page.on('pageerror', e => errors.push(String(e.message)));
   await go('/login');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
+  // login multi-tenant: kode sekolah wajib diisi pada form
+  await page.fill('input[name=kode]', 'SK01').catch(() => {});
   await page.fill('input[name=password]', 'admin123');
   await page.click('button[type=submit]');
   await page.waitForLoadState('domcontentloaded');

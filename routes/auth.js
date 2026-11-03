@@ -1,12 +1,13 @@
 'use strict';
 
-module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, COOKIE, roleLabel, permissionMatrix, renderError, uploadMedia }) => {
+module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, COOKIE, roleLabel, permissionMatrix, renderError, uploadMedia, saas }) => {
   const { db } = dbm;
 
   function authShell({ base, content, sideTitle, sideDesc }) {
-    const appName = dbm.appNamaGlobal();
-    const appLogo = dbm.appLogoGlobal();
-    const tema = dbm.temaWarnaGlobal();
+    // branding halaman login = branding layanan (bukan milik satu sekolah)
+    const appName = saas ? saas.appName() : 'SIMKEU Cloud';
+    const appLogo = saas ? saas.appLogo() : '';
+    const tema = saas ? saas.tema() : '#F97316';
     return `<!DOCTYPE html><html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${lib.esc(appName)}</title>
@@ -42,57 +43,157 @@ ${ui.themeCss(tema)}
 </body></html>`;
   }
 
+  /* ---------------- LOGIN MULTI-TENANT: Kode Sekolah + Username + Password ---------------- */
   get('/login', (req, res) => {
     const base = req.BASE;
     const q = req.query;
     const err = q.get('err'), ok = q.get('ok');
-    const s = dbm.settingsAll();
-    const appName = dbm.appNamaGlobal();
-    const sekolah = String(s.sekolah_nama || 'SMK PGRI Cikoneng').trim();
-    const logo = s.sekolah_logo
-      ? `<img src="${lib.esc(s.sekolah_logo)}" alt="Logo ${lib.esc(sekolah)}" class="auth-logo-img">`
-      : `<div class="auth-logo-ph">${ui.icon('school')}</div>`;
+    const kode = String(q.get('kode') || '').toUpperCase().slice(0, 4);
+    const appName = saas.appName();
+    // bila layanan baru dipakai SATU sekolah, tampilkan identitas sekolah itu di halaman login
+    let brandLogo = '', brandNama = '';
+    try {
+      const tenants = saas.allTenants();
+      if (tenants.length === 1) {
+        const t0 = tenants[0];
+        const st0 = dbm.openTenantConn(t0.id, t0.db_file).prepare("SELECT k,v FROM settings WHERE k IN ('sekolah_logo','sekolah_nama')").all();
+        const get = k => (st0.find(r => r.k === k) || {}).v || '';
+        brandLogo = get('sekolah_logo');
+        brandNama = get('sekolah_nama');
+      }
+    } catch (e) { }
     res.html(authShell({
       base,
       sideTitle: 'Kelola keuangan sekolah dengan rapi, aman, dan transparan.',
       sideDesc: 'Satu tempat untuk transaksi harian, anggaran, piutang, sampai pelaporan pertanggungjawaban dana sekolah.',
       content: `
       <div class="auth-login-head">
-        ${logo}
-        <div class="auth-welcome">Selamat datang di ${lib.esc(appName)} ${lib.esc(sekolah)}</div>
+        ${brandLogo ? `<img src="${lib.esc(brandLogo)}" alt="Logo" class="auth-logo-img">` : `<div class="auth-logo-ph">${ui.icon('school')}</div>`}
+        <div class="auth-welcome">Selamat datang di ${lib.esc(appName)}${brandNama ? ' ' + lib.esc(brandNama) : ''}</div>
         <div class="small muted">Sistem Informasi Manajemen Keuangan Sekolah</div>
       </div>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${lib.esc(err)}</div></div>` : ''}
       ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${lib.esc(ok)}</div></div>` : ''}
-      <h2>Masuk ke Akun Anda</h2>
-      <p class="muted small" style="margin-bottom:22px">Gunakan akun yang terdaftar untuk melanjutkan pengelolaan keuangan.</p>
+      <h2>Masuk ke Akun Sekolah</h2>
+      <p class="muted small" style="margin-bottom:22px">Masukkan <b>Kode Sekolah</b> 4 karakter yang Anda terima saat pendaftaran.</p>
       <form method="post" action="${base}/login">
-        <div class="field"><label>Email</label><input type="email" name="email" required placeholder="nama@sekolah.sch.id" autocomplete="username"></div>
+        <div class="field"><label>Kode Sekolah</label>
+          <input type="text" name="kode" required maxlength="4" value="${lib.esc(kode)}" placeholder="SK01"
+            style="text-transform:uppercase;letter-spacing:.28em;font-weight:700" autocomplete="organization"></div>
+        <div class="field"><label>Username / Email</label><input type="text" name="email" required placeholder="admin@sekolah.sch.id" autocomplete="username"></div>
         <div class="field"><label>Password</label><input type="password" name="password" required placeholder="••••••••" autocomplete="current-password"></div>
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:6px">Masuk</button>
       </form>
-      <p class="small muted" style="margin-top:18px;text-align:center">Belum memiliki akun? Hubungi Super Admin / Bendahara sekolah untuk pembuatan akun.</p>
-      <p class="small" style="margin-top:10px;text-align:center"><a href="${base}/portal" style="color:var(--o-700);font-weight:600">Cek Tagihan Iuran Siswa (Portal Orang Tua)</a></p>`
+      <p class="small muted" style="margin-top:18px;text-align:center">Belum punya akun sekolah?
+        <a href="${base}/register" style="color:var(--o-700);font-weight:700">Daftarkan sekolah Anda</a></p>
+      <p class="small" style="margin-top:6px;text-align:center"><a href="${base}/portal" style="color:var(--o-700);font-weight:600">Cek Tagihan Iuran Siswa (Portal Orang Tua)</a></p>
+      <p class="small muted" style="margin-top:14px;text-align:center;font-size:11px">Super Admin Pusat? <a href="${base}/super-admin/login" style="color:var(--o-700);font-weight:600">Masuk di sini</a></p>`
     }));
   });
 
   post('/login', (req, res) => {
-    const { email, password } = req.body;
-    const u = db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(String(email || '').trim());
-    if (!u || !lib.verifyPassword(password || '', u.password)) {
-      return res.redirect(req.BASE + '/login?err=' + encodeURIComponent('Email atau password salah.'));
-    }
-    if (!u.aktif) return res.redirect(req.BASE + '/login?err=' + encodeURIComponent('Akun Anda dinonaktifkan. Hubungi Super Admin.'));
-    const t = setSession(u.id);
-    dbm.logAudit(u, 'LOGIN', 'auth', `${u.nama} masuk ke aplikasi`);
+    const base = req.BASE;
+    const kode = String(req.body.kode || '').trim().toUpperCase();
+    const ident = String(req.body.email || '').trim();
+    const password = String(req.body.password || '');
+    const fail = msg => res.redirect(base + '/login?err=' + encodeURIComponent(msg) + (kode ? '&kode=' + encodeURIComponent(kode) : ''));
+    // Kompatibilitas: tautan/ bookmark lama tanpa kode sekolah tetap dilayani
+    // oleh sekolah pertama (SK01). Bila kode diisi, isolasi tetap ketat per sekolah.
+    const tenant = kode ? saas.tenantByCode(kode) : saas.tenantById(1);
+    if (!tenant) return fail(kode ? ('Kode sekolah "' + kode + '" tidak ditemukan. Periksa kembali kode dari admin sekolah Anda.') : 'Kode sekolah wajib diisi (4 karakter).');
+    const conn = dbm.openTenantConn(tenant.id, tenant.db_file);
+    const u = conn.prepare("SELECT * FROM users WHERE lower(email)=lower(?) OR lower(COALESCE(username,''))=lower(?) ORDER BY id LIMIT 1").get(ident, ident);
+    if (!u || !lib.verifyPassword(password, u.password)) return fail('Username atau password salah' + (kode ? ' untuk sekolah ' + kode : '') + '.');
+    if (!u.aktif) return fail('Akun Anda dinonaktifkan. Hubungi admin sekolah.');
+    // hitung draf pengeluaran baru di database sekolah tersebut
+    const alert = dbm.runAsTenant(tenant, () => {
+      const pendingRow = db.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending'").get();
+      return pendingRow ? pendingRow.c : 0;
+    });
+    const t = setSession(u.id, tenant.id, alert);
+    dbm.runAsTenant(tenant, () => {
+      dbm.logAudit(u, 'LOGIN', 'auth', `${u.nama} masuk ke aplikasi (${tenant.nama})`);
+    });
     res.set('Set-Cookie', `${COOKIE}=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}`);
-    res.redirect(req.BASE + '/');
+    res.redirect(base + '/');
+  });
+
+  /* ---------------- PENDAFTARAN MANDIRI SEKOLAH BARU ---------------- */
+  function registerForm(req, res, { err } = {}) {
+    const base = req.BASE;
+    const q = req.query;
+    const v = k => lib.esc(q.get(k) || '');
+    res.html(authShell({
+      base,
+      sideTitle: 'Daftarkan sekolah Anda dalam 1 menit.',
+      sideDesc: 'Dapatkan kode sekolah 4 karakter, akun admin, dan database keuangan yang terisolasi penuh dari sekolah lain.',
+      content: `
+      <div class="auth-login-head">
+        <div class="auth-logo-ph">${ui.icon('school')}</div>
+        <div class="auth-welcome">Pendaftaran Sekolah Baru</div>
+        <div class="small muted">${lib.esc(saas.appName())} · uji coba ${saas.trialDays()} hari</div>
+      </div>
+      ${err ? `<div class="alert err">${ui.icon('alert')}<div>${lib.esc(err)}</div></div>` : ''}
+      <form method="post" action="${base}/register">
+        <div class="row2">
+          <div class="field"><label>Nama Sekolah</label><input type="text" name="nama" value="${v('nama')}" required placeholder="SMK Negeri 1 Contoh"></div>
+          <div class="field"><label>Nama Kepala Sekolah</label><input type="text" name="kepala" value="${v('kepala')}" placeholder="Opsional"></div>
+        </div>
+        <div class="field"><label>Alamat Sekolah</label><input type="text" name="alamat" value="${v('alamat')}" placeholder="Jl. Pendidikan No. 1, Kota"></div>
+        <div class="row2">
+          <div class="field"><label>Nama Admin</label><input type="text" name="admin_nama" value="${v('admin_nama')}" required placeholder="Nama bendahara/admin"></div>
+          <div class="field"><label>Email Admin (untuk login)</label><input type="email" name="admin_email" value="${v('admin_email')}" required placeholder="admin@sekolah.sch.id"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Password Admin</label><input type="password" name="admin_password" required minlength="6" placeholder="minimal 6 karakter"></div>
+          <div class="field"><label>Ulangi Password</label><input type="password" name="admin_password2" required minlength="6" placeholder="ulangi password"></div>
+        </div>
+        <div class="field"><label>Nomor WhatsApp / Telepon</label><input type="text" name="telp" value="${v('telp')}" placeholder="08xx"></div>
+        <div class="field"><label>Paket Langganan</label>
+          <select name="paket">
+            <option value="standard">Standard — BKU, transaksi, laporan, piutang, aset, backup</option>
+            <option value="pro">Pro — semua fitur (iuran siswa, payroll, akademik, ekskul, beasiswa)</option>
+          </select></div>
+        ${saas.trialDays() > 0 ? `<div class="alert info">${ui.icon('info')}<div>Masa uji coba <b>${saas.trialDays()} hari</b> aktif otomatis. Kode sekolah 4 karakter dibuatkan sistem dan ditampilkan setelah pendaftaran.</div></div>` : ''}
+        <button class="btn btn-primary btn-block" type="submit">Daftarkan Sekolah</button>
+      </form>
+      <p class="small muted" style="margin-top:16px;text-align:center">Sudah punya akun? <a href="${base}/login" style="color:var(--o-700);font-weight:700">Masuk</a></p>`
+    }));
+  }
+
+  get('/register', (req, res) => registerForm(req, res));
+  get('/daftar', (req, res) => registerForm(req, res));
+
+  post('/register', (req, res) => {
+    const base = req.BASE;
+    const b = req.body || {};
+    const back = q => base + '/register?' + Object.keys(q).map(k => k + '=' + encodeURIComponent(q[k] || '')).join('&');
+    const nama = String(b.nama || '').trim();
+    const email = String(b.admin_email || '').trim();
+    const p1 = String(b.admin_password || ''), p2 = String(b.admin_password2 || '');
+    if (!nama) return res.redirect(back({ err: 'Nama sekolah wajib diisi.', nama, admin_email: email }));
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.redirect(back({ err: 'Email admin tidak valid.', nama }));
+    if (p1.length < 6) return res.redirect(back({ err: 'Password minimal 6 karakter.', nama, admin_email: email }));
+    if (p1 !== p2) return res.redirect(back({ err: 'Konfirmasi password tidak sama.', nama, admin_email: email }));
+    try {
+      const tenant = saas.createTenant({
+        nama, admin_email: email, admin_password: p1,
+        admin_nama: String(b.admin_nama || 'Administrator Sekolah').trim(),
+        alamat: String(b.alamat || ''), kepala: String(b.kepala || ''),
+        contact_telp: String(b.telp || ''), paket: b.paket === 'pro' ? 'pro' : 'standard',
+        trial: true
+      });
+      res.redirect(base + '/login?ok=' + encodeURIComponent(
+        `Pendaftaran berhasil! Kode Sekolah Anda: ${tenant.school_code}. Simpan kode ini untuk login.`) + '&kode=' + encodeURIComponent(tenant.school_code));
+    } catch (e) {
+      res.redirect(back({ err: e.message, nama, admin_email: email }));
+    }
   });
 
   post('/logout', (req, res) => {
     const c = String(req.headers.cookie || '');
     const m = c.match(/simkeu_sid=([^;]+)/);
-    if (m) dbm.mainDb.prepare('DELETE FROM sessions WHERE token=?').run(decodeURIComponent(m[1]));
+    if (m) saas.destroySession(decodeURIComponent(m[1]));
     res.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
     res.redirect(req.BASE + '/login?ok=' + encodeURIComponent('Anda telah keluar dari aplikasi.'));
   });
@@ -100,7 +201,10 @@ ${ui.themeCss(tema)}
   /* profil sendiri */
   get('/akun', (req, res) => {
     const c = ctx(req);
-    const u = dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    // akun demo memakai database dummy: identitas diambil dari sesi, bukan dari database dummy
+    const u = req.user.role === 'demo'
+      ? Object.assign({}, req.user)
+      : dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
     const isDemo = u.role === 'demo';
     page(req, res, {
       title: 'Akun Saya', sub: 'Kelola profil dan password Anda', active: 'akun',
@@ -156,7 +260,9 @@ ${ui.themeCss(tema)}
 
   post('/akun', (req, res) => {
     const { nama, email, password, password2 } = req.body;
-    const me = dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    const me = req.user.role === 'demo'
+      ? { role: 'demo' }
+      : dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
     if (me && me.role === 'demo' && password) {
       return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Akun Demo tidak dapat mengubah kata sandi sendiri. Hubungi Super Admin.'));
     }

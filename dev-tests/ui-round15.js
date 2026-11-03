@@ -50,6 +50,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   page.on('pageerror', e => errs.push(String(e.message)));
   await page.goto(base + '/login', { waitUntil: 'load' });
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
+  // login multi-tenant: kode sekolah wajib diisi pada form
+  await page.fill('input[name=kode]', 'SK01').catch(() => {});
   await page.fill('input[name=password]', 'admin123');
   await page.click('button[type=submit]');
   await page.waitForLoadState('load');

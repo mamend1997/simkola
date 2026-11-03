@@ -10,32 +10,51 @@ const { hashPassword, nowStamp, todayISO, parseMoney } = require('./lib');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'keuangan.sqlite');
+// database CONTROL PLANE (SaaS): daftar sekolah/tenant, tagihan, sesi login, pengaturan QRIS.
+// Terpisah total dari database sekolah supaya tidak pernah ikut terhapus saat reset tenant.
+// default mengikuti folder database utama → tes dengan DB_PATH sementara otomatis terisolasi
+const SAAS_DB_PATH = process.env.SAAS_DB_PATH || path.join(path.dirname(DB_PATH), 'saas.db');
 
 /* ==================================================================
-   KONEKSI DATABASE: UTAMA + SANDBOX AKUN DEMO
+   KONEKSI DATABASE: SATU DATABASE PER SEKOLAH (TENANT) + CONTROL PLANE
    ------------------------------------------------------------------
-   Akun berperan "demo" membaca & menulis DATABASE DUMMY yang terpisah
-   (data/demo.sqlite). Semua kode tetap memakai `db.prepare(...)` seperti
-   biasa; proxy di bawah mengarahkan setiap query ke koneksi yang sedang
-   aktif pada request tersebut (AsyncLocalStorage). Di luar request demo,
-   seluruh query memakai database utama — tidak ada perubahan perilaku.
+   Isolasi data antar sekolah dilakukan secara FISIK: setiap tenant punya
+   berkas SQLite sendiri (data/tenants/tenant-<id>.sqlite). Sekolah pertama
+   tetap memakai data/keuangan.sqlite yang sudah berisi data aslinya.
+
+   Semua kode aplikasi tetap memanggil `db.prepare(...)` / `dbm.mainDb`
+   seperti biasa; proxy di bawah mengarahkan query ke koneksi tenant yang
+   sedang aktif pada request tersebut (AsyncLocalStorage). Di luar request
+   tenant (mis. portal Super Admin) query jatuh ke `rootDb` = tenant pertama.
+
+   Akun berperan "demo" tetap memakai database dummy terpisah (data/demo.sqlite).
    ================================================================== */
-const mainDb = new Database(DB_PATH);
-mainDb.pragma('journal_mode = WAL');
-mainDb.pragma('foreign_keys = ON');
+const rootDb = new Database(DB_PATH);
+rootDb.pragma('journal_mode = WAL');
+rootDb.pragma('foreign_keys = ON');
+
+const controlDb = new Database(SAAS_DB_PATH);
+controlDb.pragma('journal_mode = WAL');
+controlDb.pragma('foreign_keys = ON');
 
 const DEMO_DB_PATH = process.env.DEMO_DB_PATH || path.join(DATA_DIR, 'demo.sqlite');
 const dbStore = new AsyncLocalStorage();
 let demoConn = null;
 
-const db = new Proxy({}, {
-  get(_target, prop) {
-    const conn = dbStore.getStore() || mainDb;
-    const v = conn[prop];
-    return typeof v === 'function' ? v.bind(conn) : v;
-  },
-  has() { return true; }
-});
+/** proxy koneksi: mengikuti koneksi aktif pada request (tenant/demo), fallback ke tenant pertama */
+function connProxy(fallback) {
+  return new Proxy({}, {
+    get(_target, prop) {
+      const conn = dbStore.getStore() || fallback;
+      const v = conn[prop];
+      return typeof v === 'function' ? v.bind(conn) : v;
+    },
+    has() { return true; }
+  });
+}
+const mainDb = connProxy(rootDb);
+const db = connProxy(rootDb);
+
 /** jalankan fn dengan koneksi sandbox demo */
 function runAsDemo(fn) { return dbStore.run(demoHandle(), fn); }
 function demoHandle() {
@@ -43,11 +62,65 @@ function demoHandle() {
     const conn = new Database(DEMO_DB_PATH);
     conn.pragma('journal_mode = WAL');
     conn.pragma('foreign_keys = ON');
+    conn.__demoConn = true;
     demoConn = conn;
   }
   return demoConn;
 }
-function isDemoContext() { return !!dbStore.getStore(); }
+function isDemoContext() { const c = dbStore.getStore(); return !!(c && c.__demoConn); }
+
+/* ---------------- koneksi per tenant ---------------- */
+const tenantConns = new Map();
+tenantConns.set(1, rootDb);   // tenant pertama = database lama (data asli, tidak disalin)
+
+/** buka (atau ambil dari cache) koneksi database milik satu sekolah */
+function openTenantConn(id, file) {
+  const key = Number(id) || 1;
+  if (key === 1) return rootDb;
+  const cached = tenantConns.get(key);
+  if (cached && cached.open) return cached;
+  const fp = file || path.join(DATA_DIR, 'tenants', `tenant-${key}.sqlite`);
+  fs.mkdirSync(path.dirname(fp), { recursive: true });
+  const conn = new Database(fp);
+  conn.pragma('journal_mode = WAL');
+  conn.pragma('foreign_keys = ON');
+  conn.__tenantId = key;
+  tenantConns.set(key, conn);
+  return conn;
+}
+/** jalankan fn di dalam konteks database satu sekolah */
+function runAsTenant(tenant, fn) {
+  const conn = openTenantConn(tenant.id, tenant.db_file);
+  return dbStore.run(conn, fn);
+}
+function currentTenantConn() { return dbStore.getStore() || null; }
+
+/* ---------------- migrasi kolom tenant_id ---------------- */
+function tableNamesOf(conn) {
+  return conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name);
+}
+/**
+ * TAHAP 1 — setiap tabel milik sekolah diberi kolom `tenant_id` dan diisi
+ * dengan id sekolah tersebut. Idempoten: tabel yang sudah punya kolom dilewati,
+ * baris yang sudah terisi tidak diubah.
+ */
+function migrateTenantColumns(conn, tenantId) {
+  const tid = Number(tenantId) || 1;
+  let added = 0, filled = 0;
+  const tables = tableNamesOf(conn);
+  conn.transaction(() => {
+    for (const t of tables) {
+      let cols = [];
+      try { cols = conn.pragma(`table_info("${t}")`); } catch (e) { continue; }
+      if (!cols.length) continue;
+      if (!cols.some(c => c.name === 'tenant_id')) {
+        try { conn.exec(`ALTER TABLE "${t}" ADD COLUMN tenant_id INTEGER`); added++; } catch (e) { continue; }
+      }
+      try { filled += conn.prepare(`UPDATE "${t}" SET tenant_id=? WHERE tenant_id IS NULL`).run(tid).changes; } catch (e) { }
+    }
+  })();
+  return { tables: tables.length, added, filled };
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT);
@@ -613,6 +686,9 @@ function bootstrap() {
     // kolom tambahan (DB lama)
     const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
     if (!userCols.includes('foto')) db.exec('ALTER TABLE users ADD COLUMN foto TEXT');
+    // login multi-tenant: username pendek selain email (opsional, email tetap bisa dipakai)
+    if (!userCols.includes('username')) db.exec('ALTER TABLE users ADD COLUMN username TEXT');
+    if (!userCols.includes('tenant_id')) db.exec('ALTER TABLE users ADD COLUMN tenant_id INTEGER');
 
     const trxCols = db.prepare('PRAGMA table_info(transaksi)').all().map(c => c.name);
     if (!trxCols.includes('is_penyesuaian')) db.exec('ALTER TABLE transaksi ADD COLUMN is_penyesuaian INTEGER NOT NULL DEFAULT 0');
@@ -1048,7 +1124,9 @@ const RESERVED_SLUGS = new Set(['login', 'logout', 'assets', 'favicon.ico', 'fav
   'beasiswa', 'ekskul', 'tahun-ajaran', 'anggaran', 'saldo-awal', 'mutasi-kas', 'mutasi-kelas', 'kelas',
   'program-keahlian', 'tutup-bulanan', 'desain-cetak', 'reset-tahun', 'audit-orphan', 'tampilan-menu',
   'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'catatan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip',
-  'pengaturan-backup', 'tema', 'spp', 'petunjuk']);
+  'pengaturan-backup', 'tema', 'spp', 'petunjuk',
+  // multi-tenant: halaman layanan & portal SaaS tidak boleh dipakai sebagai slug portal sekolah
+  'super-admin', 'info-layanan', 'perpanjang', 'register', 'daftar', 'akun']);
 function normalizePortalSlug(raw, fallback) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   if (s.length < 3 || s.length > 40) return fallback;
@@ -2351,13 +2429,63 @@ function cleanupOrphanPiutang(user) {
 
 bootstrap();
 
+// ==================================================================
+// TAHAP 1 — MIGRASI MULTI-TENANT SEKOLAH PERTAMA
+// Seluruh tabel database yang sedang berjalan diberi kolom tenant_id dan
+// diisi tenant_id = 1 TANPA menghapus / mengubah satu baris data pun.
+// Idempoten: aman dijalankan setiap kali server start.
+// ==================================================================
+try {
+  const mig = migrateTenantColumns(rootDb, 1);
+  if (mig.added) console.log('[tenant] tenant_id ditambahkan ke ' + mig.added + ' tabel, ' + mig.filled + ' baris diisi (tenant 1)');
+} catch (e) { console.error('[tenant-migrate]', e.message); }
+
+/**
+ * Siapkan database baru untuk satu sekolah (tenant baru).
+ * Skema + master dasar (CoA, BKU, tahun ajaran, permission) dibuat otomatis,
+ * lalu akun admin sekolah menggantikan akun bawaan seed.
+ */
+function createTenantDatabase(opts = {}) {
+  const id = Number(opts.id) || 0;
+  if (!id) throw new Error('createTenantDatabase: id tenant wajib.');
+  const file = opts.file || path.join(DATA_DIR, 'tenants', 'tenant-' + id + '.sqlite');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const conn = openTenantConn(id, file);
+  dbStore.run(conn, () => { bootstrap(); });
+  migrateTenantColumns(conn, id);
+  dbStore.run(conn, () => {
+    setSetting('tenant_id', String(id));
+    if (opts.school_code) setSetting('tenant_kode', String(opts.school_code));
+    if (opts.nama) setSetting('sekolah_nama', String(opts.nama));
+    if (opts.alamat) setSetting('sekolah_alamat', String(opts.alamat));
+    if (opts.kepala) setSetting('sekolah_kepala', String(opts.kepala));
+    if (opts.app_nama) setSetting('app_nama', String(opts.app_nama));
+    if (opts.tema) setSetting('tema_warna', String(opts.tema));
+    if (opts.logo) setSetting('sekolah_logo', String(opts.logo));
+    // akun admin sekolah (menggantikan akun bawaan admin@sekolah.sch.id / admin123)
+    if (opts.admin_email) {
+      const pw = hashPassword(opts.admin_password || 'admin123');
+      const uname = String(opts.admin_username || String(opts.admin_email).split('@')[0]).trim();
+      const ada = db.prepare("SELECT id FROM users WHERE role='super_admin' ORDER BY id LIMIT 1").get();
+      if (ada) {
+        db.prepare('UPDATE users SET nama=?,email=?,password=?,username=?,jabatan=?,aktif=1 WHERE id=?')
+          .run(opts.admin_nama || 'Administrator Sekolah', String(opts.admin_email).trim(), pw, uname, 'Administrator Sekolah', ada.id);
+      } else {
+        db.prepare('INSERT INTO users (nama,email,password,role,aktif,jabatan,username,created_at) VALUES (?,?,?,?,1,?,?,?)')
+          .run(opts.admin_nama || 'Administrator Sekolah', String(opts.admin_email).trim(), pw, 'super_admin', 'Administrator Sekolah', uname, nowStamp());
+      }
+      db.prepare("DELETE FROM users WHERE role<>'super_admin' AND email LIKE '%@sekolah.sch.id'").run();
+    }
+  });
+  return conn;
+}
+
 /* ==================================================================
    SANDBOX AKUN DEMO — database dummy terpisah
    Dibuat sekali saat pertama dibutuhkan: skema + master data awal
    (CoA, BKU, tahun ajaran, aset) tanpa data transaksi sekolah asli.
    ================================================================== */
 function ensureDemoDb() {
-  if (demoConn) return demoConn;
   const conn = demoHandle();
   dbStore.run(conn, () => {
     const has = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
@@ -3394,7 +3522,8 @@ function beasiswaSyncAll() {
 }
 
 module.exports = {
-  db, mainDb, DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
+  db, mainDb, DB_PATH, SAAS_DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
+  rootDb, controlDb, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, createTenantDatabase, DATA_DIR, tableNamesOf,
   getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, autoBku,
   bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
