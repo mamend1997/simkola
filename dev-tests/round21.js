@@ -221,18 +221,13 @@ const textOf = html => String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '
   ok('Catatan Pegawai = rekap (tanpa form kirim untuk bendahara)', !/Kirim Catatan ke Bendahara/.test(r.text) && /Rekap Catatan Pegawai/.test(r.text));
   ok('alamat lama /pesan-orangtua tetap berfungsi', (await req('GET', '/pesan-orangtua')).status === 200);
 
-  r = await req('POST', '/petunjuk/save', {
-    judul: 'Cara Mencatat Pembayaran Iuran', kategori: 'Iuran & SPP',
-    ringkas: 'Buka Data Iuran lalu klik Bayar.', video_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    pdf_url: '', urutan: '1', aktif: '1'
-  });
-  ok('simpan petunjuk redirect', r.status === 303);
-  const pdk = db.prepare("SELECT * FROM panduan WHERE judul LIKE 'Cara Mencatat%'").get();
-  ok('petunjuk tersimpan', !!pdk);
+  // Sejak ronde 23, materi petunjuk pengguna dikelola Super Admin (read-only di sisi sekolah)
+  r = await req('POST', '/petunjuk/save', { judul: 'Cara Mencatat Pembayaran Iuran', kategori: 'Iuran & SPP' });
+  ok('sekolah TIDAK bisa menambah petunjuk (403)', r.status === 403, r.status);
+  r = await req('POST', '/petunjuk/delete', { id: 1 });
+  ok('sekolah TIDAK bisa menghapus petunjuk (403)', r.status === 403, r.status);
   r = await req('GET', '/petunjuk');
-  ok('kartu petunjuk tampil + embed YouTube', /Cara Mencatat Pembayaran Iuran/.test(r.text) && /youtube\.com\/embed\/dQw4w9WgXcQ/.test(r.text));
-  r = await req('POST', '/petunjuk/delete', { id: pdk.id });
-  ok('hapus petunjuk', r.status === 303 && !db.prepare('SELECT id FROM panduan WHERE id=?').get(pdk.id));
+  ok('halaman petunjuk tampil read-only', r.status === 200 && !/Tambah Petunjuk Pengguna/.test(r.text));
 
   /* ================= 7. AKUN DEMO ================= */
   // buat akun demo lewat form pengguna

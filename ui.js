@@ -96,6 +96,7 @@ const NAV = [
     id: 'akademik', group: 'Akademik & Siswa', icon: 'graduation', items: [
       { href: '/siswa', key: 'siswa', label: 'Data Siswa', icon: 'graduation' },
       { href: '/kelas', key: 'kelas', label: 'Data Kelas', icon: 'book' },
+      { href: '/kelas/tingkat', key: 'kelas', activeKey: 'kelas_tingkat', label: 'Pengaturan Kelas & Tingkat', icon: 'settings' },
       { href: '/program-keahlian', key: 'program', label: 'Program Keahlian', icon: 'layers' },
       { href: '/mutasi-kelas', key: 'mutasi_kelas', label: 'Mutasi Kelas', icon: 'swap' },
       { href: '/siswa-nonaktif', key: 'siswa', activeKey: 'siswa_nonaktif', label: 'Siswa Non-Aktif', icon: 'users' }
@@ -123,6 +124,7 @@ const NAV = [
       { href: '/pegawai', key: 'pegawai', label: 'Data Pegawai', icon: 'users' },
       { href: '/payroll', key: 'payroll', label: 'Payroll & Leger Honor', icon: 'wallet' },
       { href: '/payroll/slip', key: 'payroll', activeKey: 'payroll_slip', label: 'Slip Gaji Pegawai', icon: 'printer' },
+      { href: '/payroll/kolom', key: 'payroll', activeKey: 'payroll_kolom', label: 'Pengaturan Kolom Leger', icon: 'settings' },
       { href: '/ekskul', key: 'ekskul', label: 'Honor Pembina Ekskul', icon: 'target' },
       { href: '/ekskul/antrean', key: 'ekskul', activeKey: 'ekskul_queue', label: 'Antrean Posting Ekskul', icon: 'clock' },
       { href: '/beasiswa', key: 'beasiswa', label: 'Beasiswa SPP', icon: 'target' }
@@ -153,13 +155,14 @@ const NAV = [
       { href: '/audit-orphan', key: 'sekolah', activeKey: 'audit_orphan', label: 'Audit Data Tersembunyi', icon: 'search' },
       { href: '/reset-tahun', key: 'sekolah', activeKey: 'reset_tahun', label: 'Reset Data Tahun Ajaran', icon: 'refresh' },
       { href: '/backup', key: 'backup', label: 'Backup & Restore', icon: 'database' },
-      { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Backup', icon: 'cloud' },
+      { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Auto-Backup', icon: 'cloud' },
       { href: '/info-layanan', key: 'layanan', label: 'Info Layanan & Perpanjangan', icon: 'shield' }
     ]
   },
   {
     id: 'bantuan', group: 'Bantuan', icon: 'info', items: [
-      { href: '/petunjuk', key: 'panduan', label: 'Petunjuk Pengguna', icon: 'book' }
+      { href: '/petunjuk', key: 'panduan', label: 'Petunjuk Pengguna', icon: 'book' },
+      { href: '/bantuan', key: 'catatan', activeKey: 'bantuan', label: 'Bantuan & Tiket Kendala', icon: 'inbox' }
     ]
   }
 ];
@@ -204,6 +207,7 @@ body::before{
     radial-gradient(700px 500px at 60% 105%, ${hsl(97, 75)} 0%, rgba(255,255,255,0) 65%),
     var(--bg);
 }
+.ann-bar{margin-bottom:14px;border-width:1.5px}
 .nav a img.nav-ico-img{width:17px;height:17px;flex:0 0 17px;object-fit:contain;border-radius:3px}
 </style>`;
 }
@@ -254,7 +258,7 @@ function navOrdered(cfg) {
   return groups;
 }
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', demoMode = false, features = null, tenantInfo = null, impersonate = null }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', demoMode = false, features = null, tenantInfo = null, impersonate = null, announcements = null }) {
   const initials = (user?.nama || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
   const hidden = navVisibility(navHidden);
   const linkOf = (i) => {
@@ -341,11 +345,20 @@ ${themeCss(tema)}
           atas nama ${esc(impersonate.nama)} (Super Admin Pusat). Tindakan tercatat pada audit log sekolah.</div>
         <a class="btn btn-sm" href="${base}/super-admin/kembali">Kembali ke Super Admin</a>
       </div>` : ''}
+      ${Array.isArray(announcements) ? announcements.filter(a => a.tipe === 'banner').map(a => `<div class="alert ${['ok', 'warn', 'err', 'info'].includes(a.warna) ? a.warna : 'info'} ann-bar" data-ann="${a.id}">
+        ${icon('bell')}<div><b>${esc(a.judul)}</b>${a.isi ? '<br>' + esc(a.isi) : ''}</div></div>`).join('') : ''}
       ${flashBlock(query || new URLSearchParams())}
       ${content}
     </main>
   </div>
 </div>
+${Array.isArray(announcements) ? announcements.filter(a => a.tipe === 'popup').map(a => modal('mAnn' + a.id, {
+  title: a.judul,
+  autoShow: true, autoKey: 'ann' + a.id,
+  body: `<div class="alert ${['ok', 'warn', 'err', 'info'].includes(a.warna) ? a.warna : 'info'}" style="margin-top:0">${icon('bell')}<div>${esc(a.isi || '')}</div></div>
+    <p class="help">Pengumuman resmi dari Super Admin Pusat.</p>`,
+  footer: `<button class="btn" data-close="mAnn${a.id}" data-dismiss-auto>Mengerti</button>`
+})).join('') : ''}
 <script src="${base}/assets/app.js?v=${ASSET_V}"></script>
 </body></html>`;
 }

@@ -84,9 +84,10 @@ const prevPeriode = (p) => { const [y, m] = p.split('-').map(Number); return m =
   ok('jam sertifikasi tersimpan sebagai jam', rows.map(x => Number(x.jam_sertifikasi)).join(',') === '4,5,6', rows.map(x => x.jam_sertifikasi).join(','));
   ok('nominal sertifikasi = jam × 12.500', rows.map(x => Number(x.pot_sertifikasi)).join(',') === '50000,62500,75000', rows.map(x => x.pot_sertifikasi).join(','));
   r = await req('GET', '/payroll?periode=' + periodeNow);
+  // kolom dinamis (ronde 23): input jam memakai nama `<id>_c_<kode>`, kolom berumus tidak berupa input
   ok('kolom sertifikasi berupa input jam (bukan rupiah)',
-    /name="\d+_jam_sertifikasi"/.test(r.text) && !/name="\d+_pot_sertifikasi"/.test(r.text));
-  ok('halaman payroll menampilkan rumus jam × tarif', /jam × 12\.500|jam × Rp 12\.500/.test(r.text));
+    /name="\d+_c_jam_sertifikasi"/.test(r.text) && !/name="\d+_c_pot_sertifikasi"/.test(r.text));
+  ok('halaman payroll menampilkan kolom berumus otomatis', /auto/.test(r.text) && /Pengaturan Kolom Leger/.test(r.text));
   // ubah tarif → nilai ikut berubah saat dihitung ulang (tanpa input ulang jam)
   await req('POST', '/tarif-honor', { sertifikasi_per_jam: '15000', honor_pembantu_jam: '50000', honor_wali_jam: '55000' });
   const calc = db.prepare('SELECT * FROM payroll WHERE periode=? ORDER BY urutan, id LIMIT 1').get(periodeNow);
@@ -97,7 +98,7 @@ const prevPeriode = (p) => { const [y, m] = p.split('-').map(Number); return m =
   r = await req('GET', '/payroll?periode=' + periodeNow);
   ok('tanpa toggle / tombol potong kasbon otomatis',
     !/kasbon_auto/.test(r.text) && !/kasbon-apply/.test(r.text) && !/kasbon-mode/.test(r.text) && !/kasbon-reset/.test(r.text));
-  ok('kolom kasbon tetap ada (catatan slip)', /name="\d+_pot_kasbon"/.test(r.text));
+  ok('kolom kasbon tetap ada (catatan slip)', /name="\d+_c_pot_kasbon"/.test(r.text));
   const piuSebelum = db.prepare('SELECT COUNT(*) c FROM piutang').get().c;
   const pbSebelum = db.prepare('SELECT COUNT(*) c FROM piutang_bayar').get().c;
   const bodyKasbon = { periode: periodeNow, ids: rows.map(x => x.id).join(',') };

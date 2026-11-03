@@ -9,12 +9,20 @@ const lib = require('./lib');
 const dbm = require('./db');
 const ui = require('./ui');
 const saas = require('./saas');
-const mailer = require('./mailer');
+const storage = require('./storage');
+const queue = require('./queue');
 
 const PORT = process.env.PORT || 3120;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BODY = 30 * 1024 * 1024;
 const MEDIA_BASE = String(process.env.APP_MEDIA_URL || 'http://127.0.0.1:4310').replace(/\/+$/, '');
+
+/* ---------------- helper ---------------- */
+function clientIp(req) {
+  const f = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = f || String(req.socket && req.socket.remoteAddress || '');
+  return ip.replace(/^::ffff:/, '').slice(0, 60);
+}
 
 /* ---------------- tiny router ---------------- */
 const routes = [];
@@ -184,23 +192,20 @@ function resolveTa(req) {
   req.TA = dbm.tahunById(taId) || dbm.activeTahun();
 }
 
-/* ---------------- upload proxy (media) ---------------- */
-async function uploadMedia(base64, filename) {
-  const token = process.env.APP_MEDIA_TOKEN || '';
-  if (!token) throw new Error('Fitur unggah berkas belum aktif (token media belum tersedia). Simpan transaksi tanpa lampiran, lalu hubungi admin.');
-  const clean = String(filename || 'berkas').replace(/[^\w.\- ]+/g, '_').slice(-120);
-  const b64 = String(base64).includes(',') ? String(base64).split(',').pop() : String(base64);
-  const buf = Buffer.from(b64, 'base64');
-  if (!buf.length) throw new Error('Berkas kosong / gagal dibaca.');
-  const r = await fetch(`${MEDIA_BASE}/api/app-media/upload?filename=${encodeURIComponent(clean)}`, {
-    method: 'POST',
-    headers: { 'X-App-Media-Token': token, 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length },
-    body: buf
-  });
-  let j = {};
-  try { j = await r.json(); } catch (e) { }
-  if (!r.ok || !j.ok) throw new Error(j.error || j.message || 'Berkas ditolak oleh server media (periksa tipe/ukuran berkas).');
-  return j.url;
+/* ---------------- upload berkas (terisolasi per sekolah) ---------------- */
+/**
+ * Nama berkas selalu memuat tenant_id + stempel waktu + acak (lihat storage.js)
+ * sehingga berkas sekolah berbeda tidak pernah saling menimpa.
+ */
+async function uploadMedia(base64, filename, opts = {}) {
+  const conn = dbm.currentTenantConn();
+  const tenantId = Number(opts.tenantId || (conn && conn.__tenantId) || 1);
+  const jenis = opts.jenis || 'lain';
+  if (!process.env.APP_MEDIA_TOKEN && !opts.allowLocal) {
+    // tanpa token media (mode lokal) tetap disimpan di storage/tenants/<id>/...
+  }
+  const r = await storage.saveUpload({ base64, filename, jenis, tenantId });
+  return r.url;
 }
 
 /* ---------------- shared page helpers ---------------- */
@@ -228,6 +233,8 @@ function page(req, res, { title, sub = '', active, content }) {
   const c = ctx(req);
   const tenant = req.tenant || null;
   const st = saas.statusOf(tenant);
+  // pengumuman global dari Super Admin (banner top bar + pop-up sekali per sesi)
+  const notices = saas.visibleAnnouncements(tenant ? tenant.id : null);
   res.html(ui.layout({
     title, sub, user: c.user, active, base: c.base, content,
     query: req.query, roleLabel: c.roleLabel, pendingCount: c.pendingCount,
@@ -246,7 +253,8 @@ function page(req, res, { title, sub = '', active, content }) {
     tenantInfo: tenant ? { nama: tenant.nama, kode: tenant.school_code, status: st, paket: tenant.paket } : null,
     impersonate: (req.sessionRow && req.sessionRow.imp_by)
       ? { nama: (saas.adminById(req.sessionRow.imp_by) || {}).nama || 'Super Admin' }
-      : null
+      : null,
+    announcements: notices
   }));
 }
 
@@ -274,8 +282,37 @@ function guard(req, res, module, action) {
   return true;
 }
 
-/* ---------------- favicon dari logo sekolah ---------------- */
+/* ---------------- favicon: logo tenant atau branding default sistem ---------------- */
 const favCache = { url: null, buf: null, mime: '', at: 0 };
+const favSysCache = { url: null, buf: null, mime: '', at: 0 };
+/** favicon DEFAULT sistem (dipakai portal login utama / panel Super Admin) */
+async function sysFavicon() {
+  const fav = String(saas.get('saas_favicon', '') || '');
+  const logo = String(saas.get('saas_logo', '') || '');
+  const src = fav || logo;
+  const now = Date.now();
+  if (src && favSysCache.url === src && favSysCache.buf && now - favSysCache.at < 30 * 60 * 1000) return favSysCache;
+  if (src) {
+    try {
+      const r = await fetch(src, { signal: AbortSignal.timeout(4000) });
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        const ct = String(r.headers.get('content-type') || 'image/png').split(';')[0];
+        if (buf.length && /^image\//.test(ct)) {
+          Object.assign(favSysCache, { url: src, buf, mime: ct, at: now });
+          return favSysCache;
+        }
+      }
+    } catch (e) { }
+  }
+  // fallback: SVG inisial nama aplikasi
+  const nama = String(saas.appName() || 'SIMKEU').trim();
+  const ini = (nama.charAt(0) || 'S').toUpperCase();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#8B5CF6"/></linearGradient></defs><rect width="100" height="100" rx="24" fill="url(#g)"/><text x="50" y="70" font-family="Inter,Arial,sans-serif" font-size="52" font-weight="800" fill="#fff" text-anchor="middle">${ini}</text></svg>`;
+  Object.assign(favSysCache, { url: 'sys', buf: Buffer.from(svg, 'utf8'), mime: 'image/svg+xml', at: now });
+  return favSysCache;
+}
+
 async function faviconResponse(pathname) {
   const logo = dbm.getSetting('sekolah_logo', '');
   const now = Date.now();
@@ -324,7 +361,7 @@ post('/ta/pilih', (req, res) => {
 require('./routes/auth')({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, COOKIE, roleLabel, permissionMatrix, uploadMedia, renderError, flashUrl, saas });
 require('./routes/dashboard')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas });
 require('./routes/approval')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
-require('./routes/master')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl });
+require('./routes/master')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl, saas, refreshPortalMap: portalMapRebuild });
 require('./routes/aset_akun')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl });
 require('./routes/transaksi')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl });
 require('./routes/rekon')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
@@ -333,6 +370,7 @@ require('./routes/piutang_lain')({ get, post, dbm, lib, ui, page, ctx, guard, ca
 require('./routes/piutang_lainnya')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/pegawai')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/payroll')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/payroll_kolom')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/beasiswa')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/tutup')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/bku_detail')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
@@ -341,6 +379,7 @@ require('./routes/laporan')({ get, post, dbm, lib, ui, page, ctx, guard, can, fl
 require('./routes/sistem')({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMatrix, uploadMedia, flashUrl });
 require('./routes/desain')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/akademik')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/kelas_tingkat')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/iuran')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/ekskul')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/trash')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
@@ -348,10 +387,11 @@ require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, fla
 require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
 require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
-require('./routes/panduan')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl });
-require('./routes/backup_cloud')({ get, post, dbm, lib, ui, page, ctx, guard, flashUrl });
+require('./routes/panduan')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl, saas });
 require('./routes/layanan')({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flashUrl, saas });
-require('./routes/superadmin')({ get, post, dbm, lib, ui, saas, mailer, uploadMedia, renderError });
+require('./routes/backup_tg')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas });
+require('./routes/tiket')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas, uploadMedia });
+require('./routes/superadmin')({ get, post, dbm, lib, ui, saas, queue, uploadMedia, renderError, refreshPortalMap: portalMapRebuild });
 
 /* ---------------- halaman status (suspend / fitur nonaktif) ---------------- */
 function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {
@@ -371,27 +411,77 @@ function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {
 </div></body></html>`;
 }
 
+/* ---------------- halaman sistem: maintenance & domain belum terverifikasi ---------------- */
+function maintenancePage({ base, m }) {
+  const nama = saas.appName();
+  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sistem Dalam Perbaikan</title>
+<link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}"><link rel="icon" href="${base}/favicon.ico">
+<style>body{display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}
+.mt-card{max-width:600px;width:100%;text-align:center;padding:38px 32px}
+.mt-ico{width:76px;height:76px;margin:0 auto 18px;border-radius:24px;display:grid;place-items:center;
+background:linear-gradient(135deg,#F59E0B,#EA580C);color:#fff;font-size:34px}
+.mt-card h1{font-size:25px;margin:0 0 10px;letter-spacing:-.02em}
+.mt-card p{line-height:1.7;margin:0 auto 20px;max-width:460px;color:var(--muted,#6B6577)}
+.mt-eta{display:inline-block;background:#FFF7ED;color:#C2410C;font-weight:700;font-size:12.5px;
+padding:8px 14px;border-radius:999px;margin-bottom:18px}</style></head>
+<body><div class="card mt-card">
+  <div class="mt-ico">&#9881;</div>
+  <h1>Sistem Dalam Perbaikan</h1>
+  <p>${lib.esc(m.pesan || 'Kami sedang melakukan pemeliharaan sistem. Silakan kembali beberapa saat lagi.')}</p>
+  ${m.selesai ? `<div class="mt-eta">Perkiraan selesai: ${lib.esc(m.selesai)}</div>` : ''}
+  <div class="flex" style="justify-content:center;gap:10px;flex-wrap:wrap">
+    <a class="btn" href="${base}/">Coba Lagi</a>
+    <a class="btn" href="${base}/login">Halaman Masuk</a>
+  </div>
+  <p class="small muted" style="margin-top:20px">${lib.esc(nama)} · pemeliharaan terjadwal oleh Super Admin Pusat</p>
+</div></body></html>`;
+}
+
+function domainPendingPage({ base, tenant }) {
+  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Domain Belum Terverifikasi</title>
+<link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}"><link rel="icon" href="${base}/favicon.ico">
+</head><body style="display:grid;place-items:center;min-height:100vh;margin:0;padding:24px">
+<div class="card" style="max-width:560px;width:100%;padding:34px;text-align:center">
+  <div style="width:64px;height:64px;border-radius:20px;margin:0 auto 16px;display:grid;place-items:center;background:#FEF3C7;color:#B45309;font-size:28px">!</div>
+  <h2 style="margin:0 0 8px;font-size:22px">Domain Belum Terverifikasi</h2>
+  <p class="muted" style="line-height:1.7;margin:0 auto 18px;max-width:420px">
+    Domain ini terdaftar untuk <b>${lib.esc(tenant.nama)}</b> tetapi statusnya belum VERIFIED atau
+    DNS belum mengarah ke server. Hubungi Super Admin Pusat untuk menyelesaikan verifikasi.</p>
+  <a class="btn btn-primary" href="${base}/login">Buka halaman masuk</a>
+</div></body></html>`;
+}
+
 /* ---------------- portal publik per sekolah (slug bisa diubah tiap tenant) ---------------- */
 let portalMapCache = { at: 0, map: {} };
+/** peta slug portal (unik antar sekolah) → tenant; slug kanonik ada di control plane */
 function portalSlugMap(force = false) {
   if (!force && Date.now() - portalMapCache.at < 60000) return portalMapCache.map;
   const map = {};
   let tenants = [];
   try { tenants = saas.allTenants(); } catch (e) { tenants = []; }
+  // 1) slug kanonik tiap sekolah (control plane) → /portal
+  for (const t of tenants) {
+    const slug = String(t.portal_slug || '').trim().toLowerCase();
+    if (slug && !map[slug]) map[slug] = { path: '/portal', tenantId: t.id, canonical: true };
+  }
+  // 2) slug portal pada pengaturan sekolah (alamat lama tetap didukung)
   for (const t of tenants) {
     try {
       const conn = dbm.openTenantConn(t.id, t.db_file);
       const rows = conn.prepare("SELECT k,v FROM settings WHERE k IN ('portal_slug','portal_pegawai_slug','portal_slip_slug')").all();
-      const g = (k, d) => { const r = rows.find(x => x.k === k); return (r && r.v) || d; };
+      const g = (k, d) => { const r = rows.find(x => x.k === k); return String((r && r.v) || d).trim().toLowerCase(); };
       const add = (slug, path) => { if (slug && !map[slug]) map[slug] = { path, tenantId: t.id }; };
-      add(g('portal_slug', 'portal'), '/portal');
       add(g('portal_pegawai_slug', 'portal-pegawai'), '/portal-pegawai');
       add(g('portal_slip_slug', 'portal-slip'), '/portal-slip');
+      add(g('portal_slug', 'portal'), '/portal');
     } catch (e) { }
   }
   portalMapCache = { at: Date.now(), map };
   return map;
 }
+function portalMapRebuild() { return portalSlugMap(true); }
 
 const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/login'];
 function isPublicPath(pathname) {
@@ -399,6 +489,20 @@ function isPublicPath(pathname) {
 }
 
 /* ---------------- server ---------------- */
+function notFoundSchool(base, host) {
+  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>404 · Sekolah Tidak Ditemukan</title>
+<link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}"><link rel="icon" href="${base}/favicon.ico">
+</head><body style="display:grid;place-items:center;min-height:100vh;margin:0;padding:24px">
+<div class="card" style="max-width:520px;width:100%;padding:36px;text-align:center">
+  <div style="font-size:58px;font-weight:800;color:var(--o-500);line-height:1;letter-spacing:-.04em">404</div>
+  <h2 style="margin:10px 0 8px;font-size:21px">Sekolah Tidak Ditemukan</h2>
+  <p class="muted" style="line-height:1.7;margin:0 auto 18px;max-width:400px">
+    Alamat <b>${lib.esc(host || '')}</b> tidak terdaftar pada layanan ini. Periksa kembali tautan portal sekolah Anda.</p>
+  <a class="btn btn-primary" href="${base}/login">Halaman Masuk</a>
+</div></body></html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   const base = String(req.headers['x-public-base-path'] || '').replace(/\/$/, '');
   req.BASE = base;
@@ -423,12 +527,30 @@ const server = http.createServer(async (req, res) => {
 
   const R = makeRes(res);
   const session = readSession(req);
+  const isSuperPath = pathname0 === '/super-admin' || pathname0.startsWith('/super-admin/');
 
-  // ---- favicon: logo sekolah yang sedang diakses ----
+  // ---- penentuan tenant dari HOST (custom domain) ----
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const dom = (() => { try { return saas.tenantByDomain(host); } catch (e) { return null; } })();
+  if (dom && !dom.verified && !isSuperPath) {
+    return R.html(domainPendingPage({ base, tenant: dom.tenant }), 404);
+  }
+  const hostTenant = dom && dom.verified ? dom.tenant : null;
+
+  // ---- favicon: logo sekolah (bila ada konteks sekolah), selain itu branding default ----
   if (pathname0 === '/favicon.ico' || pathname0 === '/favicon.svg' || pathname0 === '/favicon.png') {
-    const t = (session && session.tenant) || saas.tenantById(1);
+    const segsFav = pathname0.split('/').filter(Boolean);
+    const slugFav = segsFav[0] || '';
+    let tFav = (session && session.tenant) || hostTenant || null;
+    if (!tFav && slugFav && !isSuperPath) {
+      try {
+        const m = portalSlugMap();
+        const hit = m[slugFav] || portalSlugMap(true)[slugFav];
+        if (hit) tFav = saas.tenantById(hit.tenantId || hit.id);
+      } catch (e) { }
+    }
     try {
-      const fav = t ? await dbm.runAsTenant(t, async () => faviconResponse()) : await faviconResponse();
+      const fav = tFav ? await dbm.runAsTenant(tFav, async () => faviconResponse()) : await sysFavicon();
       res.writeHead(200, { 'Content-Type': fav.mime, 'Cache-Control': 'public, max-age=1800' });
       return res.end(fav.buf);
     } catch (e) {
@@ -464,37 +586,109 @@ const server = http.createServer(async (req, res) => {
     await m.handler(req, R);
   }
 
+  /* ================= MODE PERBAIKAN (MAINTENANCE) ================= */
+  const maint = (() => { try { return saas.maintenance(); } catch (e) { return { aktif: false }; } })();
+  if (maint.aktif && !isSuperPath) {
+    if (!storage.__filesPath || !pathname0.startsWith('/files/')) {
+      return R.html(maintenancePage({ base, m: maint }), 503);
+    }
+  }
+
   /* ================= PORTAL SUPER ADMIN PUSAT (dedicated route) ================= */
-  if (pathname0 === '/super-admin' || pathname0.startsWith('/super-admin/')) {
+  if (isSuperPath) {
     try {
       req.saasSession = session && session.row.kind === 'saas' ? session.row : null;
       req.saasUser = req.saasSession ? saas.adminById(req.saasSession.user_id) : null;
       req.body = {};
       if (['POST', 'PUT', 'PATCH'].includes(req.method)) req.body = await readBody(req);
-      return await runRoute(pathname0);
+      return await dbm.runWithMeta({ ip: clientIp(req), tenantId: null }, () => runRoute(pathname0));
     } catch (err) { return handleError(err, pathname0); }
+  }
+
+  /* ================= BERKAS TERISOLASI PER SEKOLAH (mode lokal) ================= */
+  if (pathname0.startsWith('/files/')) {
+    const segs = pathname0.split('/').filter(Boolean); // files / tenant / jenis / name
+    if (segs.length === 4) {
+      const fp = storage.localFile(segs[1], segs[2], segs[3]);
+      if (fp) {
+        const ext = path.extname(fp).toLowerCase();
+        const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+          : ext === '.webp' ? 'image/webp' : ext === '.pdf' ? 'application/pdf'
+            : ext === '.svg' ? 'image/svg+xml' : 'application/octet-stream';
+        res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
+        return fs.createReadStream(fp).pipe(res);
+      }
+    }
+    return R.html(renderError(404, 'Berkas tidak ditemukan', 'Berkas mungkin sudah dihapus.'), 404);
   }
 
   try {
     req.body = {};
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) req.body = await readBody(req);
 
-    /* ---------- belum login: halaman publik + portal orang tua ---------- */
+    /* ---------- belum login: halaman publik + portal orang tua (slug per sekolah) ---------- */
     if (!session) {
-      const first = pathname0.split('/').filter(Boolean)[0] || '';
+      const segs = pathname0.split('/').filter(Boolean);
+      const first = segs[0] || '';
       const kode = String((req.query.get && req.query.get('kode')) || (req.body && req.body.kode) || '').trim();
       const tByCode = kode ? saas.tenantByCode(kode) : null;
       const canonical = ['/portal', '/portal-pegawai', '/portal-slip'];
-      // slug bisa baru saja diubah → bila tidak ketemu, bangun ulang peta sekali
-      let slugHit = kode ? null : portalSlugMap()[first];
-      if (!kode && !slugHit) slugHit = portalSlugMap(true)[first];
+      const subRoutes = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama']);
+      const slugMap = (function () { const m = portalSlugMap(); return m[first] ? m : portalSlugMap(true); })();
+
+      // bentuk URL: /<slug>/portal, /portal/<slug>, /<slug>/portal-pegawai/<...>
       let portalPath = null, portalTenant = null;
-      for (const c of canonical) {
-        if (pathname0 === c || pathname0.startsWith(c + '/')) { portalPath = pathname0; break; }
+      if (hostTenant) {
+        // domain khusus terverifikasi: portal berada di akar domain
+        if (pathname0 === '/' ) { portalPath = '/portal'; portalTenant = hostTenant; }
+        for (const c of canonical) {
+          if (pathname0 === c || pathname0.startsWith(c + '/')) { portalPath = pathname0; portalTenant = portalTenant || hostTenant; break; }
+        }
       }
-      if (!portalPath && slugHit) {
-        portalPath = slugHit.path + pathname0.slice(first.length + 1);
-        portalTenant = saas.tenantById(slugHit.tenantId);
+      if (!portalPath) {
+        for (const c of canonical) {
+          if (pathname0 !== c && !pathname0.startsWith(c + '/')) continue;
+          // '/portal/<slug>' bukan route kanonik → biarkan diurai sebagai slug di bawah
+          if (c === '/portal' && segs.length >= 2 && !subRoutes.has(segs[1])) continue;
+          portalPath = pathname0;
+          break;
+        }
+      }
+      // /portal/<slug>  (kecuali sub-route internal seperti /portal/siswa)
+      if (!portalPath && first === 'portal' && segs[1] && !subRoutes.has(segs[1])) {
+        const t = saas.tenantByPortalSlug(segs[1]);
+        if (!t) return R.html(notFoundSchool(base, segs[1]), 404);
+        portalPath = '/portal' + (segs.length > 2 ? '/' + segs.slice(2).join('/') : '');
+        portalTenant = t;
+      }
+      // alamat per sekolah: /<slug> (kanonik → /portal) atau /<slug-portal-lama>
+      if (!portalPath) {
+        const hit = slugMap[first];
+        if (hit) {
+          const rest = pathname0.slice(first.length + 1);   // '' | 'portal' | 'siswa' | 'portal-pegawai/x'
+          if (hit.canonical) {
+            if (!rest) portalPath = '/portal';
+            else if (/^(portal|portal-pegawai|portal-slip)(\/|$)/.test(rest)) portalPath = '/' + rest;
+          } else {
+            portalPath = hit.path + (rest ? '/' + rest : '');
+          }
+          if (portalPath) portalTenant = saas.tenantById(hit.tenantId);
+        }
+      }
+      // /<slug>/portal...
+      if (!portalPath && segs.length >= 2) {
+        const rest = '/' + segs.slice(1).join('/');
+        const isPortalShape = ['/portal', '/portal-pegawai', '/portal-slip'].some(c => rest === c || rest.startsWith(c + '/'));
+        if (isPortalShape) {
+          const t = saas.tenantByPortalSlug(segs[0]);
+          if (!t) return R.html(notFoundSchool(base, segs[0]), 404);
+          portalPath = rest;
+          portalTenant = t;
+        }
+      }
+      if (!portalPath && kode) {
+        const hit = slugMap[first];
+        if (hit) { portalPath = hit.path + pathname0.slice(first.length + 1); portalTenant = saas.tenantById(hit.tenantId); }
       }
       if (portalPath) {
         const t = tByCode || portalTenant || saas.tenantById(1);
@@ -502,7 +696,9 @@ const server = http.createServer(async (req, res) => {
         return await dbm.runAsTenant(t, async () => {
           req.tenant = t;
           req.TA = null; req.taId = null;
-          try { await runRoute(portalPath); } catch (err) { handleError(err, portalPath); }
+          try {
+            await dbm.runWithMeta({ ip: clientIp(req), tenantId: t.id, tenantNama: t.nama }, () => runRoute(portalPath));
+          } catch (err) { handleError(err, portalPath); }
         });
       }
       if (!isPublicPath(pathname0)) {
@@ -510,7 +706,7 @@ const server = http.createServer(async (req, res) => {
         return R.redirect(base + '/login');
       }
       req.tenant = null;
-      return await runRoute(pathname0);
+      return await dbm.runWithMeta({ ip: clientIp(req) }, () => runRoute(pathname0));
     }
 
     /* ---------- super admin memakai cookie sekolah? tolak dengan sopan ---------- */
@@ -523,62 +719,79 @@ const server = http.createServer(async (req, res) => {
       try { pathname = dbm.portalRewrite(pathname0) || pathname0; } catch (e) { }
       req.tenant = tenant;
       req.sessionRow = session.row;
-      try {
-        const u = loadTenantUser(session.row);
-        if (!u) {
-          saas.destroySession(session.row.token);
-          R.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
-          return R.redirect(base + '/login?err=' + encodeURIComponent('Akun Anda tidak aktif. Hubungi admin sekolah.'));
-        }
-        req.user = u;
-
-        // ---- pemblokiran otomatis (masa aktif habis / ditangguhkan) ----
-        if (saas.isBlocked(tenant) && !ALWAYS_ALLOWED.some(p => pathname === p || pathname.startsWith(p + '/'))) {
-          const st = saas.statusOf(tenant);
-          return R.html(statusPage({
-            base, badge: 'Masa aktif berakhir', tone: 'err',
-            title: 'Akses sekolah ditangguhkan sementara',
-            desc: `Masa aktif <b>${lib.esc(tenant.nama)}</b> (${lib.esc(tenant.school_code)}) berakhir pada <b>${lib.esc(tenant.expires_at || '-')}</b>.
-              Data sekolah tetap aman dan akan langsung aktif kembali setelah perpanjangan diverifikasi.`,
-            actions: [{ label: 'Info Layanan & Perpanjang', href: '/info-layanan', primary: true }, { label: 'Keluar', href: '/logout' }]
-          }), 403);
-        }
-
-        // ---- feature flagging: blokir akses langsung ke fitur yang dimatikan ----
-        const blockedLabel = saas.blockedFeature(tenant, pathname);
-        if (blockedLabel) {
-          return R.html(statusPage({
-            base, badge: 'Fitur tidak aktif', tone: 'warn',
-            title: blockedLabel + ' belum tersedia',
-            desc: `Fitur ini tidak termasuk paket <b>${lib.esc(saas.PAKET[tenant.paket] || tenant.paket)}</b> sekolah Anda.
-              Hubungi Super Admin Pusat untuk mengaktifkannya.`,
-            actions: [{ label: 'Kembali ke Dashboard', href: '/', primary: true }, { label: 'Info Layanan', href: '/info-layanan' }]
-          }), 403);
-        }
-
-        const demoMode = u.role === 'demo';
-        const run = async () => {
-          if (demoMode) {
-            const taDemo = dbm.activeTahun();
-            req.TA = taDemo || null;
-            req.taId = taDemo ? taDemo.id : null;
-          } else {
-            resolveTa(req);
+      return await dbm.runWithMeta({ ip: clientIp(req), tenantId: tenant.id, tenantNama: tenant.nama }, async () => {
+        try {
+          // ---- keamanan sesi: sesi harus benar-benar milik sekolah ini ----
+          if (Number(session.row.tenant_id) !== Number(tenant.id)) {
+            saas.destroySession(session.row.token);
+            R.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
+            return R.redirect(base + '/login?err=' + encodeURIComponent('Sesi tidak valid untuk sekolah ini. Silakan masuk kembali.'));
           }
-          await runRoute(pathname);
-        };
-        if (demoMode) {
-          dbm.ensureDemoDb();
-          await dbm.runAsDemo(run);
-        } else await run();
-      } catch (err) { handleError(err, pathname); }
+          const u = loadTenantUser(session.row);
+          if (!u) {
+            saas.destroySession(session.row.token);
+            R.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
+            return R.redirect(base + '/login?err=' + encodeURIComponent('Akun Anda tidak aktif. Hubungi admin sekolah.'));
+          }
+          if (u.tenant_id !== undefined && u.tenant_id !== null && Number(u.tenant_id) !== Number(tenant.id)) {
+            saas.destroySession(session.row.token);
+            return R.redirect(base + '/login?err=' + encodeURIComponent('Akun tidak terikat pada sekolah ini.'));
+          }
+          req.user = u;
+
+          // ---- pemblokiran otomatis (masa aktif habis / ditangguhkan) ----
+          if (saas.isBlocked(tenant) && !ALWAYS_ALLOWED.some(p => pathname === p || pathname.startsWith(p + '/'))) {
+            return R.html(statusPage({
+              base, badge: 'Masa aktif berakhir', tone: 'err',
+              title: 'Akses sekolah ditangguhkan sementara',
+              desc: `Masa aktif <b>${lib.esc(tenant.nama)}</b> (${lib.esc(tenant.school_code)}) berakhir pada <b>${lib.esc(tenant.expires_at || '-')}</b>.
+                Data sekolah tetap aman dan akan langsung aktif kembali setelah perpanjangan diverifikasi.`,
+              actions: [{ label: 'Info Layanan & Perpanjang', href: '/info-layanan', primary: true }, { label: 'Keluar', href: '/logout' }]
+            }), 403);
+          }
+
+          // ---- feature flagging: blokir akses langsung ke fitur yang dimatikan ----
+          const blockedLabel = saas.blockedFeature(tenant, pathname);
+          if (blockedLabel) {
+            return R.html(statusPage({
+              base, badge: 'Fitur tidak aktif', tone: 'warn',
+              title: blockedLabel + ' belum tersedia',
+              desc: `Fitur ini tidak termasuk paket <b>${lib.esc(saas.PAKET[tenant.paket] || tenant.paket)}</b> sekolah Anda.
+                Hubungi Super Admin Pusat untuk mengaktifkannya.`,
+              actions: [{ label: 'Kembali ke Dashboard', href: '/', primary: true }, { label: 'Info Layanan', href: '/info-layanan' }]
+            }), 403);
+          }
+
+          const demoMode = u.role === 'demo';
+          const run = async () => {
+            if (demoMode) {
+              const taDemo = dbm.activeTahun();
+              req.TA = taDemo || null;
+              req.taId = taDemo ? taDemo.id : null;
+            } else {
+              resolveTa(req);
+            }
+            await runRoute(pathname);
+          };
+          if (demoMode) {
+            dbm.ensureDemoDb();
+            await dbm.runAsDemo(run);
+          } else await run();
+        } catch (err) { handleError(err, pathname); }
+      });
     });
   } catch (err) {
     handleError(err, pathname0);
   }
 });
 
-/* ---------------- startup: control plane, penjadwalan, backup email ---------------- */
+/* ---------------- startup: control plane, queue, penjadwalan backup ---------------- */
+try {
+  queue.init(saas.db);
+  queue.start(30000);
+  require('./backup_tg').registerJobs(dbm, saas, queue);
+} catch (e) { console.error('[queue-init]', e.message); }
+
 try {
   const admin = saas.ensureBootstrap();
   if (admin && admin.created) {
@@ -605,19 +818,14 @@ function runBillingTick() {
   const today = saas.todayISO();
   if (String(saas.get('last_daily', '')) === today) return;
   try {
-    const r = saas.runDailyJobs();
+    // pekerjaan berat (tagihan + pengingat WA) diantrekan, bukan dijalankan inline
+    queue.push('billing.daily', { tanggal: today });
     saas.set('last_daily', today);
-    if (r.invoices || r.suspended) console.log(`[saas] tagihan baru: ${r.invoices}, sekolah ditangguhkan: ${r.suspended}`);
   } catch (e) { console.error('[saas-billing]', e.message); }
 }
 setTimeout(runBillingTick, 15000).unref();
 setInterval(runBillingTick, 30 * 60 * 1000).unref();
 
-/* auto-backup database via email (SMTP) — 2x sehari 06:00 & 15:00, berkas zip
-   dihapus dari disk segera setelah email terkirim. */
-setTimeout(() => { mailer.checkSchedules(dbm, saas).catch(e => console.error('[backup-email]', e.message)); }, 20000).unref();
-setInterval(() => { mailer.checkSchedules(dbm, saas).catch(e => console.error('[backup-email]', e.message)); }, 5 * 60 * 1000).unref();
-
-/* auto-backup Google Drive: penjadwalan internal 2× sehari (06:00 & 15:00).
-   Tidak pernah dipicu oleh aksi simpan transaksi harian. */
-try { require('./gdrive').startScheduler(dbm); } catch (e) { console.error('[gdrive]', e.message); }
+/* auto-backup Telegram: penjadwalan 2x sehari (06:00 & 15:00) melalui queue worker
+   supaya banyak sekolah tidak membebani satu request (lihat queue.js + backup_tg.js). */
+try { require('./backup_tg').startScheduler(dbm, saas); } catch (e) { console.error('[backup-tg]', e.message); }

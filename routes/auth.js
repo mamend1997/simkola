@@ -50,26 +50,17 @@ ${ui.themeCss(tema)}
     const err = q.get('err'), ok = q.get('ok');
     const kode = String(q.get('kode') || '').toUpperCase().slice(0, 4);
     const appName = saas.appName();
-    // bila layanan baru dipakai SATU sekolah, tampilkan identitas sekolah itu di halaman login
-    let brandLogo = '', brandNama = '';
-    try {
-      const tenants = saas.allTenants();
-      if (tenants.length === 1) {
-        const t0 = tenants[0];
-        const st0 = dbm.openTenantConn(t0.id, t0.db_file).prepare("SELECT k,v FROM settings WHERE k IN ('sekolah_logo','sekolah_nama')").all();
-        const get = k => (st0.find(r => r.k === k) || {}).v || '';
-        brandLogo = get('sekolah_logo');
-        brandNama = get('sekolah_nama');
-      }
-    } catch (e) { }
+    // portal login UTAMA selalu memakai branding DEFAULT sistem (diatur Super Admin),
+    // bukan logo sekolah — logo sekolah hanya tampil setelah masuk ke sekolahnya.
+    const sysLogo = saas.appLogo();
     res.html(authShell({
       base,
       sideTitle: 'Kelola keuangan sekolah dengan rapi, aman, dan transparan.',
       sideDesc: 'Satu tempat untuk transaksi harian, anggaran, piutang, sampai pelaporan pertanggungjawaban dana sekolah.',
       content: `
       <div class="auth-login-head">
-        ${brandLogo ? `<img src="${lib.esc(brandLogo)}" alt="Logo" class="auth-logo-img">` : `<div class="auth-logo-ph">${ui.icon('school')}</div>`}
-        <div class="auth-welcome">Selamat datang di ${lib.esc(appName)}${brandNama ? ' ' + lib.esc(brandNama) : ''}</div>
+        ${sysLogo ? `<img src="${lib.esc(sysLogo)}" alt="Logo" class="auth-logo-img">` : `<div class="auth-logo-ph">${ui.icon('school')}</div>`}
+        <div class="auth-welcome">Selamat datang di ${lib.esc(appName)}</div>
         <div class="small muted">Sistem Informasi Manajemen Keuangan Sekolah</div>
       </div>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${lib.esc(err)}</div></div>` : ''}
@@ -85,9 +76,7 @@ ${ui.themeCss(tema)}
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:6px">Masuk</button>
       </form>
       <p class="small muted" style="margin-top:18px;text-align:center">Belum punya akun sekolah?
-        <a href="${base}/register" style="color:var(--o-700);font-weight:700">Daftarkan sekolah Anda</a></p>
-      <p class="small" style="margin-top:6px;text-align:center"><a href="${base}/portal" style="color:var(--o-700);font-weight:600">Cek Tagihan Iuran Siswa (Portal Orang Tua)</a></p>
-      <p class="small muted" style="margin-top:14px;text-align:center;font-size:11px">Super Admin Pusat? <a href="${base}/super-admin/login" style="color:var(--o-700);font-weight:600">Masuk di sini</a></p>`
+        <a href="${base}/register" style="color:var(--o-700);font-weight:700">Daftarkan sekolah Anda</a></p>`
     }));
   });
 
@@ -123,6 +112,63 @@ ${ui.themeCss(tema)}
     const base = req.BASE;
     const q = req.query;
     const v = k => lib.esc(q.get(k) || '');
+    const defPkg = saas.defaultPackage();
+    const pkgs = saas.packageRows();
+    // paket terpilih: dari query (bila valid) → selain itu paket default bila bisa daftar mandiri
+    // → selain itu paket pertama yang boleh daftar mandiri (agar sekolah baru tetap bisa langsung daftar)
+    const qPkg = saas.packageByKode(v('paket'));
+    const selPkg = qPkg
+      || (saas.packageSelfTrial(defPkg) ? defPkg : (pkgs.filter(p => saas.packageSelfTrial(p))[0] || defPkg));
+    const rupiah = lib.rupiah;
+    const pkCards = pkgs.map(p => {
+      const selfTrial = saas.packageSelfTrial(p);
+      const feats = saas.packageFeatureLabels(p);
+      const trialHari = saas.packageTrialDays(p);
+      const wa = saas.waAdminLink(p);
+      return `<label class="pk-pick" data-pkg="${lib.esc(p.kode)}" data-self="${selfTrial ? 1 : 0}" data-wa="${lib.esc(wa || '')}">
+        <input type="radio" name="paket" value="${lib.esc(p.kode)}" ${p.kode === selPkg.kode ? 'checked' : ''}>
+        <div class="pk-card${p.kode === selPkg.kode ? ' on' : ''}">
+          <div class="between" style="gap:8px">
+            <div class="t-strong" style="font-size:15px">${lib.esc(p.nama)}</div>
+            ${selfTrial ? ui.badge('Daftar langsung', 'green') : ui.badge('Berbayar', 'amber')}
+          </div>
+          <div class="pk-price" style="margin-top:6px">${rupiah(p.harga_bulan)}<span class="t-sub" style="font-size:12px;font-weight:600"> / bulan</span></div>
+          <div class="small muted">${rupiah(p.harga_tahun)} / 12 bulan</div>
+          ${p.keterangan ? `<div class="small" style="margin-top:6px">${lib.esc(p.keterangan)}</div>` : ''}
+          <ul class="pk-feats">${feats.slice(0, 10).map(f => `<li>${lib.esc(f)}</li>`).join('')}${feats.length > 10 ? `<li>+ ${feats.length - 10} fitur lainnya</li>` : ''}</ul>
+          <div class="hint" style="margin-top:8px">${selfTrial
+        ? `Bisa langsung daftar & gratis ${trialHari} hari uji coba.`
+        : 'Aktivasi setelah pembayaran (hubungi admin via WhatsApp).'}</div>
+        </div>
+      </label>`;
+    }).join('');
+    const pkNoteDefault = selPkg && saas.packageSelfTrial(selPkg)
+      ? `Paket <b>${lib.esc(selPkg.nama)}</b>: langsung daftar dan dapat masa uji coba <b>${saas.packageTrialDays(selPkg)} hari</b> tanpa biaya.`
+      : `Paket <b>${lib.esc(selPkg ? selPkg.nama : defPkg.nama)}</b> berbayar — klik tombol WhatsApp untuk pembayaran &amp; aktivasi.`;
+    const cap = saas.captchaConfig();
+    const capSite = cap.siteKey;
+    let captchaHtml = '';
+    if (cap.provider === 'turnstile' && capSite) {
+      captchaHtml = `<input type="hidden" name="cf-turnstile-response" id="cfToken">
+        <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+        <div class="cf-turnstile" data-sitekey="${lib.esc(capSite)}" data-callback="__capOk" style="margin-bottom:10px"></div>
+        <script>function __capOk(t){var e=document.getElementById('cfToken');if(e)e.value=t;}</script>`;
+    } else if (cap.provider === 'recaptcha' && capSite) {
+      captchaHtml = `<input type="hidden" name="recaptcha_token" id="rcToken">
+        <script src="https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(capSite)}"></script>
+        <script>
+          document.addEventListener('submit', function (ev) {
+            var f = ev.target, t = document.getElementById('rcToken');
+            if (!f || !f.action || !/register/.test(f.action) || (t && t.value)) return;
+            ev.preventDefault();
+            grecaptcha.ready(function () {
+              grecaptcha.execute(${JSON.stringify(capSite)}, { action: 'register' }).then(function (tok) {
+                t.value = tok; f.submit();
+              });
+            });
+          }, true);
+        </script>`;
+    }
     res.html(authShell({
       base,
       sideTitle: 'Daftarkan sekolah Anda dalam 1 menit.',
@@ -149,44 +195,129 @@ ${ui.themeCss(tema)}
           <div class="field"><label>Ulangi Password</label><input type="password" name="admin_password2" required minlength="6" placeholder="ulangi password"></div>
         </div>
         <div class="field"><label>Nomor WhatsApp / Telepon</label><input type="text" name="telp" value="${v('telp')}" placeholder="08xx"></div>
-        <div class="field"><label>Paket Langganan</label>
-          <select name="paket">
-            <option value="standard">Standard — BKU, transaksi, laporan, piutang, aset, backup</option>
-            <option value="pro">Pro — semua fitur (iuran siswa, payroll, akademik, ekskul, beasiswa)</option>
-          </select></div>
-        ${saas.trialDays() > 0 ? `<div class="alert info">${ui.icon('info')}<div>Masa uji coba <b>${saas.trialDays()} hari</b> aktif otomatis. Kode sekolah 4 karakter dibuatkan sistem dan ditampilkan setelah pendaftaran.</div></div>` : ''}
-        <button class="btn btn-primary btn-block" type="submit">Daftarkan Sekolah</button>
+        <div class="field"><label>Jenjang Pendidikan</label>
+          <select name="jenjang">
+            ${Object.entries(dbm.JENJANG).map(([k, val]) => `<option value="${lib.esc(k)}" ${v('jenjang') === lib.esc(k) ? 'selected' : ''}>${lib.esc(val.label)}${val.preset.length ? ' — tingkat ' + val.preset.join(', ') : ''}</option>`).join('')}
+          </select>
+          <div class="hint">Preset tingkat kelas otomatis mengikuti jenjang ini.</div></div>
+        <hr class="sep">
+        <div class="t-strong" style="margin-bottom:8px">Pilih Paket Langganan</div>
+        <div class="pk-grid">
+          ${pkCards}
+        </div>
+        <div class="alert info" id="pkNote">${ui.icon('info')}<div id="pkNoteBody">${pkNoteDefault}</div></div>
+        ${captchaHtml}
+        <button class="btn btn-primary btn-block" type="submit" id="btnDaftar">Daftarkan Sekolah</button>
+        <a class="btn btn-success btn-block" id="btnWa" style="display:none;background:#25D366;border-color:#25D366;color:#fff"
+          target="_blank" rel="noopener" href="#">${ui.icon('send')}Langganan via WhatsApp Admin</a>
       </form>
-      <p class="small muted" style="margin-top:16px;text-align:center">Sudah punya akun? <a href="${base}/login" style="color:var(--o-700);font-weight:700">Masuk</a></p>`
+      <p class="small muted" style="margin-top:16px;text-align:center">Sudah punya akun? <a href="${base}/login" style="color:var(--o-700);font-weight:700">Masuk</a></p>
+      <script>
+      (function () {
+        var wraps = Array.prototype.slice.call(document.querySelectorAll('.pk-pick'));
+        var btnDaftar = document.getElementById('btnDaftar');
+        var btnWa = document.getElementById('btnWa');
+        var note = document.getElementById('pkNoteBody');
+        function sync() {
+          var sel = wraps.filter(function (w) { return w.querySelector('input').checked; })[0] || wraps[0];
+          if (!sel) return;
+          wraps.forEach(function (w) { w.querySelector('.pk-card').classList.toggle('on', w === sel); });
+          var self = sel.getAttribute('data-self') === '1';
+          var wa = sel.getAttribute('data-wa') || '';
+          if (btnDaftar) btnDaftar.style.display = self ? '' : 'none';
+          if (btnWa) {
+            btnWa.style.display = self ? 'none' : '';
+            if (wa) { btnWa.setAttribute('href', wa); btnWa.removeAttribute('aria-disabled'); }
+            else { btnWa.setAttribute('href', '#'); btnWa.setAttribute('aria-disabled', 'true'); }
+          }
+          if (note) {
+            var nm = sel.querySelector('.pk-card .t-strong').textContent.trim();
+            note.innerHTML = self
+              ? 'Paket <b>' + nm + '</b>: langsung daftar dan dapat masa uji coba tanpa biaya.'
+              : (wa ? 'Paket <b>' + nm + '</b> berbayar — klik tombol WhatsApp untuk pembayaran &amp; aktivasi.'
+                    : 'Paket <b>' + nm + '</b> berbayar. Nomor admin belum diatur — hubungi sekolah lain yang sudah aktif.');
+          }
+        }
+        wraps.forEach(function (w) {
+          w.querySelector('input').addEventListener('change', sync);
+          w.addEventListener('click', function (e) {
+            if (e.target && e.target.tagName === 'INPUT') return;
+            w.querySelector('input').checked = true;
+            sync();
+          });
+        });
+        sync();
+      })();
+      </script>`
     }));
   }
 
   get('/register', (req, res) => registerForm(req, res));
   get('/daftar', (req, res) => registerForm(req, res));
 
-  post('/register', (req, res) => {
+  post('/register', async (req, res) => {
     const base = req.BASE;
     const b = req.body || {};
     const back = q => base + '/register?' + Object.keys(q).map(k => k + '=' + encodeURIComponent(q[k] || '')).join('&');
     const nama = String(b.nama || '').trim();
     const email = String(b.admin_email || '').trim();
     const p1 = String(b.admin_password || ''), p2 = String(b.admin_password2 || '');
-    if (!nama) return res.redirect(back({ err: 'Nama sekolah wajib diisi.', nama, admin_email: email }));
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.redirect(back({ err: 'Email admin tidak valid.', nama }));
-    if (p1.length < 6) return res.redirect(back({ err: 'Password minimal 6 karakter.', nama, admin_email: email }));
-    if (p1 !== p2) return res.redirect(back({ err: 'Konfirmasi password tidak sama.', nama, admin_email: email }));
+    const keep = { nama, admin_email: email, admin_nama: b.admin_nama, alamat: b.alamat, kepala: b.kepala, telp: b.telp, jenjang: b.jenjang };
+    const ip = saas.clientIpOf(req);
+
+    // ---- 1) RATE LIMIT / IP THROTTLING (maks. N pendaftaran per jam, blokir X jam) ----
+    const status = saas.regStatus(ip);
+    if (status.blocked) {
+      return res.redirect(back(Object.assign({}, keep, {
+        err: `Terlalu banyak permintaan pendaftaran. Silakan coba beberapa saat lagi (${status.retryMin} menit).`
+      })));
+    }
+
+    // ---- 2) CAPTCHA (reCAPTCHA v3 / Turnstile) bila dikonfigurasi ----
+    const capErr = await saas.verifyCaptcha(b.cfTurnstileResponse || b['cf-turnstile-response'] || b.recaptcha_token, ip);
+    if (capErr) {
+      saas.regLog(ip, email, 'captcha');
+      return res.redirect(back(Object.assign({}, keep, { err: capErr })));
+    }
+
+    // ---- 3) validasi isian ----
+    const fail = msg => { saas.regLog(ip, email, 'gagal'); return res.redirect(back(Object.assign({}, keep, { err: msg }))); };
+    if (!nama) return fail('Nama sekolah wajib diisi.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail('Email admin tidak valid.');
+    if (p1.length < 6) return fail('Password minimal 6 karakter.');
+    if (p1 !== p2) return fail('Konfirmasi password tidak sama.');
+    const jenjang = dbm.JENJANG[String(b.jenjang || '')] ? String(b.jenjang) : '';
+
+    // ---- 3b) PAKET: hanya paket "daftar mandiri" yang boleh langsung mendaftar.
+    // Paket berbayar diarahkan ke WhatsApp admin (sesuai harga paket) tanpa membuat tenant.
+    const pkgSel = saas.packageByKode(String(b.paket || '').trim()) || saas.defaultPackage();
+    if (!saas.packageSelfTrial(pkgSel)) {
+      const wa = saas.waAdminLink(pkgSel, { sekolah: nama, admin: String(b.admin_nama || '').trim() });
+      saas.regLog(ip, email, 'wa');
+      if (wa) return res.redirect(wa);
+      return fail(`Paket ${pkgSel.nama} berbayar. Nomor WhatsApp admin belum diatur — hubungi pengelola layanan untuk aktivasi.`);
+    }
+
+    // ---- 4) batas per jam (setelah validasi dasar) ----
+    const hit = saas.regHit(ip, email, 'sukses');
+    if (hit.blocked) {
+      return res.redirect(back(Object.assign({}, keep, {
+        err: `Terlalu banyak permintaan pendaftaran. Silakan coba beberapa saat lagi (${hit.retryMin || saas.regLimits().blockHours * 60} menit).`
+      })));
+    }
+
     try {
       const tenant = saas.createTenant({
         nama, admin_email: email, admin_password: p1,
         admin_nama: String(b.admin_nama || 'Administrator Sekolah').trim(),
         alamat: String(b.alamat || ''), kepala: String(b.kepala || ''),
-        contact_telp: String(b.telp || ''), paket: b.paket === 'pro' ? 'pro' : 'standard',
-        trial: true
+        contact_telp: String(b.telp || ''), jenjang,
+        paket: b.paket, trial: true
       });
       res.redirect(base + '/login?ok=' + encodeURIComponent(
         `Pendaftaran berhasil! Kode Sekolah Anda: ${tenant.school_code}. Simpan kode ini untuk login.`) + '&kode=' + encodeURIComponent(tenant.school_code));
     } catch (e) {
-      res.redirect(back({ err: e.message, nama, admin_email: email }));
+      res.redirect(back(Object.assign({}, keep, { err: e.message })));
     }
   });
 

@@ -4,12 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const envCfg = require('../env');
 const bd = require('../backupdata');
-const gdrive = require('../gdrive');
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMatrix, uploadMedia }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, nowStamp } = lib;
-  // daftar tabel & pembentuk ZIP backup dipakai bersama dengan integrasi Google Drive
+  // daftar tabel & pembentuk ZIP backup dipakai bersama auto-backup Telegram
   const TABLES = bd.TABLES;
   const csvOf = rows => bd.csvOf(rows);
   const dumpAll = () => bd.dumpAll(db);
@@ -583,13 +582,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
       <div class="card">
         <div class="card-head"><div><h3>Backup Menyeluruh — Database &amp; Source Code</h3><div class="sub">Satu berkas ZIP berisi seluruh basis data website + rekap CSV</div></div>
           <div class="toolbar">
-            <a class="btn btn-sm btn-primary" href="${c.base}/pengaturan-backup">${ui.icon('cloud')}Pengaturan Backup (Google Drive)</a>
+            <a class="btn btn-sm btn-primary" href="${c.base}/pengaturan-backup">${ui.icon('cloud')}Pengaturan Auto-Backup (Telegram)</a>
           </div></div>
         <div class="alert info">${ui.icon('info')}<div>Berkas ZIP memuat <b>seluruh basis data</b>: akun &amp; hak akses, BKU umum/kegiatan, transaksi, aset &amp; pinjaman, payroll, piutang, SPP &amp; beasiswa, nota (tautan), serta log aktivitas. Nama berkas otomatis memakai tanggal ekspor.</div></div>
-        <div class="alert ${gdrive.isConfigured(dbm) ? 'ok' : 'warn'}">${ui.icon(gdrive.isConfigured(dbm) ? 'check' : 'alert')}<div><b>Auto-Backup Cloud:</b>
-          ${gdrive.isConfigured(dbm)
-        ? `terhubung ke Google Drive, jadwal <b>${esc(gdrive.scheduleTimes(dbm).join(' & '))}</b> setiap hari${dbm.getSetting('gdrive_auto', '1') === '1' ? '' : ' (jadwal otomatis sedang dinonaktifkan)'}.`
-        : 'belum dikonfigurasi. Isi kredensial Service Account &amp; Folder ID pada menu Pengaturan Backup.'}</div></div>
+        <div class="alert info">${ui.icon('cloud')}<div><b>Auto-Backup Telegram:</b> backup otomatis
+          (berkas .zip) dikirim 2x sehari ke Telegram sekolah. Atur Bot Token &amp; Chat ID pada
+          <a href="${c.base}/pengaturan-backup"><b>Pengaturan Auto-Backup</b></a>.
+          Sistem backup lama (email/SMTP dan cloud drive) sudah dihapus.</div></div>
         <div class="table-wrap mb-2"><table><thead><tr><th>Tabel</th><th class="num">Jumlah baris</th></tr></thead><tbody>
           ${counts.map(x => `<tr><td class="mono">${esc(x.t)}</td><td class="num">${x.n}</td></tr>`).join('')}
         </tbody></table></div>

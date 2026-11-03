@@ -90,9 +90,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   /* pengaturan tampilan menu */
   await visit('/tampilan-menu', async page => {
     ok('halaman pengaturan menu', await page.locator('input[name="show"]').count() > 20, String(await page.locator('input[name="show"]').count()));
-    await page.click('[data-check-group-none="nav"]');
-    ok('tombol sembunyikan semua bekerja', (await page.locator('input[name="show"]:checked').count()) === 0);
-    await page.click('[data-check-group-all="nav"]');
+    await page.uncheck('[data-check-group-box="nav"]');
+    ok('master ceklis menyembunyikan semua menu', (await page.locator('input[name="show"]:checked').count()) === 0);
+    await page.check('[data-check-group-box="nav"]');
     ok('tombol tampilkan semua bekerja', (await page.locator('input[name="show"]:checked').count()) > 20);
     ok('tanpa overflow horizontal', (await overflow(page)) <= 2, String(await overflow(page)));
   });

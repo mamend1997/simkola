@@ -232,11 +232,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const editable = c.can('iuran', 'edit');
     const late = modalCollector();
 
-    const nominalFields = (g) => {
-      const map = g ? dbm.iuranNominalMap(g.id) : {};
-      const uid = g ? g.id : 'new';
+    const tingkatList = dbm.tingkatAktif();
+    const nominalFields = (g, tingkatSel) => {
+      const tk = String(tingkatSel || req.query.get('tingkat') || '');
+      const map = g ? dbm.iuranNominalMap(g.id, tk) : {};
+      const uid = (g ? g.id : 'new') + '_' + (tk || 'def').replace(/[^a-z0-9]/gi, '');
       const isNon = !!g && g.jenis === 'nonbulanan';
-      return `<div data-jenis="bulanan" style="display:${isNon ? 'none' : ''}">
+      // nominal khusus per tingkat yang sudah tersimpan
+      const perTk = g ? db.prepare("SELECT DISTINCT tingkat FROM iuran_nominal WHERE grup_id=? AND COALESCE(tingkat,'')<>''").all(g.id).map(r => r.tingkat) : [];
+      const tkOpts = [`<option value="">Semua tingkat (default)</option>`]
+        .concat(tingkatList.map(t => `<option value="${esc(t)}" ${tk === String(t) ? 'selected' : ''}>${esc(dbm.tingkatLabel(t))} (${esc(t)})${perTk.includes(t) ? ' •' : ''}</option>`));
+      return `<div class="row2">
+          <div class="field"><label>Terapkan Tagihan Berdasarkan Tingkat</label>
+            <select name="nominal_tingkat" data-nominal-tingkat>
+              ${tkOpts.join('')}
+            </select>
+            <div class="hint">Pilih <b>Semua tingkat</b> untuk tarif seragam, atau tingkat tertentu (mis. SPP kelas VII berbeda dengan VIII &amp; IX).
+              ${perTk.length ? `Nominal khusus sudah ada untuk: <b>${esc(perTk.map(t => dbm.tingkatLabel(t)).join(', '))}</b>.` : ''}</div></div>
+          <div class="field"><label>Catatan</label>
+            <div class="hint">Perubahan nominal hanya mengubah tarif pada tingkat yang dipilih. Tagihan siswa yang belum dibayar otomatis disesuaikan.</div></div>
+        </div>
+        <div data-jenis="bulanan" style="display:${isNon ? 'none' : ''}">
           <div class="alert info">${ui.icon('info')}<div>Default <b>12 bulan: Juli s.d. Juni</b>. Pilih <b>Sama Rata</b> untuk mengisi semua bulan sekaligus, atau <b>Berbeda per Bulan</b> lalu ubah nominal tiap bulan secara manual.</div></div>
           <div class="radio-cards mb-2">
             <input type="radio" name="mode_nominal" id="mn_rata_${uid}" value="rata" checked><label for="mn_rata_${uid}"><span class="dot"></span> Sama Rata</label>
@@ -268,7 +284,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </select></div>
         <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(g ? g.keterangan : '')}" placeholder="Opsional"></div>
       </div>
-      <div data-nominal-wrap>${nominalFields(g)}</div>
+      <div data-nominal-wrap>${nominalFields(g, req.query.get('tingkat'))}</div>
       <label class="check"><input type="checkbox" name="aktif" value="1" ${!g || g.aktif ? 'checked' : ''}> Grup iuran aktif</label>
     </form>`;
 
@@ -331,24 +347,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           .run(nama.trim(), jenisV, taId, keterangan || '', aktif, nowStamp());
         grupId = Number(info.lastInsertRowid);
       }
-      // nominal
-      db.prepare('DELETE FROM iuran_nominal WHERE grup_id=?').run(grupId);
-      const ins = db.prepare('INSERT INTO iuran_nominal (grup_id,bulan,nominal) VALUES (?,?,?)');
+      // nominal — hanya untuk tingkat yang dipilih ('' = default semua tingkat)
+      const tk = String(req.body.nominal_tingkat || '').trim();
+      db.prepare("DELETE FROM iuran_nominal WHERE grup_id=? AND COALESCE(tingkat,'')=?").run(grupId, tk);
+      const ins = db.prepare('INSERT INTO iuran_nominal (grup_id,bulan,nominal,tingkat) VALUES (?,?,?,?)');
       if (jenisV === 'nonbulanan') {
-        ins.run(grupId, null, lib.parseMoney(req.body.nominal_tunggal));
+        ins.run(grupId, null, lib.parseMoney(req.body.nominal_tunggal), tk);
       } else {
         const rata = lib.parseMoney(req.body.nominal_rata);
         for (const b of BULAN_TA) {
           const val = req.body.mode_nominal === 'rata' && rata ? rata : lib.parseMoney(req.body['bulan_' + b]);
-          ins.run(grupId, b, val);
+          ins.run(grupId, b, val, tk);
         }
       }
-      // sinkronkan nominal tagihan yang belum dibayar
-      const total = db.prepare('SELECT COALESCE(SUM(nominal),0) s FROM iuran_nominal WHERE grup_id=?').get(grupId).s;
+      // sinkronkan nominal tagihan yang belum dibayar (mengikuti tingkat siswa)
       const tags = db.prepare('SELECT t.* FROM iuran_tagihan t WHERE t.grup_id=?').all(grupId);
       for (const t of tags) {
         const paid = db.prepare("SELECT COALESCE(SUM(jumlah),0) s FROM iuran_bayar WHERE tagihan_id=? AND status<>'void'").get(t.id).s;
-        if (Number(paid) <= 0) db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(total, t.id);
+        if (Number(paid) <= 0) {
+          const tkSiswa = dbm.siswaTingkat(t.siswa_id, t.tahun_ajaran_id);
+          db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(dbm.iuranTotalFor(grupId, tkSiswa), t.id);
+        }
       }
     })();
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'iuran', `${isEdit ? 'Edit' : 'Tambah'} grup iuran ${nama}`);
@@ -382,8 +401,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const c = ctx(req);
     const g = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(req.params.id);
     if (!g) return res.notFound();
-    const nominal = dbm.iuranNominalMap(g.id);
+    const tkSel = String(req.query.get('tingkat') || '').trim();
+    const nominal = dbm.iuranNominalMap(g.id, tkSel);
     const total = Object.values(nominal).reduce((s, v) => s + Number(v || 0), 0);
+    // tarif khusus per tingkat yang sudah tersimpan (selain default)
+    const tingkatTersimpan = db.prepare("SELECT DISTINCT tingkat FROM iuran_nominal WHERE grup_id=? AND COALESCE(tingkat,'')<>''").all(g.id).map(r => r.tingkat);
+    const tarifPerTingkat = tingkatTersimpan.map(tk => ({
+      tingkat: tk, label: dbm.tingkatLabel(tk), total: dbm.iuranTotalFor(g.id, tk),
+      n: (dbm.iuranNominalMap(g.id, tk) && Object.keys(dbm.iuranNominalMap(g.id, tk)).length) || 0
+    }));
     const taList = dbm.allTahun();
     const taId = g.tahun_ajaran_id;
     const kelasList = dbm.kelasList(taId, {});
@@ -406,13 +432,26 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="card-head"><div><h3>${esc(g.nama)}</h3><div class="sub">${GROUP_LABEL[g.jenis]} · TA ${esc((taList.find(t => String(t.id) === String(taId)) || {}).nama || '-')}</div></div>
           ${g.aktif ? ui.badge('Aktif', 'green') : ui.badge('Non-Aktif', 'gray')}</div>
         <div class="kv">
+          <dt>Tarif ditampilkan</dt><dd>${tkSel ? `<b>${esc(dbm.tingkatLabel(tkSel))}</b>` : '<b>Semua tingkat (default)</b>'}</dd>
           <dt>Total Nominal</dt><dd><b>${rupiah(total)}</b></dd>
           ${g.jenis === 'bulanan' ? BULAN_TA.map(b => `<dt>${esc(bulanLabel(b))}</dt><dd>${rupiah(nominal[b] || 0)}</dd>`).join('') : `<dt>Nominal</dt><dd>${rupiah(nominal[0] || 0)}</dd>`}
           <dt>Keterangan</dt><dd>${esc(g.keterangan || '-')}</dd>
           <dt>Siswa ditetapkan</dt><dd>${tags.length}</dd>
         </div>
+        ${tarifPerTingkat.length ? `<hr class="sep"><div class="t-strong mb-1">Tarif Khusus per Tingkat</div>
+          <div class="table-wrap short"><table><thead><tr><th>Tingkat</th><th class="num">Total Tarif</th><th></th></tr></thead><tbody>
+          ${tarifPerTingkat.map(t => `<tr><td>${esc(t.label)} <span class="t-sub mono">(${esc(t.tingkat)})</span></td>
+            <td class="num">${rupiah(t.total)}</td>
+            <td><a class="btn btn-sm" href="${c.base}/iuran/grup/${g.id}?tingkat=${encodeURIComponent(t.tingkat)}">Ubah</a></td></tr>`).join('')}
+          </tbody></table></div>` : ''}
         ${editable ? `<hr class="sep"><form method="post" action="${c.base}/iuran/grup/${g.id}/nominal">
           <div class="t-strong mb-1">Edit Nominal Iuran</div>
+          <div class="field"><label>Terapkan Tagihan Berdasarkan Tingkat</label>
+            <select name="nominal_tingkat" data-nominal-tingkat-jump="${c.base}/iuran/grup/${g.id}">
+              <option value="">Semua tingkat (default)</option>
+              ${dbm.tingkatAktif().map(t => `<option value="${esc(t)}" ${tkSel === String(t) ? 'selected' : ''}>${esc(dbm.tingkatLabel(t))}${tingkatTersimpan.includes(t) ? ' •' : ''}</option>`).join('')}
+            </select>
+            <div class="hint">Pilih tingkat untuk membuat tarif berbeda (mis. SPP kelas VII ≠ VIII). Tarif default dipakai bila tingkat tidak punya tarif khusus.</div></div>
           ${g.jenis === 'bulanan' ? `<div class="row3">${BULAN_TA.map(b => `<div class="field"><label>${esc(bulanLabel(b))}</label>${ui.moneyInput('bulan_' + b, nominal[b] || 0)}</div>`).join('')}</div>`
         : `<div class="field"><label>Nominal (Rp)</label>${ui.moneyInput('nominal_tunggal', nominal[0] || 0)}</div>`}
           <button class="btn btn-primary btn-block">${ui.icon('save')}Simpan Nominal</button>
@@ -436,7 +475,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="table-scroll short"><table><thead><tr><th style="width:40px"><input type="checkbox" data-check-all-box="siswa_id"></th><th>NISN</th><th>Nama</th><th class="num">Nominal</th><th>Status</th></tr></thead><tbody>
             ${siswaKelas.map(s => `<tr><td><input type="checkbox" name="siswa_id" value="${s.id}" ${assignedIds.has(s.id) ? 'disabled checked' : ''}></td>
               <td class="mono">${esc(s.nisn || '-')}</td><td class="t-strong">${esc(s.nama)}</td>
-              <td class="num">${rupiah(total)}</td>
+              <td class="num">${rupiah(dbm.iuranTotalFor(g.id, s.tingkat || dbm.siswaTingkat(s.id, taId)))}</td>
               <td>${assignedIds.has(s.id) ? ui.badge('Sudah', 'green') : ui.badge('Belum', 'gray')}
                 ${s.status !== 'aktif' ? `<div class="t-sub">${esc((dbm.SISWA_STATUS[s.status] || [s.status])[0])}</div>` : ''}</td></tr>`).join('')}
           </tbody></table></div>
@@ -489,15 +528,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const g = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(req.params.id);
     const back = req.BASE + '/iuran';
     if (!g) return res.redirect(back + '?err=' + encodeURIComponent('Grup iuran tidak ditemukan.'));
+    const tk = String(req.body.nominal_tingkat || '').trim();
     db.transaction(() => {
-      db.prepare('DELETE FROM iuran_nominal WHERE grup_id=?').run(g.id);
-      const ins = db.prepare('INSERT INTO iuran_nominal (grup_id,bulan,nominal) VALUES (?,?,?)');
-      if (g.jenis === 'bulanan') for (const b of BULAN_TA) ins.run(g.id, b, lib.parseMoney(req.body['bulan_' + b]));
-      else ins.run(g.id, null, lib.parseMoney(req.body.nominal_tunggal));
-      const total = db.prepare('SELECT COALESCE(SUM(nominal),0) s FROM iuran_nominal WHERE grup_id=?').get(g.id).s;
+      db.prepare("DELETE FROM iuran_nominal WHERE grup_id=? AND COALESCE(tingkat,'')=?").run(g.id, tk);
+      const ins = db.prepare('INSERT INTO iuran_nominal (grup_id,bulan,nominal,tingkat) VALUES (?,?,?,?)');
+      if (g.jenis === 'bulanan') for (const b of BULAN_TA) ins.run(g.id, b, lib.parseMoney(req.body['bulan_' + b]), tk);
+      else ins.run(g.id, null, lib.parseMoney(req.body.nominal_tunggal), tk);
       for (const t of db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=?').all(g.id)) {
         const paid = db.prepare("SELECT COALESCE(SUM(jumlah),0) s FROM iuran_bayar WHERE tagihan_id=? AND status<>'void'").get(t.id).s;
-        if (Number(paid) <= 0) db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(total, t.id);
+        if (Number(paid) <= 0) {
+          const tkSiswa = dbm.siswaTingkat(t.siswa_id, t.tahun_ajaran_id);
+          db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(dbm.iuranTotalFor(g.id, tkSiswa), t.id);
+        }
       }
     })();
     dbm.logAudit(req.user, 'EDIT', 'iuran', `Mengubah nominal grup ${g.nama}`);
@@ -511,14 +553,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const ids = [].concat(req.body.siswa_id || []);
     const back = req.BASE + `/iuran/grup/${g.id}?kelas=${req.body.kelas_id || ''}`;
     if (!ids.length) return res.redirect(back + '&err=' + encodeURIComponent('Centang minimal satu siswa.'));
-    const total = db.prepare('SELECT COALESCE(SUM(nominal),0) s FROM iuran_nominal WHERE grup_id=?').get(g.id).s;
     let n = 0;
     db.transaction(() => {
       const ins = db.prepare('INSERT OR IGNORE INTO iuran_tagihan (grup_id,siswa_id,tahun_ajaran_id,nominal,potongan,keterangan,created_at) VALUES (?,?,?,?,0,\'\',?)');
       for (const sid of ids) {
         const s = db.prepare('SELECT * FROM siswa WHERE id=?').get(sid);
         if (!s) continue;
-        const info = ins.run(g.id, s.id, g.tahun_ajaran_id, total, nowStamp());
+        // tarif mengikuti TINGKAT siswa (fallback ke tarif default)
+        const tkSiswa = dbm.siswaTingkat(s.id, g.tahun_ajaran_id);
+        const nominal = dbm.iuranTotalFor(g.id, tkSiswa);
+        const info = ins.run(g.id, s.id, g.tahun_ajaran_id, nominal, nowStamp());
         if (info.changes) n++;
       }
     })();
@@ -592,12 +636,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const q = req.query.get('q') || '';
     const kelasIds = (req.query.getAll ? req.query.getAll('kelas') : []).map(Number).filter(Boolean);
     const grupIds = (req.query.getAll ? req.query.getAll('grup') : []).map(Number).filter(Boolean);
+    const tingkatIds = (req.query.getAll ? req.query.getAll('tingkat') : []).map(x => String(x || '').trim()).filter(Boolean);
     const tags = dbm.iuranTagihanRows({
       taId, q, aktifOnly: true,
       kelasId: kelasIds.length ? kelasIds : undefined,
-      grupId: grupIds.length ? grupIds : undefined
+      grupId: grupIds.length ? grupIds : undefined,
+      tingkat: tingkatIds.length ? tingkatIds : undefined
     });
-    return { taId, taList, q, kelasIds, grupIds, tags, rekap: dbm.iuranRekapSiswa(tags) };
+    return { taId, taList, q, kelasIds, grupIds, tingkatIds, tags, rekap: dbm.iuranRekapSiswa(tags) };
   }
   /** daftar checkbox multi-pilih (dipakai filter kelas & grup iuran) */
   function multiPick(name, label, items, selected) {
@@ -629,7 +675,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const keepHidden = `<input type="hidden" name="ta" value="${d.taId || ''}">
       <input type="hidden" name="q" value="${esc(d.q)}">
       ${d.kelasIds.map(id => `<input type="hidden" name="kelas" value="${id}">`).join('')}
-      ${d.grupIds.map(id => `<input type="hidden" name="grup" value="${id}">`).join('')}`;
+      ${d.grupIds.map(id => `<input type="hidden" name="grup" value="${id}">`).join('')}
+      ${d.tingkatIds.map(id => `<input type="hidden" name="tingkat" value="${esc(id)}">`).join('')}`;
 
     const content = `<div class="card mb-3">
       <div class="card-head"><div><h3>Data Iuran &amp; Rekapitulasi Tagihan Siswa</h3>
@@ -647,10 +694,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="field"><label>Tahun Pelajaran</label><select name="ta" data-autosubmit>${d.taList.map(t => `<option value="${t.id}" ${String(d.taId) === String(t.id) ? 'selected' : ''}>${esc(t.nama)}</option>`).join('')}</select></div>
         <div class="field"><label>Nama / NISN <span class="t-sub">(filter langsung saat mengetik)</span></label>
           <input name="q" value="${esc(d.q)}" placeholder="Cari siswa" data-table-search="#tblDataIuran" autocomplete="off"></div>
-        ${multiPick('kelas', 'Kelas (multi-pilih)', kelasAll, d.kelasIds)}
+        ${multiPick('tingkat', 'Tingkat Kelas (multi-pilih)', dbm.tingkatAktif().map(t => ({ id: t, nama: dbm.tingkatLabel(t) + ' (' + t + ')' })), d.tingkatIds)}
+        ${multiPick('kelas', 'Kelas spesifik (multi-pilih)', kelasAll.map(k => ({ id: k.id, nama: (k.nama_kelas || k.nama) })), d.kelasIds)}
         ${multiPick('grup', 'Grup Iuran (multi-pilih)', groups, d.grupIds)}
         <button class="btn">${ui.icon('search')}Terapkan</button>
-        ${d.kelasIds.length || d.grupIds.length || d.q ? `<a class="btn" href="${c.base}/iuran/data?ta=${d.taId || ''}">Reset</a>` : ''}
+        ${d.kelasIds.length || d.grupIds.length || d.tingkatIds.length || d.q ? `<a class="btn" href="${c.base}/iuran/data?ta=${d.taId || ''}">Reset</a>` : ''}
       </form>
       ${d.rekap.length ? `<div class="between mb-1">
           <div class="small muted">Centang siswa untuk membatasi <b>Export Excel/PDF</b> hanya pada siswa terpilih.</div>
@@ -1615,6 +1663,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   function trxFilters(req) {
     return {
       q: req.query.get('q') || '',
+      tingkat: req.query.get('tingkat') || '',
       kelas: req.query.get('kelas') || '',
       grup: req.query.get('grup') || '',
       metode: req.query.get('metode') || '',
@@ -1625,6 +1674,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   function filterRows(rows, f) {
     return rows.filter(b =>
       (!f.q || (String(b.siswa_nama || '') + ' ' + String(b.nisn || '')).toLowerCase().includes(f.q.toLowerCase())) &&
+      (!f.tingkat || String(b.tingkat || '') === f.tingkat) &&
       (!f.kelas || String(b.kelas_nama || '') === f.kelas) &&
       (!f.grup || String(b.grup_id || '') === f.grup) &&
       (!f.metode || b.metode === f.metode) &&
@@ -1656,7 +1706,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <form method="get" action="${c.base}/iuran/transaksi" class="filterbar">
         <div class="field"><label>Tahun Pelajaran</label><select name="ta" data-autosubmit>${taList.map(t => `<option value="${t.id}" ${String(taId) === String(t.id) ? 'selected' : ''}>${esc(t.nama)}</option>`).join('')}</select></div>
         <div class="field"><label>Nama Siswa <span class="t-sub">(filter langsung)</span></label><input name="q" value="${esc(f.q)}" placeholder="Cari nama / NISN" data-table-search="#tblTrxIuran" autocomplete="off"></div>
-        <div class="field"><label>Kelas</label><select name="kelas"><option value="">Semua</option>${kelasAll.map(k => `<option value="${esc(k.nama)}" ${f.kelas === k.nama ? 'selected' : ''}>${esc(k.nama)}</option>`).join('')}</select></div>
+        <div class="field"><label>Tingkat Kelas</label><select name="tingkat"><option value="">Semua tingkat</option>
+          ${dbm.tingkatAktif().map(t => `<option value="${esc(t)}" ${f.tingkat === String(t) ? 'selected' : ''}>${esc(dbm.tingkatLabel(t))} (${esc(t)})</option>`).join('')}</select></div>
+        <div class="field"><label>Kelas Spesifik</label><select name="kelas"><option value="">Semua</option>${kelasAll.map(k => `<option value="${esc(k.nama_kelas || k.nama)}" ${f.kelas === (k.nama_kelas || k.nama) ? 'selected' : ''}>${esc(k.nama_kelas || k.nama)}</option>`).join('')}</select></div>
         <div class="field"><label>Grup Iuran</label><select name="grup"><option value="">Semua</option>${groups.map(g => `<option value="${g.id}" ${String(f.grup) === String(g.id) ? 'selected' : ''}>${esc(g.nama)}</option>`).join('')}</select></div>
         <div class="field"><label>Metode</label><select name="metode"><option value="">Semua</option><option value="tunai" ${f.metode === 'tunai' ? 'selected' : ''}>Tunai</option><option value="transfer" ${f.metode === 'transfer' ? 'selected' : ''}>Transfer</option></select></div>
         <div class="field"><label>Dari</label><input type="date" name="dari" value="${esc(f.dari)}"></div>

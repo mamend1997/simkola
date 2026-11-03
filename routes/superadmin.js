@@ -14,12 +14,19 @@
  *   /super-admin/backup          auto-backup database via email (SMTP)
  * ==================================================================
  */
-const mailer = require('../mailer');
+const bd = require('../backupdata');
+const bt = require('../backup_tg');
+const tg = require('../telegram');
 
 const COOKIE = 'simkeu_saas';
 
-module.exports = ({ get, post, dbm, lib, ui, saas, uploadMedia }) => {
+module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPortalMap }) => {
   const { esc, rupiah, tglID, nowStamp } = lib;
+  /** label paket dari master paket (dinamis) */
+  function pkgLabel(kode) {
+    const p = saas.packageByKode(kode);
+    return p ? p.nama : (saas.PAKET[kode] || kode || '-');
+  }
   const S = saas.db;
 
   /* ---------------- sesi super admin ---------------- */
@@ -56,9 +63,17 @@ module.exports = ({ get, post, dbm, lib, ui, saas, uploadMedia }) => {
     { href: '/super-admin', label: 'Dashboard', icon: 'dashboard' },
     { href: '/super-admin/sekolah', label: 'Daftar Sekolah', icon: 'school' },
     { href: '/super-admin/pembayaran', label: 'Pembayaran', icon: 'card' },
+    { href: '/super-admin/paket', label: 'Paket Langganan', icon: 'layers' },
+    { href: '/super-admin/branding', label: 'Branding Sistem', icon: 'school' },
     { href: '/super-admin/qris', label: 'QRIS & Harga', icon: 'tag' },
-    { href: '/super-admin/backup', label: 'Backup Email', icon: 'cloud' }
+    { href: '/super-admin/tiket', label: 'Pusat Tiket', icon: 'inbox' },
+    { href: '/super-admin/pengumuman', label: 'Pengumuman & Maintenance', icon: 'bell' },
+    { href: '/super-admin/petunjuk', label: 'Master Petunjuk', icon: 'book' },
+    { href: '/super-admin/audit', label: 'Audit Logs', icon: 'shield' },
+    { href: '/super-admin/wa', label: 'WA Gateway', icon: 'send' },
+    { href: '/super-admin/backup', label: 'Auto-Backup Server', icon: 'cloud' }
   ];
+  const subOf = pathname => (MENU.find(m => pathname === m.href || pathname.startsWith(m.href + '/')) || {}).href || '';
 
   function shell(req, { title, sub = '', active = '', content, user }) {
     const base = req.BASE;
@@ -217,13 +232,25 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       return `<tr>
         <td><a href="${req.BASE}/super-admin/sekolah/${t.id}"><b>${esc(t.nama)}</b></a><div class="t-sub">${esc(t.contact_email || '')}</div></td>
         <td><span class="mono" style="letter-spacing:.12em;font-weight:700">${esc(t.school_code)}</span></td>
-        <td>${esc(saas.PAKET[t.paket] || t.paket)}</td>
+        <td>${esc(pkgLabel(t.paket))}</td>
         <td class="nowrap">${Number(t.is_lifetime_free) ? 'Lifetime' : esc(tglID(t.expires_at || '-'))}</td>
         <td>${ui.badge(s.label, s.color)}</td>
       </tr>`;
     }).join('');
     const menunggu = saas.paymentsAll('pending');
+    const tiketOpen = saas.ticketsAll({ status: 'open' });
+    const maintState = saas.maintenance();
     const content = `
+    ${maintState.aktif ? `<div class="card mb-3" style="border-color:#F6CFD0;background:#FFF8F8">
+      <div class="card-head"><div><h3>Mode Perbaikan Sedang AKTIF</h3>
+        <div class="sub">Seluruh akses sekolah diblokir sementara</div></div>
+        <a class="btn btn-sm btn-primary" href="${req.BASE}/super-admin/pengumuman">Kelola</a></div>
+    </div>` : ''}
+    ${tiketOpen.length ? `<div class="card mb-3" style="border-color:#F7DFB5;background:#FFFDF7">
+      <div class="card-head"><div><h3>${ui.icon('inbox', 'i-sm')} ${tiketOpen.length} tiket kendala baru</h3>
+        <div class="sub">Belum ditindaklanjuti oleh Super Admin</div></div>
+        <a class="btn btn-sm btn-primary" href="${req.BASE}/super-admin/tiket">Buka Pusat Tiket</a></div>
+    </div>` : ''}
     <div class="sa-grid mb-3">
       ${[['Total Sekolah', st.total], ['Sekolah Aktif', st.aktif], ['Lifetime', st.lifetime], ['Ditangguhkan', st.suspended],
         ['Menunggu Verifikasi', st.menunggu], ['Pendapatan Bulan Ini', rupiah(st.pendapatan)]]
@@ -259,29 +286,69 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   get('/super-admin/sekolah', (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     const list = saas.allTenants();
+    const domBadge = t => {
+      const st = String(t.custom_domain_status || '').toUpperCase();
+      if (!t.custom_domain) return ui.badge('Belum Ada', 'gray');
+      if (st === 'VERIFIED') return ui.badge('Terverifikasi', 'green');
+      if (st === 'FAILED') return ui.badge('Gagal', 'red');
+      return ui.badge('Menunggu Verifikasi', 'amber');
+    };
     const rows = list.map(t => {
       const s = saas.statusOf(t);
       const on = saas.enabledKeys(t).length;
+      const slug = String(t.portal_slug || '');
+      const adm = (() => { try { return adminOf(t); } catch (e) { return null; } })();
       return `<tr>
         <td><a href="${req.BASE}/super-admin/sekolah/${t.id}"><b>${esc(t.nama)}</b></a>
           <div class="t-sub">${esc(t.contact_email || '')}${t.contact_telp ? ' · ' + esc(t.contact_telp) : ''}</div></td>
         <td class="mono">#${t.id}</td>
         <td class="mono" style="font-weight:700;letter-spacing:.12em">${esc(t.school_code)}</td>
-        <td><span class="badge ${t.paket === 'pro' ? 'violet' : 'blue'} plain">${esc(saas.PAKET[t.paket] || t.paket)}</span></td>
+        <td><span class="badge ${t.paket === 'pro' ? 'violet' : 'blue'} plain">${esc(pkgLabel(t.paket))}</span></td>
         <td class="nowrap">${Number(t.is_lifetime_free) ? '<b>Lifetime</b>' : esc(tglID(t.expires_at || '-'))}</td>
         <td>${ui.badge(s.label, s.color)}</td>
         <td class="num">${on}/${saas.FEATURES.length}</td>
+        <td class="small">${slug
+        ? `<a href="${req.BASE}/${esc(slug)}/portal" target="_blank" rel="noopener" class="mono">/${esc(slug)}/portal</a>`
+        : '<span class="muted">-</span>'}</td>
+        <td class="small">${t.custom_domain ? `<span class="mono">${esc(t.custom_domain)}</span><div>${domBadge(t)}</div>` : domBadge(t)}</td>
         <td class="nowrap">
+          <button class="btn btn-sm" data-open="mReset${t.id}" title="Reset password admin sekolah">${ui.icon('lock')}Reset</button>
           <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/masuk" style="display:inline">
             <button class="btn btn-sm" title="Masuk sebagai sekolah ini">${ui.icon('login')}Masuk</button></form>
         </td>
       </tr>`;
     }).join('');
+
+    // modal reset password per sekolah (di luar tabel agar form tidak rusak)
+    const resetModals = list.map(t => {
+      const adm = (() => { try { return adminOf(t); } catch (e) { return null; } })();
+      return ui.modal('mReset' + t.id, {
+        title: 'Reset Password Admin Sekolah',
+        body: `<form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/reset-password" data-reset-form>
+          <div class="alert info" style="margin-top:0">${ui.icon('info')}<div>
+            <b>${esc(t.nama)}</b> · Kode Sekolah <b class="mono">${esc(t.school_code)}</b><br>
+            Username admin: <b class="mono">${esc(adm ? (adm.username || adm.email) : '(belum ada akun admin)')}</b></div></div>
+          <div class="field"><label>Kata Sandi Baru</label>
+            <div class="flex" style="gap:8px">
+              <input type="text" name="password_baru" class="js-newpw" required minlength="6" placeholder="minimal 6 karakter" style="flex:1">
+              <button type="button" class="btn" data-generate-pw>${ui.icon('refresh')}Generate Acak</button>
+            </div>
+            <div class="hint">Sandi disimpan dalam bentuk hash aman (scrypt + salt acak).</div></div>
+          <div class="form-actions">
+            <button class="btn btn-primary">${ui.icon('save')}Simpan &amp; Terapkan</button>
+            <button type="button" class="btn" data-close="mReset${t.id}">Batal</button>
+          </div>
+        </form>`,
+        wide: false
+      });
+    }).join('');
     const formFields = `
         <div class="row3">
           <div class="field"><label>Nama Sekolah *</label><input type="text" name="nama" required placeholder="SMK Negeri 1 Contoh"></div>
           <div class="field"><label>Kode Sekolah (4 karakter)</label><input type="text" name="school_code" maxlength="4" placeholder="otomatis (SK02)" style="text-transform:uppercase"></div>
-          <div class="field"><label>Paket</label><select name="paket"><option value="standard">Standard</option><option value="pro">Pro (semua fitur)</option></select></div>
+          <div class="field"><label>Paket</label><select name="paket">
+            ${saas.packageRows().map(p => `<option value="${esc(p.kode)}" ${p.kode === saas.defaultPackage().kode ? 'selected' : ''}>${esc(p.nama)}</option>`).join('')}
+          </select></div>
         </div>
         <div class="row3">
           <div class="field"><label>Nama Admin Sekolah *</label><input type="text" name="admin_nama" required placeholder="Bendahara / Admin"></div>
@@ -305,9 +372,10 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     <div class="card">
       <div class="card-head"><div><h3>Daftar Sekolah (${list.length})</h3><div class="sub">Nama, tenant_id, kode, paket, masa aktif & status</div></div>
         ${ui.openModalBtn('mTambahSekolah', 'Tambah Sekolah')}</div>
-      <div class="table-wrap"><table><thead><tr><th>Sekolah</th><th>tenant_id</th><th>Kode</th><th>Paket</th><th>Masa Aktif</th><th>Status</th><th class="num">Fitur</th><th>Aksi</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="8" class="muted" style="text-align:center;padding:18px">Belum ada sekolah.</td></tr>`}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Sekolah</th><th>tenant_id</th><th>Kode</th><th>Paket</th><th>Masa Aktif</th><th>Status</th><th class="num">Fitur</th><th>URL Portal</th><th>Custom Domain</th><th>Aksi</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="10" class="muted" style="text-align:center;padding:18px">Belum ada sekolah.</td></tr>`}</tbody></table></div>
       ${addModal}
+      ${resetModals}
       <p class="help mt-1">Data setiap sekolah tersimpan di database terpisah (<code>data/tenants/tenant-&lt;id&gt;.sqlite</code>), sehingga tidak mungkin saling terlihat.</p>
     </div>`;
     res.html(shell(req, { title: 'Daftar Sekolah', sub: 'Tenant, kode akses, paket & status langganan', active: '/super-admin/sekolah', content, user: u }));
@@ -337,6 +405,8 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     const t = saas.tenantById(req.params.id);
     if (!t) return res.redirect(req.BASE + flash('/super-admin/sekolah', 'err', 'Sekolah tidak ditemukan.'));
     const st = saas.statusOf(t);
+    const cred = saas.credNoticeTake(parseCookie(req, COOKIE));
+    const adminAkun = (() => { try { return adminOf(t); } catch (e) { return null; } })();
     const on = saas.tenantFeatures(t);
     const featureBox = (std) => saas.FEATURES.filter(f => f.std === std).map(f => `
       <label class="check" style="display:flex;align-items:center;gap:8px;padding:7px 0">
@@ -354,8 +424,8 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
               <div class="field"><label>Nama Sekolah</label><input type="text" name="nama" value="${esc(t.nama)}" required></div>
               <div class="field"><label>Kode Sekolah</label><input type="text" name="school_code" value="${esc(t.school_code)}" maxlength="4" style="text-transform:uppercase" required></div>
               <div class="field"><label>Paket</label><select name="paket">
-                <option value="standard" ${t.paket === 'standard' ? 'selected' : ''}>Standard</option>
-                <option value="pro" ${t.paket === 'pro' ? 'selected' : ''}>Pro</option></select></div>
+                ${saas.packageRows({ all: true }).map(p => `<option value="${esc(p.kode)}" ${t.paket === p.kode ? 'selected' : ''}>${esc(p.nama)}${p.harga_bulan ? ' — Rp ' + Number(p.harga_bulan).toLocaleString('id-ID') + '/bln' : ''}</option>`).join('')}
+              </select></div>
             </div>
             <div class="row3">
               <div class="field"><label>Status</label><select name="status">
@@ -411,16 +481,51 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           </form>
         </div>
         <div class="card mb-3">
+          <div class="card-head"><div><h3>Akun Admin Sekolah</h3><div class="sub">${esc(adminAkun ? (adminAkun.username || adminAkun.email) : 'belum ada akun admin')}</div></div></div>
+          <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/reset-password" data-reset-form>
+            <div class="field"><label>Kata Sandi Baru</label>
+              <div class="flex" style="gap:8px">
+                <input type="text" name="password_baru" class="js-newpw" required minlength="6" placeholder="minimal 6 karakter" style="flex:1">
+                <button type="button" class="btn" data-generate-pw>${ui.icon('refresh')}Acak</button>
+              </div></div>
+            <button class="btn btn-primary btn-block">${ui.icon('lock')}Reset Password</button>
+          </form>
+        </div>
+        <div class="card mb-3">
           <div class="card-head"><div><h3>Bantuan Teknis</h3><div class="sub">Masuk sebagai sekolah ini</div></div></div>
           <p class="small muted">Gunakan untuk mendampingi admin sekolah. Tindakan Anda tercatat pada audit log sekolah.</p>
           <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/masuk">
             <button class="btn btn-block">${ui.icon('login')}Login As Tenant</button></form>
         </div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Portal Publik &amp; Domain</h3><div class="sub">Slug unik + domain khusus sekolah</div></div></div>
+          <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/portal">
+            <div class="field"><label>Alamat Portal (slug)</label>
+              <input type="text" name="portal_slug" value="${esc(t.portal_slug || '')}" placeholder="sdn-1-jakarta">
+              <div class="hint">${t.portal_slug ? `Aktif: <b>/${esc(t.portal_slug)}/portal</b>` : 'Belum ada slug.'}</div></div>
+            <div class="field"><label>Custom Domain</label>
+              <input type="text" name="custom_domain" value="${esc(t.custom_domain || '')}" placeholder="keuangan.sman1jakarta.sch.id"></div>
+            <div class="form-actions"><button class="btn btn-primary btn-block">${ui.icon('save')}Simpan</button></div>
+          </form>
+          <div class="list mt-2">
+            <div class="list-row"><div><div class="mt">Status domain</div><div class="nm">${
+        !t.custom_domain ? 'Belum Ada' : (String(t.custom_domain_status).toUpperCase() === 'VERIFIED' ? 'Terverifikasi (Active)' : String(t.custom_domain_status).toUpperCase() === 'FAILED' ? 'Gagal verifikasi' : 'Menunggu Verifikasi (Pending)')
+      }</div></div></div>
+          </div>
+          <div class="flex mt-2" style="gap:8px;flex-wrap:wrap">
+            <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/domain/verifikasi">
+              <button class="btn btn-sm" ${t.custom_domain ? '' : 'disabled'}>${ui.icon('check')}Verifikasi &amp; Aktifkan Domain</button></form>
+            <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/domain/hapus" data-confirm="Lepas domain khusus sekolah ini?">
+              <button class="btn btn-sm btn-danger" ${t.custom_domain ? '' : 'disabled'}>${ui.icon('trash')}Hapus Domain</button></form>
+          </div>
+          <p class="help mt-1">Sertifikat SSL (HTTPS) diterbitkan otomatis oleh proxy/Caddy di sisi server ketika DNS sudah mengarah —
+            konfigurasi DNS: CNAME ke <code>${esc(saas.get('saas_base_url', '') || 'portal.simkeu.com')}</code>.</p>
+        </div>
         <div class="card">
           <div class="card-head"><div><h3>Ringkasan</h3></div></div>
           <div class="list">
             <div class="list-row"><div><div class="mt">Kode Sekolah</div><div class="nm mono" style="letter-spacing:.16em">${esc(t.school_code)}</div></div></div>
-            <div class="list-row"><div><div class="mt">Paket</div><div class="nm">${esc(saas.PAKET[t.paket] || t.paket)}</div></div></div>
+            <div class="list-row"><div><div class="mt">Paket</div><div class="nm">${esc(pkgLabel(t.paket))}</div></div></div>
             <div class="list-row"><div><div class="mt">Masa aktif</div><div class="nm">${Number(t.is_lifetime_free) ? 'Lifetime' : esc(tglID(t.expires_at || '-'))}</div></div></div>
             <div class="list-row"><div><div class="mt">Fitur aktif</div><div class="nm">${saas.enabledKeys(t).length} / ${saas.FEATURES.length}</div></div></div>
             <div class="list-row"><div><div class="mt">Database</div><div class="nm mono small">${esc(t.db_file || '-')}</div></div></div>
@@ -431,7 +536,21 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         </div>
       </div>
     </div>`;
-    res.html(shell(req, { title: t.nama, sub: 'Kode ' + t.school_code + ' · tenant_id ' + t.id, active: '/super-admin/sekolah', content, user: u }));
+    const credModal = cred ? ui.modal('mCredBaru', {
+      title: 'Password Berhasil Diperbarui',
+      autoShow: true, autoKey: 'cred' + t.id,
+      body: `<div class="alert ok" style="margin-top:0">${ui.icon('check')}<div>Sandi admin sekolah <b>${esc(t.nama)}</b> berhasil direset.</div></div>
+        <div class="list">
+          <div class="list-row"><div><div class="mt">Kode Sekolah (4 Digit)</div><div class="nm mono" style="font-size:18px;letter-spacing:.18em">${esc(cred.kode)}</div></div></div>
+          <div class="list-row"><div><div class="mt">Username</div><div class="nm mono">${esc(cred.username)}</div></div></div>
+          <div class="list-row"><div><div class="mt">Password Baru</div><div class="nm mono" style="font-size:17px;letter-spacing:.06em">${esc(cred.password)}</div></div></div>
+        </div>
+        <button type="button" class="btn btn-primary btn-block mt-2" data-copy-login
+          data-copy-text="Kode Sekolah: ${esc(cred.kode)}${'\n'}Username: ${esc(cred.username)}${'\n'}Password: ${esc(cred.password)}">
+          ${ui.icon('file')}Salin Info Login</button>`,
+      footer: `<button class="btn" data-close="mCredBaru">Tutup</button>`
+    }) : '';
+    res.html(shell(req, { title: t.nama, sub: 'Kode ' + t.school_code + ' · tenant_id ' + t.id, active: '/super-admin/sekolah', content: content + credModal, user: u }));
   });
 
   post('/super-admin/sekolah/:id/simpan', (req, res) => {
@@ -553,7 +672,15 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   post('/super-admin/pembayaran/:id/approve', (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     try {
+      const p = saas.paymentById(req.params.id);
       const r = saas.approvePayment(req.params.id, u);
+      // notifikasi WA otomatis ke admin sekolah (lewat queue)
+      try {
+        const msg = `*Pembayaran Disetujui*\n\nSekolah: ${r.tenant.nama} (${r.tenant.school_code})\n` +
+          `Durasi: ${Number(p.durasi) >= 365 ? '12 bulan' : '1 bulan'}\nNominal: Rp ${Number(p.nominal || 0).toLocaleString('id-ID')}\n` +
+          `Masa aktif sekarang s.d. *${r.end}*.\n\nTerima kasih, layanan sekolah Anda sudah aktif kembali.`;
+        if (queue) queue.push('wa.notify', { tenantId: r.tenant.id, message: msg });
+      } catch (e) { }
       res.redirect(req.BASE + flash('/super-admin/pembayaran', 'ok',
         `Pembayaran disetujui. ${r.tenant.nama} aktif sampai ${r.end} dan pemblokiran dibuka.`));
     } catch (e) {
@@ -564,7 +691,13 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   post('/super-admin/pembayaran/:id/reject', (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     try {
+      const p = saas.paymentById(req.params.id);
       saas.rejectPayment(req.params.id, req.body.alasan, u);
+      try {
+        const msg = `*Pengajuan Perpanjangan Ditolak*\n\nSekolah: ${p.sekolah_nama} (${p.school_code})\n` +
+          `Alasan: ${String(req.body.alasan || '').trim()}\n\nSilakan unggah ulang bukti pembayaran pada menu Info Layanan.`;
+        if (queue) queue.push('wa.notify', { tenantId: p.tenant_id, message: msg });
+      } catch (e) { }
       res.redirect(req.BASE + flash('/super-admin/pembayaran', 'ok', 'Pengajuan ditolak. Alasan tampil di menu Info Layanan sekolah.'));
     } catch (e) {
       res.redirect(req.BASE + flash('/super-admin/pembayaran', 'err', e.message));
@@ -666,82 +799,345 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     }
   });
 
-  /* ---------------- backup via email (Super Admin) ---------------- */
-  get('/super-admin/backup', (req, res) => {
+  /* ================= BRANDING SISTEM (default untuk portal login) ================= */
+  get('/super-admin/branding', (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
-    const cfg = mailer.saasMailConfig(saas);
-    const log = S.prepare('SELECT * FROM saas_backup_log ORDER BY id DESC LIMIT 10').all();
+    const logo = saas.appLogo();
+    const fav = String(saas.get('saas_favicon', '') || '');
     const content = `
     <div class="split">
       <div class="card">
-        <div class="card-head"><div><h3>Auto-Backup Database via Email</h3>
-          <div class="sub">Backup SELURUH SaaS (control plane + semua sekolah) 2× sehari</div></div>
-          ${cfg.aktif ? ui.badge('Aktif', 'green') : ui.badge('Nonaktif', 'gray')}</div>
-        <div class="alert info">${ui.icon('info')}<div>Jadwal otomatis <b>06:00</b> &amp; <b>15:00</b>. Nama berkas <code>Backup_SIMKEU_DDMMYYYY_HHMM.zip</code>.
-          Berkas .zip langsung dihapus dari server setelah email terkirim (auto-cleanup) agar penyimpanan tidak penuh.</div></div>
-        <form method="post" action="${req.BASE}/super-admin/backup/simpan">
+        <div class="card-head"><div><h3>Branding Sistem (Default)</h3>
+          <div class="sub">Dipakai pada portal login utama & tab browser sebelum masuk ke sekolah</div></div></div>
+        <form method="post" action="${req.BASE}/super-admin/branding">
+          <input type="hidden" name="logo_b64" id="logoB64">
+          <input type="hidden" name="fav_b64" id="favB64">
+          <div class="field"><label>Nama Aplikasi Default</label>
+            <input type="text" name="saas_nama" value="${esc(saas.appName())}" required maxlength="40" placeholder="SIMKEU">
+            <div class="hint">Tampil pada portal login utama, judul tab, dan panel Super Admin.</div></div>
+          <div class="field"><label>Logo Default Sistem (PNG/JPG/SVG, maks 5 MB)</label>
+            <input type="file" accept="image/*" data-b64="logoB64" data-max="5">
+            <div class="hint" id="logoB64-info">Kosongkan bila tidak ingin mengganti.</div></div>
+          <div class="field"><label>Favicon Default (PNG/ICO/SVG, maks 2 MB)</label>
+            <input type="file" accept="image/*,.ico" data-b64="favB64" data-max="2">
+            <div class="hint" id="favB64-info">Bila kosong, favicon otomatis dibuat dari logo default.</div></div>
           <div class="row2">
-            <div class="field"><label>Email Penerima Backup</label><input type="email" name="mail_to" value="${esc(cfg.to)}" placeholder="owner@domain.com" required></div>
-            <div class="field"><label>Email Pengirim</label><input type="email" name="mail_from" value="${esc(cfg.from)}" placeholder="backup@domain.com"></div>
+            <div class="field"><label>Masa Uji Coba Sekolah Baru (hari)</label>
+              <input type="number" name="trial_hari" value="${esc(saas.trialDays())}" min="0" max="365">
+              <div class="hint">Saat mendaftar, expires_at = tanggal daftar + jumlah hari ini.</div></div>
+            <div class="field"><label>Paket Default Pendaftaran</label>
+              <select name="paket_default">
+                ${saas.packageRows().map(p => `<option value="${esc(p.kode)}" ${saas.defaultPackage().kode === p.kode ? 'selected' : ''}>${esc(p.nama)}</option>`).join('')}
+              </select></div>
           </div>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Anti-Spam Pendaftaran</h3>
+            <div class="sub">CAPTCHA transparan + pembatasan IP</div></div></div>
+          <div class="row2">
+            <div class="field"><label>Penyedia CAPTCHA</label>
+              <select name="captcha_provider">
+                ${['off', 'recaptcha', 'turnstile'].map(x => `<option value="${x}" ${saas.get('captcha_provider', 'off') === x ? 'selected' : ''}>${x === 'off' ? 'Nonaktif' : x === 'recaptcha' ? 'Google reCAPTCHA v3' : 'Cloudflare Turnstile'}</option>`).join('')}
+              </select></div>
+            <div class="field"><label>Site Key</label><input type="text" name="captcha_site_key" value="${esc(saas.get('captcha_site_key', ''))}" placeholder="site key"></div>
+          </div>
+          <div class="field"><label>Secret Key</label><input type="password" name="captcha_secret" value="${esc(saas.get('captcha_secret', ''))}" placeholder="secret key" autocomplete="new-password"></div>
+          <div class="row2">
+            <div class="field"><label>Batas Pendaftaran per IP (per jam)</label><input type="number" name="reg_limit_per_hour" value="${esc(saas.regLimits().perHour)}" min="1" max="50"></div>
+            <div class="field"><label>Blokir IP (jam) bila melewati batas</label><input type="number" name="reg_block_hours" value="${esc(saas.regLimits().blockHours)}" min="0" max="168"></div>
+          </div>
+          <div class="field"><label>Nomor WhatsApp Admin (untuk paket berbayar)</label>
+            <input type="text" name="wa_admin_number" value="${esc(saas.get('wa_admin_number', ''))}" placeholder="08xxxxxxxxxx / 628xxxxxxxxxx">
+            <div class="hint">Dipakai tombol "Langganan via WhatsApp" pada pilihan paket di halaman pendaftaran sekolah.</div></div>
+          <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Branding &amp; Keamanan</button></div>
+        </form>
+      </div>
+      <div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Pratinjau</h3><div class="sub">Tampilan portal login utama</div></div></div>
+          <div style="text-align:center;padding:10px 0">
+            ${logo ? `<img src="${esc(logo)}" alt="Logo" style="max-width:130px;max-height:130px;object-fit:contain">`
+        : `<div style="width:110px;height:110px;border-radius:26px;background:linear-gradient(135deg,#6366F1,#8B5CF6);display:grid;place-items:center;margin:0 auto;color:#fff">${ui.icon('wallet')}</div>`}
+            <div style="font-weight:800;font-size:19px;margin-top:12px">${esc(saas.appName())}</div>
+            <div class="small muted">Sistem Informasi Manajemen Keuangan Sekolah</div>
+          </div>
+          <div class="list mt-2">
+            <div class="list-row"><div><div class="mt">Favicon default</div><div class="nm mono small">${fav ? esc(fav.split('/').pop()) : '(otomatis dari logo)'}</div></div></div>
+            <div class="list-row"><div><div class="mt">Masa uji coba</div><div class="nm">${saas.trialDays()} hari</div></div></div>
+            <div class="list-row"><div><div class="mt">Paket default</div><div class="nm">${esc(saas.defaultPackage().nama)}</div></div></div>
+            <div class="list-row"><div><div class="mt">WhatsApp admin</div><div class="nm mono">${esc(saas.waAdminNumber() || '-')}</div></div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>Favicon Tenant</h3><div class="sub">Otomatis per sekolah</div></div></div>
+          <div class="alert info">${ui.icon('info')}<div>Setiap sekolah memakai <b>logo sekolahnya</b> sebagai favicon pada tab browser saat
+            dashboard/portal sekolah dibuka. Bila logo belum diunggah, sistem memakai favicon default di atas.</div></div>
+          <p class="help">Portal login utama (tanpa konteks sekolah) <b>selalu</b> memakai branding default ini.</p>
+        </div>
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'Branding Sistem', sub: 'Nama aplikasi, logo, favicon & keamanan pendaftaran', active: '/super-admin/branding', content, user: u }));
+  });
+
+  post('/super-admin/branding', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const b = req.body || {};
+    try {
+      const nama = String(b.saas_nama || '').trim();
+      if (nama) saas.set('saas_nama', nama);
+      if (b.logo_b64) {
+        const url = await uploadMedia(b.logo_b64, 'branding-logo-' + Date.now() + '.png', { jenis: 'logo', tenantId: 1 });
+        saas.set('saas_logo', url);
+      }
+      if (b.fav_b64) {
+        const url = await uploadMedia(b.fav_b64, 'branding-favicon-' + Date.now() + '.png', { jenis: 'logo', tenantId: 1 });
+        saas.set('saas_favicon', url);
+      }
+      if (b.trial_hari !== undefined) saas.set('trial_hari', String(Math.max(0, Number(b.trial_hari) || 0)));
+      if (b.paket_default && saas.packageByKode(b.paket_default)) {
+        const p = saas.packageByKode(b.paket_default);
+        saas.packageSetDefault(p.id);
+      }
+      if (b.captcha_provider !== undefined) saas.set('captcha_provider', ['off', 'recaptcha', 'turnstile'].includes(b.captcha_provider) ? b.captcha_provider : 'off');
+      if (b.captcha_site_key !== undefined) saas.set('captcha_site_key', String(b.captcha_site_key).trim());
+      if (b.captcha_secret !== undefined) saas.set('captcha_secret', String(b.captcha_secret).trim());
+      if (b.reg_limit_per_hour !== undefined) saas.set('reg_limit_per_hour', String(Math.max(1, Number(b.reg_limit_per_hour) || 2)));
+      if (b.reg_block_hours !== undefined) saas.set('reg_block_hours', String(Math.max(0, Number(b.reg_block_hours) || 24)));
+      if (b.wa_admin_number !== undefined) saas.set('wa_admin_number', String(b.wa_admin_number || '').trim());
+      saas.logSaas(u, 'EDIT BRANDING', 'saas', 'Memperbarui branding sistem & pengaturan keamanan pendaftaran');
+      res.redirect(req.BASE + flash('/super-admin/branding', 'ok', 'Branding sistem disimpan.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/branding', 'err', e.message));
+    }
+  });
+
+  /* ================= PAKET LANGGANAN (CRUD) ================= */
+  get('/super-admin/paket', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const rows = saas.packageRows({ all: true });
+    const edId = Number(req.query.get('edit') || 0);
+    const ed = edId ? saas.packageById(edId) : null;
+    const usage = {};
+    for (const r of S.prepare('SELECT paket, COUNT(*) c FROM tenants GROUP BY paket').all()) usage[r.paket] = r.c;
+    const featMap = {};
+    for (const p of rows) featMap[p.id] = saas.packageFeatureMap(p);
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>${ed ? 'Sunting Paket' : 'Tambah Paket'}</h3>
+          <div class="sub">Harga dipakai pada checkout perpanjangan/upgrade sekolah</div></div>
+          ${ed ? `<a class="btn btn-sm" href="${req.BASE}/super-admin/paket">${ui.icon('x')}Batal</a>` : ''}</div>
+        <form method="post" action="${req.BASE}/super-admin/paket/simpan">
+          <input type="hidden" name="id" value="${ed ? ed.id : ''}">
+          <div class="row2">
+            <div class="field"><label>Nama Paket *</label><input type="text" name="nama" required value="${esc(ed ? ed.nama : '')}" placeholder="Basic / Standard / Pro"></div>
+            <div class="field"><label>Kode Paket</label><input type="text" name="kode" value="${esc(ed ? ed.kode : '')}" placeholder="otomatis dari nama" ${ed ? 'readonly' : ''}></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Harga 1 Bulan (Rp)</label><input type="text" name="harga_bulan" data-money value="${esc(lib.moneyInput(ed ? ed.harga_bulan : 0))}"></div>
+            <div class="field"><label>Harga 12 Bulan (Rp)</label><input type="text" name="harga_tahun" data-money value="${esc(lib.moneyInput(ed ? ed.harga_tahun : 0))}"></div>
+          </div>
+          <div class="field"><label>Keterangan Singkat</label>
+            <input type="text" name="keterangan" value="${esc(ed ? (ed.keterangan || '') : '')}" placeholder="BKU, transaksi, laporan, piutang…"></div>
           <div class="row3">
-            <div class="field"><label>SMTP Host</label><input type="text" name="mail_host" value="${esc(cfg.host)}" placeholder="smtp.gmail.com"></div>
-            <div class="field"><label>SMTP Port</label><input type="text" name="mail_port" value="${esc(cfg.port)}" placeholder="587"></div>
-            <div class="field"><label>Enkripsi</label><select name="mail_secure">
-              <option value="0" ${cfg.secure === '0' ? 'selected' : ''}>STARTTLS (587)</option>
-              <option value="1" ${cfg.secure === '1' ? 'selected' : ''}>SSL/TLS (465)</option></select></div>
+            <div class="field"><label>Urutan</label><input type="number" name="urutan" value="${ed ? ed.urutan : rows.length + 1}" min="1"></div>
+            <div class="field"><label>Masa Uji Coba Paket (hari)</label>
+              <input type="number" name="trial_hari" value="${ed && ed.trial_hari !== null && ed.trial_hari !== undefined ? ed.trial_hari : ''}" min="0" max="365" placeholder="ikut pengaturan global"></div>
+            <div class="field"><label>Status</label>
+              <label class="check" style="margin-top:8px"><input type="checkbox" name="aktif" value="1" ${!ed || ed.aktif ? 'checked' : ''}> Aktif (tampil di pilihan paket)</label></div>
           </div>
+          <label class="check mb-2"><input type="checkbox" name="self_trial" value="1" ${ed && Number(ed.self_trial) ? 'checked' : ''}>
+            Boleh daftar mandiri (langsung mendaftar &amp; mendapat masa uji coba tanpa bayar dulu)</label>
+          <div class="alert info" style="margin-top:0">${ui.icon('info')}<div>Paket yang <b>tidak</b> dicentang "daftar mandiri" hanya bisa dipilih lewat
+            tombol WhatsApp di halaman pendaftaran (harus bayar sesuai harga).</div></div>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Kontrol Fitur Paket</h3>
+            <div class="sub">Fitur yang dicentang otomatis aktif untuk sekolah berpaket ini</div></div></div>
+          <div class="pk-feat-grid">
+            ${saas.FEATURES.map(f => `<label class="check"><input type="checkbox" name="fitur" value="${esc(f.key)}"
+              ${(ed ? featMap[ed.id] || {} : {})[f.key] ? 'checked' : ''}> ${esc(f.label)}</label>`).join('')}
+          </div>
+          <div class="flex mt-2" style="gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn btn-sm" data-check-name-all="fitur">${ui.icon('check')}Pilih Semua Fitur</button>
+            <button type="button" class="btn btn-sm" data-check-name-none="fitur">${ui.icon('x')}Kosongkan</button>
+          </div>
+          <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}${ed ? 'Simpan Perubahan' : 'Tambah Paket'}</button></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h3>Daftar Paket (${rows.length})</h3><div class="sub">Paket default dipakai pendaftaran sekolah baru</div></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Paket</th><th>Kode</th><th class="num">1 Bulan</th><th class="num">12 Bulan</th><th class="num">Sekolah</th><th>Status</th><th></th></tr></thead><tbody>
+          ${rows.map(p => `<tr>
+            <td><b>${esc(p.nama)}</b>${Number(p.is_default) ? ' ' + ui.badge('Default', 'green') : ''}
+              ${Number(p.self_trial) ? ui.badge('Daftar mandiri', 'blue') : ui.badge('Bayar / WA', 'amber')}
+              <div class="t-sub">${esc(p.keterangan || '')}</div>
+              <div class="t-sub">${saas.packageFeatureLabels(p).length} fitur · trial ${p.trial_hari !== null && p.trial_hari !== undefined ? p.trial_hari : saas.trialDays()} hari</div></td>
+            <td class="mono small">${esc(p.kode)}</td>
+            <td class="num">${rupiah(p.harga_bulan)}</td>
+            <td class="num">${rupiah(p.harga_tahun)}</td>
+            <td class="num">${usage[p.kode] || 0}</td>
+            <td>${p.aktif ? ui.badge('Aktif', 'green') : ui.badge('Nonaktif', 'gray')}</td>
+            <td class="nowrap">
+              <a class="btn btn-sm btn-icon" href="${req.BASE}/super-admin/paket?edit=${p.id}" title="Sunting">${ui.icon('edit')}</a>
+              ${Number(p.is_default) ? '' : `<form method="post" action="${req.BASE}/super-admin/paket/${p.id}/default" style="display:inline">
+                <button class="btn btn-sm" title="Jadikan paket default">Default</button></form>`}
+              <form method="post" action="${req.BASE}/super-admin/paket/${p.id}/hapus" style="display:inline" data-confirm="Hapus paket ${esc(p.nama)}?">
+                <button class="btn btn-sm btn-danger" ${Number(p.is_default) ? 'disabled' : ''}>${ui.icon('trash')}</button></form>
+            </td></tr>`).join('')}
+        </tbody></table></div>
+        <div class="alert info mt-2">${ui.icon('info')}<div>Menambah paket <b>Pro</b> (atau paket dengan kode <code>pro</code>) otomatis mengaktifkan seluruh fitur untuk sekolah yang memakainya.</div></div>
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'Paket Langganan', sub: 'Kelola pilihan paket, harga & paket default', active: '/super-admin/paket', content, user: u }));
+  });
+
+  post('/super-admin/paket/simpan', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const fitur = [].concat(req.body.fitur || []).map(x => String(x).trim()).filter(Boolean);
+      const row = saas.packageSave({
+        id: req.body.id, nama: req.body.nama, kode: req.body.kode,
+        harga_bulan: req.body.harga_bulan, harga_tahun: req.body.harga_tahun,
+        keterangan: req.body.keterangan, urutan: req.body.urutan, aktif: req.body.aktif ? 1 : 0,
+        self_trial: req.body.self_trial ? 1 : 0, trial_hari: req.body.trial_hari,
+        fitur: fitur
+      });
+      saas.logSaas(u, req.body.id ? 'EDIT PAKET' : 'TAMBAH PAKET', 'saas', `${row.nama} (${row.kode})`);
+      res.redirect(req.BASE + flash('/super-admin/paket', 'ok', 'Paket langganan disimpan.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/paket', 'err', e.message));
+    }
+  });
+  post('/super-admin/paket/:id/default', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const p = saas.packageSetDefault(req.params.id);
+      saas.logSaas(u, 'PAKET DEFAULT', 'saas', p.nama);
+      res.redirect(req.BASE + flash('/super-admin/paket', 'ok', `Paket default: ${p.nama}.`));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/paket', 'err', e.message));
+    }
+  });
+  post('/super-admin/paket/:id/hapus', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const p = saas.packageDelete(req.params.id);
+      if (p) saas.logSaas(u, 'HAPUS PAKET', 'saas', p.nama);
+      res.redirect(req.BASE + flash('/super-admin/paket', 'ok', 'Paket dihapus.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/paket', 'err', e.message));
+    }
+  });
+
+  /* ubah paket sekolah langsung dari detail */
+  post('/super-admin/sekolah/:id/paket', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const t = saas.setPackage(req.params.id, req.body.paket, u);
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'ok', `Paket sekolah diubah menjadi ${pkgLabel(t.paket)}.`));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + req.params.id, 'err', e.message));
+    }
+  });
+
+  /* ================= AUTO-BACKUP SERVER (TELEGRAM) + UNDUHAN LANGSUNG ================= */
+  get('/super-admin/backup', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const cfg = bt.saasConfig(saas);
+    const log = saas.backupLogRows('saas', 12);
+    const qs = queue ? queue.stats() : { pending: 0, running: 0, done: 0, failed: 0 };
+    const jobs = queue ? queue.recent(8) : [];
+    const lastNext = tg.slotNow(cfg.slots) || null;
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>Auto-Backup Server (Telegram)</h3>
+          <div class="sub">Backup SELURUH SaaS: control plane + semua sekolah, 2x sehari</div></div>
+          ${cfg.aktif && cfg.token && cfg.chat ? ui.badge('Aktif', 'green') : ui.badge('Belum aktif', 'gray')}</div>
+        <div class="alert info">${ui.icon('info')}<div>Nama berkas <code>Backup_FULL_SIMKEU_DDMMYYYY_HHMM.zip</code>.
+          Jadwal <b>06:00</b> &amp; <b>15:00</b>. Berkas sementara (<code>.zip</code>/<code>.sql</code>) dihapus otomatis
+          setelah diproses — berhasil maupun gagal.</div></div>
+        <form method="post" action="${req.BASE}/super-admin/backup/simpan">
+          <div class="field"><label>Telegram Bot Token ${cfg.token ? `<span class="t-sub">(tersimpan: ${esc(tg.mask(cfg.token))})</span>` : ''}</label>
+            <input type="text" name="tg_token" value="" autocomplete="off" placeholder="${cfg.token ? 'kosongkan bila tidak diubah' : '123456789:AAH…'}"></div>
           <div class="row2">
-            <div class="field"><label>Email Pengirim (akun SMTP)</label><input type="text" name="mail_user" value="${esc(cfg.user)}" placeholder="backup@gmail.com"></div>
-            <div class="field"><label>App Password</label><input type="password" name="mail_pass" value="${esc(cfg.pass)}" autocomplete="new-password" placeholder="app password"></div>
+            <div class="field"><label>Telegram Chat ID Super Admin</label><input type="text" name="tg_chat" value="${esc(cfg.chat)}" placeholder="987654321 / -100…"></div>
+            <div class="field"><label>Jadwal otomatis</label><input type="text" name="backup_slots" value="${esc(cfg.slots)}" placeholder="06:00,15:00"></div>
           </div>
-          <label class="check mb-2"><input type="checkbox" name="mail_aktif" value="1" ${cfg.aktif ? 'checked' : ''}> Aktifkan pengiriman otomatis 06:00 &amp; 15:00</label>
+          <label class="check mb-2"><input type="checkbox" name="tg_aktif" value="1" ${cfg.aktif ? 'checked' : ''}> Aktifkan pengiriman otomatis 06:00 &amp; 15:00</label>
           <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan</button></div>
         </form>
         <div class="flex mt-2" style="gap:10px;flex-wrap:wrap">
-          <form method="post" action="${req.BASE}/super-admin/backup/uji"><button class="btn">${ui.icon('check')}Uji Kirim Email</button></form>
+          <form method="post" action="${req.BASE}/super-admin/backup/uji"><button class="btn">${ui.icon('check')}Uji Koneksi Bot</button></form>
           <form method="post" action="${req.BASE}/super-admin/backup/kirim"><button class="btn btn-primary">${ui.icon('upload')}Backup &amp; Kirim Sekarang</button></form>
+          <form method="post" action="${req.BASE}/super-admin/backup/bersih"><button class="btn">${ui.icon('trash')}Bersihkan Berkas Sementara</button></form>
+          <form method="post" action="${req.BASE}/super-admin/backup/antrean"><button class="btn">${ui.icon('refresh')}Proses Antrean Sekarang</button></form>
+        </div>
+        <hr class="sep">
+        <div class="card-head"><div><h3>Backup Manual &amp; Unduh Langsung</h3>
+          <div class="sub">Ekspor real-time seluruh sistem, langsung terunduh ke komputer (tanpa Telegram)</div></div></div>
+        <div class="row2">
+          <a class="btn btn-block" href="${req.BASE}/super-admin/backup/download-zip">${ui.icon('download')}Download Keseluruhan Data (.zip)</a>
+          <a class="btn btn-block" href="${req.BASE}/super-admin/backup/download-sql">${ui.icon('database')}Download Keseluruhan Data (.sql)</a>
+        </div>
+        <p class="help mt-1">Berkas dibuat saat tombol diklik lalu langsung dikirim ke browser; berkas sementara di server dihapus segera setelahnya.</p>
+      </div>
+      <div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Antrean Pekerjaan (Queue)</h3><div class="sub">Backup, WA &amp; penagihan diproses bertahap</div></div></div>
+          <div class="sa-grid" style="grid-template-columns:repeat(2,1fr)">
+            <div class="sa-kpi"><div class="l">Menunggu</div><div class="v">${qs.pending || 0}</div></div>
+            <div class="sa-kpi"><div class="l">Berjalan</div><div class="v">${qs.running || 0}</div></div>
+            <div class="sa-kpi"><div class="l">Selesai</div><div class="v">${qs.done || 0}</div></div>
+            <div class="sa-kpi"><div class="l">Gagal</div><div class="v">${qs.failed || 0}</div></div>
+          </div>
+          <div class="table-wrap short mt-2"><table><thead><tr><th>#</th><th>Jenis</th><th>Status</th><th>Percobaan</th><th>Catatan</th></tr></thead><tbody>
+            ${jobs.length ? jobs.map(j => `<tr>
+              <td class="mono small">${j.id}</td><td class="small">${esc(j.jenis)}</td>
+              <td>${ui.badge(j.status, j.status === 'done' ? 'green' : j.status === 'failed' ? 'red' : j.status === 'running' ? 'blue' : 'amber')}</td>
+              <td class="num">${j.attempts}</td>
+              <td class="small">${esc((j.last_error || '').slice(0, 70))}</td></tr>`).join('')
+        : `<tr><td colspan="5" class="muted" style="text-align:center;padding:14px">Antrean kosong.</td></tr>`}
+          </tbody></table></div>
+          ${lastNext ? `<p class="help mt-1">Slot jadwal aktif sekarang: <b>${esc(lastNext.slot)}</b></p>` : ''}
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>Riwayat Backup Server</h3><div class="sub">12 terakhir</div></div></div>
+          <div class="table-wrap short"><table><thead><tr><th>Waktu</th><th>Berkas</th><th class="num">Ukuran</th><th>Status</th><th>Pesan</th></tr></thead><tbody>
+            ${log.length ? log.map(r => `<tr>
+              <td class="nowrap small">${esc(r.created_at || '')}</td>
+              <td class="mono small">${esc(r.nama_berkas || '-')}</td>
+              <td class="num">${r.ukuran ? Math.round(r.ukuran / 1024) + ' KB' : '-'}</td>
+              <td>${r.status === 'sukses' ? ui.badge('Sukses', 'green') : ui.badge('Gagal', 'red')}</td>
+              <td class="small">${esc((r.pesan || '').slice(0, 80))}</td></tr>`).join('')
+        : `<tr><td colspan="5" class="muted" style="text-align:center;padding:14px">Belum ada riwayat.</td></tr>`}
+          </tbody></table></div>
         </div>
       </div>
-      <div class="card">
-        <div class="card-head"><div><h3>Riwayat Pengiriman</h3><div class="sub">10 terakhir</div></div></div>
-        <div class="table-wrap short"><table><thead><tr><th>Waktu</th><th>Berkas</th><th class="num">Ukuran</th><th>Status</th><th>Pesan</th></tr></thead><tbody>
-          ${log.length ? log.map(r => `<tr>
-            <td class="nowrap small">${esc(r.created_at || '')}</td>
-            <td class="mono small">${esc(r.nama_berkas || '-')}</td>
-            <td class="num">${r.ukuran ? Math.round(r.ukuran / 1024) + ' KB' : '-'}</td>
-            <td>${r.status === 'sukses' ? ui.badge('Sukses', 'green') : ui.badge('Gagal', 'red')}</td>
-            <td class="small">${esc((r.pesan || '').slice(0, 90))}</td></tr>`).join('')
-        : `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px">Belum ada riwayat.</td></tr>`}
-        </tbody></table></div>
-        <div class="alert info mt-2">${ui.icon('info')}<div>Setiap sekolah juga dapat mengatur backup emailnya sendiri di menu <b>Info Layanan</b>.</div></div>
-      </div>
     </div>`;
-    res.html(shell(req, { title: 'Backup Email', sub: 'Auto-backup database via SMTP', active: '/super-admin/backup', content, user: u }));
+    res.html(shell(req, { title: 'Auto-Backup Server', sub: 'Telegram, antrean & unduhan langsung', active: '/super-admin/backup', content, user: u }));
   });
 
   post('/super-admin/backup/simpan', (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     const b = req.body || {};
     try {
-      const aktif = b.mail_aktif ? '1' : '0';
-      const host = String(b.mail_host || '').trim();
-      const port = Number(b.mail_port) || 587;
+      const cur = bt.saasConfig(saas);
+      const token = String(b.tg_token || '').trim() || cur.token;
+      const chat = String(b.tg_chat || '').trim();
+      const slots = String(b.backup_slots || '06:00,15:00').trim();
+      const aktif = b.tg_aktif ? '1' : '0';
       if (aktif === '1') {
-        const chk = mailer.validateConfig({ host, port, from: b.mail_from || b.mail_user, user: b.mail_user });
-        if (chk) throw new Error(chk);
-        if (!String(b.mail_to || '').trim()) throw new Error('Email penerima backup wajib diisi.');
+        if (!token) throw new Error('Bot Token wajib diisi bila auto-backup diaktifkan.');
+        if (!chat) throw new Error('Chat ID Super Admin wajib diisi bila auto-backup diaktifkan.');
+        if (!tg.looksValidToken(token)) throw new Error('Format Bot Token tidak valid (contoh: 123456789:AAH…).');
+        for (const x of slots.split(',')) if (!/^\d{1,2}:\d{2}$/.test(x.trim())) throw new Error('Format jadwal harus HH:MM, mis. 06:00,15:00.');
       }
-      saas.set('mail_to', b.mail_to || '');
-      saas.set('mail_host', host);
-      saas.set('mail_port', String(port));
-      saas.set('mail_secure', b.mail_secure === '1' ? '1' : '0');
-      saas.set('mail_from', b.mail_from || b.mail_user || '');
-      saas.set('mail_user', b.mail_user || '');
-      saas.set('mail_pass', b.mail_pass || '');
-      saas.set('mail_aktif', aktif);
-      saas.logSaas(u, 'EDIT BACKUP EMAIL', 'saas', 'Memperbarui pengaturan SMTP backup');
-      res.redirect(req.BASE + flash('/super-admin/backup', 'ok', 'Pengaturan backup email disimpan.'));
+      saas.set('tg_token', token);
+      saas.set('tg_chat', chat);
+      saas.set('backup_slots', slots);
+      saas.set('tg_aktif', aktif);
+      saas.logSaas(u, 'EDIT BACKUP', 'saas', 'Memperbarui auto-backup server (Telegram)');
+      res.redirect(req.BASE + flash('/super-admin/backup', 'ok', 'Pengaturan auto-backup server disimpan.'));
     } catch (e) {
       res.redirect(req.BASE + flash('/super-admin/backup', 'err', e.message));
     }
@@ -749,26 +1145,624 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
 
   post('/super-admin/backup/uji', async (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
-    const cfg = mailer.saasMailConfig(saas);
+    const cfg = bt.saasConfig(saas);
     try {
-      await mailer.send(
-        { host: cfg.host, port: cfg.port, secure: cfg.secure, user: cfg.user, pass: cfg.pass, from: cfg.from },
-        { to: cfg.to, subject: 'Uji Kirim Email — Backup SaaS SIMKEU', text: 'Uji pengiriman email dari panel Super Admin.\nWaktu: ' + nowStamp() }
-      );
-      res.redirect(req.BASE + flash('/super-admin/backup', 'ok', 'Email uji terkirim ke ' + cfg.to + '.'));
+      if (!cfg.token) throw new Error('Bot Token belum diisi.');
+      const me = await tg.getMe(cfg.token);
+      if (!cfg.chat) throw new Error('Bot @' + me.username + ' terdeteksi. Isi Chat ID Super Admin lalu simpan.');
+      await tg.sendMessage({ token: cfg.token, chatId: cfg.chat, text: '✅ Uji koneksi Super Admin berhasil.\nAuto-backup server akan dikirim ke chat ini pukul ' + cfg.slots + '.' });
+      res.redirect(req.BASE + flash('/super-admin/backup', 'ok', `Bot @${me.username} terhubung; pesan uji terkirim ke ${cfg.chat}.`));
     } catch (e) {
-      res.redirect(req.BASE + flash('/super-admin/backup', 'err', 'Gagal kirim: ' + e.message));
+      res.redirect(req.BASE + flash('/super-admin/backup', 'err', 'Uji gagal: ' + e.message));
     }
   });
 
   post('/super-admin/backup/kirim', async (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     try {
-      const r = await mailer.sendSaasBackup(dbm, saas, { trigger: 'manual', user: u.nama });
+      const r = await bt.runSaasBackup(dbm, saas, { trigger: 'manual', user: u.nama });
       res.redirect(req.BASE + flash('/super-admin/backup', 'ok',
-        `Backup ${r.nama} (${r.tenants} sekolah, ${Math.round(r.ukuran / 1024)} KB) terkirim ke ${r.to}.`));
+        `Backup ${r.nama} (${r.tenants} sekolah · ${Math.round(r.ukuran / 1024)} KB) terkirim ke Telegram ${r.chat}.`));
     } catch (e) {
       res.redirect(req.BASE + flash('/super-admin/backup', 'err', 'Backup gagal: ' + e.message));
     }
   });
+
+  post('/super-admin/backup/antrean', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      if (!queue) throw new Error('Queue tidak tersedia.');
+      const hasil = await queue.drain(60);
+      const sukses = hasil.filter(x => x.ok).length;
+      const gagal = hasil.length - sukses;
+      res.redirect(req.BASE + flash('/super-admin/backup', 'ok',
+        `Antrean diproses: ${sukses} berhasil, ${gagal} gagal.`));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/backup', 'err', e.message));
+    }
+  });
+
+  post('/super-admin/backup/bersih', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const n = tg.sweepTemps(Date.now() + 2 * 60 * 60 * 1000); // paksa bersihkan semua sisa
+    res.redirect(req.BASE + flash('/super-admin/backup', 'ok', `${n} berkas sementara dibersihkan dari server.`));
+  });
+
+  /** unduh langsung: .zip seluruh sistem */
+  get('/super-admin/backup/download-zip', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const nama = bd.fullBackupName(new Date());
+    let tmp = '';
+    try {
+      const zip = bt.buildSaasZip(dbm, saas);
+      tmp = tg.writeTemp(nama, zip.buffer);
+      const buf = require('fs').readFileSync(tmp);
+      saas.logSaas(u, 'DOWNLOAD BACKUP', 'saas', `Unduh ZIP seluruh sistem (${zip.tenants} sekolah, ${Math.round(buf.length / 1024)} KB)`);
+      res.file(buf, nama, 'application/zip');
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/backup', 'err', 'Gagal membuat ZIP: ' + e.message));
+    } finally {
+      tg.cleanup(tmp);
+    }
+  });
+
+  /** dump SQL seluruh sistem (control plane + semua sekolah) */
+  function sqlValue(v) {
+    if (v === null || v === undefined) return 'NULL';
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL';
+    if (Buffer.isBuffer(v)) return "X'" + v.toString('hex') + "'";
+    return "'" + String(v).replace(/'/g, "''") + "'";
+  }
+  function dumpDb(conn, title) {
+    const out = [`-- ================================================================`, `-- ${title}`, `-- ${lib.nowStamp()}`, `-- ================================================================`];
+    const objs = conn.prepare(`SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+      ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`).all();
+    for (const o of objs) {
+      if (o.type === 'table') out.push(`DROP TABLE IF EXISTS "${o.name}";`);
+      if (o.type === 'index') out.push(`DROP INDEX IF EXISTS "${o.name}";`);
+    }
+    for (const o of objs.filter(o => o.type === 'table')) out.push(o.sql.trim() + ';');
+    for (const o of objs.filter(o => o.type !== 'table')) out.push(o.sql.trim() + ';');
+    let rows = 0;
+    for (const o of objs.filter(o => o.type === 'table')) {
+      let data = [];
+      try { data = conn.prepare(`SELECT * FROM "${o.name}"`).all(); } catch (e) { continue; }
+      if (!data.length) continue;
+      const cols = Object.keys(data[0]);
+      const colSql = cols.map(c => `"${c}"`).join(',');
+      for (const r of data) { out.push(`INSERT INTO "${o.name}" (${colSql}) VALUES (${cols.map(c => sqlValue(r[c])).join(',')});`); rows++; }
+    }
+    return { sql: out.join('\n'), rows };
+  }
+  get('/super-admin/backup/download-sql', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const nama = 'Backup_FULL_SIMKEU_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.sql';
+    let tmp = '';
+    try {
+      const parts = [
+        '-- BACKUP LENGKAP SaaS SIMKEU (SQL portabel)',
+        '-- Dibuat: ' + lib.nowStamp(),
+        '-- Berisi control plane + seluruh database sekolah.',
+        'PRAGMA foreign_keys=OFF;',
+        ''
+      ];
+      const cp = dumpDb(saas.db, 'CONTROL PLANE (saas.db)');
+      parts.push(cp.sql, '');
+      let total = cp.rows, n = 0;
+      for (const t of saas.allTenants()) {
+        try {
+          const conn = dbm.openTenantConn(t.id, t.db_file);
+          const d = dumpDb(conn, `SEKOLAH ${t.school_code} — ${t.nama} (tenant_id ${t.id})`);
+          parts.push(d.sql, '');
+          total += d.rows; n++;
+        } catch (e) {
+          parts.push(`-- GAGAL membaca database ${t.school_code}: ${e.message}`, '');
+        }
+      }
+      parts.push(`-- total ${total} baris dari ${n} sekolah + control plane`);
+      const buf = Buffer.from(parts.join('\n'), 'utf8');
+      tmp = tg.writeTemp(nama, buf);
+      saas.logSaas(u, 'DOWNLOAD BACKUP', 'saas', `Unduh SQL seluruh sistem (${n} sekolah, ${total} baris)`);
+      res.file(buf, nama, 'application/sql');
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/backup', 'err', 'Gagal membuat SQL: ' + e.message));
+    } finally {
+      tg.cleanup(tmp);
+    }
+  });
+
+  /* ================= RESET PASSWORD ADMIN SEKOLAH ================= */
+  function adminOf(tenant) {
+    const conn = dbm.openTenantConn(tenant.id, tenant.db_file);
+    return conn.prepare("SELECT id,nama,email,username,role,aktif FROM users WHERE role='super_admin' ORDER BY id LIMIT 1").get() || null;
+  }
+  post('/super-admin/sekolah/:id/reset-password', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const t = saas.tenantById(req.params.id);
+    if (!t) return res.redirect(req.BASE + flash('/super-admin/sekolah', 'err', 'Sekolah tidak ditemukan.'));
+    try {
+      const baru = String(req.body.password_baru || '');
+      if (baru.length < 6) throw new Error('Kata sandi baru minimal 6 karakter.');
+      const adm = adminOf(t);
+      if (!adm) throw new Error('Sekolah ini belum memiliki akun admin (role admin sekolah).');
+      const conn = dbm.openTenantConn(t.id, t.db_file);
+      // hash aman (scrypt dengan salt acak — setara kelas bcrypt/argon2 untuk kebutuhan aplikasi ini)
+      conn.prepare('UPDATE users SET password=?, aktif=1 WHERE id=?').run(lib.hashPassword(baru), adm.id);
+      conn.prepare('INSERT INTO audit (user_id,user_nama,aksi,modul,detail,created_at) VALUES (?,?,?,?,?,?)')
+        .run(null, u.nama, 'RESET PASSWORD', 'pengguna', `Sandi admin sekolah direset oleh Super Admin Pusat`, lib.nowStamp());
+      saas.logSaas(u, 'RESET PASSWORD', 'tenant', `${t.nama}: sandi admin ${adm.username || adm.email} direset`, t.id);
+      saas.credNoticeSet(parseCookie(req, COOKIE), {
+        school: t.nama, kode: t.school_code,
+        username: adm.username || adm.email, password: baru
+      });
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'ok', 'Kata sandi admin sekolah berhasil diperbarui.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'err', e.message));
+    }
+  });
+
+  /* ================= AUDIT LOGS ================= */
+  get('/super-admin/audit', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const q = req.query;
+    const filter = {
+      tenantId: Number(q.get('tenant') || 0) || undefined,
+      aksi: String(q.get('aksi') || '').trim() || undefined,
+      q: String(q.get('q') || '').trim() || undefined,
+      from: String(q.get('from') || '').trim() || undefined,
+      to: String(q.get('to') || '').trim() || undefined,
+      limit: 200
+    };
+    const rows = saas.auditRows(filter);
+    const tenants = saas.allTenants();
+    const actions = saas.auditActions();
+    const content = `
+    <div class="card mb-3">
+      <div class="card-head"><div><h3>Audit Logs Seluruh Sekolah</h3><div class="sub">Login, perubahan data, hapus data, reset password &amp; status billing</div></div></div>
+      <form method="get" action="${req.BASE}/super-admin/audit">
+        <div class="row3">
+          <div class="field"><label>Dari Tanggal</label><input type="date" name="from" value="${esc(filter.from || '')}"></div>
+          <div class="field"><label>Sampai Tanggal</label><input type="date" name="to" value="${esc(filter.to || '')}"></div>
+          <div class="field"><label>Nama Sekolah</label>
+            <select name="tenant"><option value="">Semua sekolah</option>
+              ${tenants.map(t => `<option value="${t.id}" ${Number(filter.tenantId) === Number(t.id) ? 'selected' : ''}>${esc(t.nama)} (${esc(t.school_code)})</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Jenis Aktivitas</label>
+            <select name="aksi"><option value="">Semua aktivitas</option>
+              ${actions.map(a => `<option value="${esc(a.aksi)}" ${filter.aksi === a.aksi ? 'selected' : ''}>${esc(a.aksi)} (${a.c})</option>`).join('')}
+            </select></div>
+          <div class="field"><label>Pencarian</label><input type="text" name="q" value="${esc(filter.q || '')}" placeholder="nama user / detail / sekolah"></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary">${ui.icon('search')}Terapkan Filter</button>
+          <a class="btn" href="${req.BASE}/super-admin/audit">Reset</a></div>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h3>${rows.length} Aktivitas</h3><div class="sub">Urut terbaru</div></div></div>
+      <div class="table-wrap" style="max-height:66vh;overflow:auto"><table><thead><tr>
+        <th>Waktu</th><th>Sekolah</th><th>User</th><th>Role</th><th>IP</th><th>Aksi</th><th>Detail</th></tr></thead><tbody>
+        ${rows.length ? rows.map(r => `<tr>
+          <td class="nowrap small">${esc(r.created_at || '')}</td>
+          <td class="small">${esc(r.tenant_nama || ('tenant ' + (r.tenant_id || '-')))}</td>
+          <td class="small"><b>${esc(r.user_nama || '-')}</b></td>
+          <td class="small">${esc(r.role || '-')}</td>
+          <td class="mono small">${esc(r.ip || '-')}</td>
+          <td>${ui.badge(r.aksi || '-', /HAPUS|TOLAK|SUSPEND|DITOLAK/.test(r.aksi || '') ? 'red' : /LOGIN|TAMBAH|DOWNLOAD/.test(r.aksi || '') ? 'green' : 'gray')}</td>
+          <td class="small">${esc((r.detail || '').slice(0, 120))}</td></tr>`).join('')
+        : `<tr><td colspan="7" class="muted" style="text-align:center;padding:18px">Belum ada aktivitas pada filter ini.</td></tr>`}
+      </tbody></table></div>
+    </div>`;
+    res.html(shell(req, { title: 'Audit Logs', sub: 'Jejak aktivitas seluruh sekolah', active: '/super-admin/audit', content, user: u }));
+  });
+
+  /* ================= PENGUMUMAN GLOBAL & MAINTENANCE ================= */
+  get('/super-admin/pengumuman', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const rows = saas.announcementRows();
+    const m = saas.maintenance();
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>Buat / Sunting Pengumuman</h3>
+          <div class="sub">Tampil real-time di dashboard seluruh sekolah</div></div></div>
+        <form method="post" action="${req.BASE}/super-admin/pengumuman/simpan">
+          <div class="row2">
+            <div class="field"><label>Judul Pengumuman *</label><input type="text" name="judul" required maxlength="140" placeholder="Contoh: Pemeliharaan server Sabtu malam"></div>
+            <div class="field"><label>Opsi Tampilan</label>
+              <select name="tipe">
+                <option value="banner">Banner Top Bar (bilah di atas navigasi)</option>
+                <option value="popup">Pop-up Modal saat login</option>
+              </select></div>
+          </div>
+          <div class="field"><label>Isi Pengumuman</label>
+            <textarea name="isi" rows="4" placeholder="Tuliskan informasi untuk seluruh sekolah…"></textarea></div>
+          <div class="row3">
+            <div class="field"><label>Warna</label><select name="warna">
+              <option value="info">Biru (informasi)</option><option value="ok">Hijau (baik)</option>
+              <option value="warn">Kuning (peringatan)</option><option value="err">Merah (penting)</option></select></div>
+            <div class="field"><label>Mulai (opsional)</label><input type="date" name="mulai"></div>
+            <div class="field"><label>Selesai (opsional)</label><input type="date" name="selesai"></div>
+          </div>
+          <label class="check mb-2"><input type="checkbox" name="aktif" value="1" checked> Aktifkan sekarang</label>
+          <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Pengumuman</button></div>
+        </form>
+        <div class="table-wrap mt-3"><table><thead><tr><th>Judul</th><th>Tipe</th><th>Warna</th><th>Periode</th><th>Status</th><th></th></tr></thead><tbody>
+          ${rows.length ? rows.map(a => `<tr>
+            <td><b>${esc(a.judul)}</b><div class="t-sub">${esc((a.isi || '').slice(0, 80))}</div></td>
+            <td>${a.tipe === 'popup' ? 'Pop-up' : 'Banner'}</td>
+            <td>${ui.badge(a.warna, a.warna === 'err' ? 'red' : a.warna === 'warn' ? 'amber' : a.warna === 'ok' ? 'green' : 'blue')}</td>
+            <td class="small">${esc(a.mulai || '-')} → ${esc(a.selesai || '-')}</td>
+            <td>${a.aktif ? ui.badge('Aktif', 'green') : ui.badge('Nonaktif', 'gray')}</td>
+            <td class="nowrap">
+              <form method="post" action="${req.BASE}/super-admin/pengumuman/${a.id}/toggle" style="display:inline">
+                <button class="btn btn-sm">${a.aktif ? 'Nonaktifkan' : 'Aktifkan'}</button></form>
+              <form method="post" action="${req.BASE}/super-admin/pengumuman/${a.id}/hapus" style="display:inline" data-confirm="Hapus pengumuman ini?">
+                <button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>
+            </td></tr>`).join('')
+        : `<tr><td colspan="6" class="muted" style="text-align:center;padding:16px">Belum ada pengumuman.</td></tr>`}
+        </tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h3>Mode Perbaikan (Maintenance)</h3>
+          <div class="sub">Blokir sementara seluruh akses sekolah</div></div>
+          ${m.aktif ? ui.badge('AKTIF', 'red') : ui.badge('Normal', 'green')}</div>
+        <div class="alert ${m.aktif ? 'warn' : 'info'}">${ui.icon(m.aktif ? 'alert' : 'info')}<div>
+          ${m.aktif
+        ? `Mode perbaikan <b>sedang aktif</b>. Seluruh admin/staf sekolah dialihkan ke halaman "Sistem Dalam Perbaikan".
+             Portal Super Admin tetap dapat diakses normal.`
+        : `Saat diaktifkan, seluruh pengguna sekolah akan melihat halaman "Sistem Dalam Perbaikan";
+             portal Super Admin tetap normal.`}</div></div>
+        <form method="post" action="${req.BASE}/super-admin/maintenance">
+          <div class="field"><label>Pesan Pemberitahuan Resmi</label>
+            <textarea name="pesan" rows="3" placeholder="Contoh: Pemeliharaan rutin, layanan kembali pukul 22:00 WIB.">${esc(m.pesan)}</textarea></div>
+          <div class="field"><label>Perkiraan Selesai (teks bebas)</label>
+            <input type="text" name="selesai" value="${esc(m.selesai)}" placeholder="Sabtu, 8 Nov 2026 pukul 22:00 WIB"></div>
+          ${m.aktif
+        ? `<input type="hidden" name="aktif" value="0"><button class="btn btn-primary btn-block">${ui.icon('check')}Matikan Maintenance</button>`
+        : `<input type="hidden" name="aktif" value="1"><button class="btn btn-danger btn-block" data-confirm="Aktifkan mode perbaikan? Semua akses sekolah akan diblokir sementara.">${ui.icon('lock')}Aktifkan Maintenance</button>`}
+        </form>
+        ${m.mulai ? `<p class="help mt-2">Aktif sejak: ${esc(m.mulai)}</p>` : ''}
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'Pengumuman & Maintenance', sub: 'Broadcast banner/pop-up dan mode perbaikan', active: '/super-admin/pengumuman', content, user: u }));
+  });
+
+  post('/super-admin/pengumuman/simpan', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const row = saas.announcementSave({
+        judul: req.body.judul, isi: req.body.isi, tipe: req.body.tipe, warna: req.body.warna,
+        mulai: req.body.mulai, selesai: req.body.selesai, aktif: req.body.aktif ? 1 : 0, oleh: u.nama
+      });
+      if (!row) throw new Error('Judul pengumuman wajib diisi.');
+      saas.logSaas(u, 'PENGUMUMAN', 'saas', `Pengumuman "${row.judul}" (${row.tipe}) disimpan`);
+      res.redirect(req.BASE + flash('/super-admin/pengumuman', 'ok', 'Pengumuman disimpan dan langsung tampil di sekolah.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/pengumuman', 'err', e.message));
+    }
+  });
+  post('/super-admin/pengumuman/:id/toggle', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const a = saas.announcementById(req.params.id);
+    if (a) { saas.announcementSave({ ...a, aktif: a.aktif ? 0 : 1, oleh: u.nama }); }
+    res.redirect(req.BASE + flash('/super-admin/pengumuman', 'ok', 'Status pengumuman diubah.'));
+  });
+  post('/super-admin/pengumuman/:id/hapus', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const a = saas.announcementDelete(req.params.id);
+    if (a) saas.logSaas(u, 'HAPUS PENGUMUMAN', 'saas', a.judul);
+    res.redirect(req.BASE + flash('/super-admin/pengumuman', 'ok', 'Pengumuman dihapus.'));
+  });
+  post('/super-admin/maintenance', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const on = String(req.body.aktif) === '1';
+      const m = saas.setMaintenance(on, req.body.pesan, req.body.selesai, u);
+      res.redirect(req.BASE + flash('/super-admin/pengumuman', 'ok',
+        m.aktif ? 'Mode perbaikan AKTIF — seluruh akses sekolah diblokir sementara.' : 'Mode perbaikan dimatikan; sekolah dapat mengakses aplikasi kembali.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/pengumuman', 'err', e.message));
+    }
+  });
+
+  /* ================= PUSAT TIKET KENDALA ================= */
+  get('/super-admin/tiket', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const status = String(req.query.get('status') || '').trim();
+    const q = String(req.query.get('q') || '').trim();
+    const rows = saas.ticketsAll({ status: status || undefined, q: q || undefined });
+    const pick = Number(req.query.get('id') || 0);
+    const detail = pick ? saas.ticketById(pick) : (rows[0] || null);
+    const msgs = detail ? saas.ticketMessages(detail.id) : [];
+    const badge = st => st === 'resolved' ? ui.badge('Resolved', 'green') : st === 'in_progress' ? ui.badge('In Progress', 'blue') : ui.badge('Open', 'amber');
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>Pusat Tiket Kendala</h3><div class="sub">${rows.length} tiket dari seluruh sekolah</div></div></div>
+        <form method="get" action="${req.BASE}/super-admin/tiket" class="filterbar">
+          <div class="field"><label>Status</label><select name="status" data-autosubmit>
+            <option value="">Semua status</option>
+            ${Object.entries(saas.TICKET_STATUS).map(([k, v]) => `<option value="${k}" ${status === k ? 'selected' : ''}>${v}</option>`).join('')}
+          </select></div>
+          <input type="text" name="q" value="${esc(q)}" placeholder="cari sekolah / judul / kode">
+          <button class="btn">${ui.icon('search')}Cari</button>
+        </form>
+        <div class="table-wrap" style="max-height:60vh;overflow:auto"><table><thead><tr><th>Kode</th><th>Sekolah</th><th>Judul</th><th>Status</th><th></th></tr></thead><tbody>
+          ${rows.length ? rows.map(t => `<tr>
+            <td class="mono small">${esc(t.kode || '-')}</td>
+            <td class="small">${esc(t.sekolah_nama)}<div class="t-sub">${esc(t.school_code)}</div></td>
+            <td><b>${esc(t.judul)}</b><div class="t-sub">${esc(t.kategori || '')} · ${esc(t.created_at || '')}</div></td>
+            <td>${badge(t.status)}</td>
+            <td><a class="btn btn-sm ${detail && detail.id === t.id ? 'btn-primary' : ''}" href="${req.BASE}/super-admin/tiket?id=${t.id}&status=${encodeURIComponent(status)}">Buka</a></td>
+          </tr>`).join('') : `<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">Tidak ada tiket.</td></tr>`}
+        </tbody></table></div>
+      </div>
+      <div class="card">
+        ${detail ? `
+          <div class="card-head"><div><h3>${esc(detail.kode)} · ${esc(detail.judul)}</h3>
+            <div class="sub">${esc(detail.kategori)} · ${esc(detail.dibuat_oleh || '-')} · ${esc(detail.created_at || '')}</div></div>
+            ${badge(detail.status)}</div>
+          <div class="alert info">${ui.icon('info')}<div>${esc(detail.deskripsi || '').replace(/\n/g, '<br>')}</div></div>
+          ${detail.bukti_url ? `<p class="small"><b>Bukti:</b> <button type="button" class="btn btn-sm" data-proof="${esc(detail.bukti_url)}">Lihat screenshot</button></p>` : ''}
+          <div class="ticket-thread">
+            ${msgs.map(m => `<div class="tk-msg ${m.dari === 'admin' ? 'admin' : 'tenant'}">
+              <div class="tk-head"><b>${esc(m.nama || '-')}</b><span class="t-sub">${m.dari === 'admin' ? 'Super Admin' : 'Sekolah'} · ${esc(m.created_at || '')}</span></div>
+              <div class="tk-body">${esc(m.pesan || '').replace(/\n/g, '<br>')}</div>
+              ${m.lampiran_url ? `<a class="tk-attach" href="${esc(m.lampiran_url)}" target="_blank" rel="noopener">${ui.icon('file')}Lampiran</a>` : ''}
+            </div>`).join('') || '<div class="muted small">Belum ada balasan.</div>'}
+          </div>
+          <form method="post" action="${req.BASE}/super-admin/tiket/${detail.id}/balas" class="mt-2">
+            <input type="hidden" name="lampiran_b64" id="lampiranAdmin">
+            <div class="field"><label>Balasan Super Admin</label><textarea name="pesan" rows="3" placeholder="Tuliskan solusi / instruksi…"></textarea></div>
+            <div class="field"><label>Screenshot Jawaban (opsional)</label>
+              <input type="file" accept="image/*" data-b64="lampiranAdmin" data-max="5">
+              <div class="hint" id="lampiranAdmin-info">PNG/JPG maks 5 MB.</div></div>
+            <div class="form-actions"><button class="btn btn-primary">${ui.icon('send')}Kirim Balasan</button></div>
+          </form>
+          <form method="post" action="${req.BASE}/super-admin/tiket/${detail.id}/status" class="flex mt-2" style="gap:8px;align-items:flex-end">
+            <div class="field" style="margin:0"><label>Ubah Status</label>
+              <select name="status">${Object.entries(saas.TICKET_STATUS).map(([k, v]) => `<option value="${k}" ${detail.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+            <button class="btn">${ui.icon('check')}Simpan Status</button>
+          </form>`
+        : `<div class="muted" style="padding:30px;text-align:center">Pilih tiket pada tabel untuk melihat percakapan.</div>`}
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'Pusat Tiket Kendala', sub: 'Helpdesk seluruh sekolah', active: '/super-admin/tiket', content, user: u }));
+  });
+
+  post('/super-admin/tiket/:id/balas', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      let lamp = '';
+      if (req.body.lampiran_b64) lamp = await uploadMedia(req.body.lampiran_b64, 'tiket-admin-' + Date.now() + '.jpg', { jenis: 'tiket', tenantId: 1 });
+      const t = saas.ticketMessageAdd(req.params.id, { dari: 'admin', nama: u.nama + ' (Super Admin)', pesan: req.body.pesan, lampiran_url: lamp });
+      saas.logSaas(u, 'BALAS TIKET', 'tiket', `${t.kode} · ${t.sekolah_nama || ''}`);
+      res.redirect(req.BASE + flash('/super-admin/tiket?id=' + req.params.id, 'ok', 'Balasan terkirim ke sekolah.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/tiket?id=' + req.params.id, 'err', e.message));
+    }
+  });
+  post('/super-admin/tiket/:id/status', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      saas.ticketStatus(req.params.id, req.body.status, u);
+      res.redirect(req.BASE + flash('/super-admin/tiket?id=' + req.params.id, 'ok', 'Status tiket diperbarui.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/tiket?id=' + req.params.id, 'err', e.message));
+    }
+  });
+
+  /* ================= WA GATEWAY PUSAT ================= */
+  get('/super-admin/wa', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const cfg = saas.waConfig();
+    const logs = S.prepare("SELECT * FROM saas_audit WHERE modul='wa' ORDER BY id DESC LIMIT 12").all();
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>Pengaturan WA Gateway</h3><div class="sub">Dipakai untuk pengingat H-7 &amp; notifikasi pembayaran</div></div>
+          ${cfg.aktif ? ui.badge('Aktif', 'green') : ui.badge('Nonaktif', 'gray')}</div>
+        <div class="alert info">${ui.icon('info')}<div>Kompatibel dengan gateway populer (Fonnte, Wablas, Watzap, dsb).
+          Mode <b>form</b> mengirim <code>target</code> + <code>message</code> (x-www-form-urlencoded);
+          mode <b>json</b> mengirim <code>{target, phone, message, sender}</code>.</div></div>
+        <form method="post" action="${req.BASE}/super-admin/wa/simpan">
+          <div class="field"><label>Endpoint URL</label><input type="text" name="wa_api_url" value="${esc(cfg.url)}" placeholder="https://api.fonnte.com/send"></div>
+          <div class="row2">
+            <div class="field"><label>API Key / Token</label><input type="text" name="wa_api_token" value="${esc(cfg.token)}" autocomplete="off" placeholder="token gateway"></div>
+            <div class="field"><label>Nomor WhatsApp Pengirim</label><input type="text" name="wa_sender" value="${esc(cfg.sender)}" placeholder="628123456789"></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Format Payload</label><select name="wa_payload">
+              <option value="form" ${cfg.payload === 'form' ? 'selected' : ''}>Form (target + message)</option>
+              <option value="json" ${cfg.payload === 'json' ? 'selected' : ''}>JSON ({target, message})</option>
+            </select></div>
+            <div class="field"><label>Status</label>
+              <label class="check" style="margin-top:6px"><input type="checkbox" name="wa_aktif" value="1" ${cfg.aktif ? 'checked' : ''}> Aktifkan pengiriman otomatis</label></div>
+          </div>
+          <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan</button></div>
+        </form>
+        <form method="post" action="${req.BASE}/super-admin/wa/uji" class="mt-2">
+          <div class="row2">
+            <div class="field"><label>Nomor Uji</label><input type="text" name="nomor" placeholder="08xxxxxxxxxx"></div>
+            <div class="field" style="display:flex;align-items:flex-end"><button class="btn btn-block">${ui.icon('send')}Uji Kirim WA</button></div>
+          </div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h3>Notifikasi Otomatis</h3><div class="sub">Dijalankan lewat queue saat cron harian</div></div></div>
+        <div class="list">
+          <div class="list-row"><div><div class="mt">Pengingat perpanjangan H-7</div>
+            <div class="nm">Dikirim otomatis ke nomor admin sekolah 7 hari sebelum masa aktif berakhir.</div></div></div>
+          <div class="list-row"><div><div class="mt">Persetujuan / penolakan pembayaran</div>
+            <div class="nm">Dikirim saat Super Admin menyetujui atau menolak pengajuan perpanjangan.</div></div></div>
+        </div>
+        <div class="table-wrap short mt-2"><table><thead><tr><th>Waktu</th><th>Sekolah</th><th>Hasil</th></tr></thead><tbody>
+          ${logs.length ? logs.map(l => `<tr><td class="nowrap small">${esc(l.created_at || '')}</td>
+            <td class="small">${esc(l.detail || '')}</td>
+            <td>${ui.badge(l.aksi, /GAGAL/.test(l.aksi) ? 'red' : 'green')}</td></tr>`).join('')
+        : `<tr><td colspan="3" class="muted" style="text-align:center;padding:14px">Belum ada pengiriman.</td></tr>`}
+        </tbody></table></div>
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'WA Gateway', sub: 'Notifikasi otomatis ke admin sekolah', active: '/super-admin/wa', content, user: u }));
+  });
+
+  post('/super-admin/wa/simpan', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const b = req.body || {};
+      const aktif = b.wa_aktif ? '1' : '0';
+      if (aktif === '1' && !String(b.wa_api_url || '').trim()) throw new Error('Endpoint URL wajib diisi bila WA diaktifkan.');
+      saas.set('wa_api_url', String(b.wa_api_url || '').trim());
+      saas.set('wa_api_token', String(b.wa_api_token || '').trim());
+      saas.set('wa_sender', String(b.wa_sender || '').trim());
+      saas.set('wa_payload', b.wa_payload === 'json' ? 'json' : 'form');
+      saas.set('wa_aktif', aktif);
+      saas.logSaas(u, 'EDIT WA', 'wa', 'Memperbarui kredensial WA Gateway');
+      res.redirect(req.BASE + flash('/super-admin/wa', 'ok', 'Pengaturan WA Gateway disimpan.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/wa', 'err', e.message));
+    }
+  });
+
+  post('/super-admin/wa/uji', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const nomor = String(req.body.nomor || '').trim();
+      if (!nomor) throw new Error('Nomor uji wajib diisi.');
+      const r = await saas.sendWA(nomor, `Uji koneksi WA Gateway ${saas.appName()}\nWaktu: ${lib.nowStamp()}`);
+      if (!r.ok && !r.demo) throw new Error(r.reason || 'Gagal mengirim.');
+      res.redirect(req.BASE + flash('/super-admin/wa', r.ok ? 'ok' : 'err',
+        r.ok ? `Pesan uji terkirim ke ${r.target || nomor}.` : ('Gateway belum aktif: ' + (r.reason || '-'))));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/wa', 'err', 'Uji gagal: ' + e.message));
+    }
+  });
+
+  /* ================= MASTER PETUNJUK PENGGUNA ================= */
+  get('/super-admin/petunjuk', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const editId = Number(req.query.get('edit') || 0);
+    const ed = editId ? saas.guideById(editId) : null;
+    const rows = saas.guideRows({});
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>${ed ? 'Sunting Petunjuk' : 'Tambah Petunjuk Pengguna'}</h3>
+          <div class="sub">Materi ini otomatis tampil di menu Petunjuk Pengguna SELURUH sekolah</div></div>
+          ${ed ? `<a class="btn btn-sm" href="${req.BASE}/super-admin/petunjuk">${ui.icon('x')}Batal</a>` : ''}</div>
+        <form method="post" action="${req.BASE}/super-admin/petunjuk/simpan">
+          <input type="hidden" name="id" value="${ed ? ed.id : ''}">
+          <div class="row2">
+            <div class="field"><label>Judul Panduan *</label><input type="text" name="judul" required value="${esc(ed ? ed.judul : '')}" placeholder="Cara mencatat pembayaran iuran"></div>
+            <div class="field"><label>Kategori</label><input type="text" name="kategori" value="${esc(ed ? (ed.kategori || '') : '')}" placeholder="Iuran &amp; SPP"></div>
+          </div>
+          <div class="field"><label>Ringkasan Singkat</label>
+            <textarea name="ringkas" rows="2" placeholder="1–2 kalimat ringkas">${esc(ed ? (ed.ringkas || '') : '')}</textarea></div>
+          <div class="field"><label>Isi Panduan (Markdown / teks kaya)</label>
+            <textarea name="konten" id="fGuideBody" rows="12" placeholder="# Langkah 1&#10;1. Buka menu Iuran&#10;2. Klik Bayar&#10;&#10;**Catatan:** …">${esc(ed ? (ed.konten || '') : '')}</textarea>
+            <div class="hint">Dukungan: <code>#</code> judul, <code>-</code> daftar, <code>**tebal**</code>, <code>kode</code>.</div></div>
+          <div class="row3">
+            <div class="field"><label>Video YouTube (opsional)</label><input type="text" name="video_url" value="${esc(ed ? (ed.video_url || '') : '')}" placeholder="https://youtu.be/…"></div>
+            <div class="field"><label>Lampiran / PDF (opsional)</label><input type="text" name="lampiran_url" value="${esc(ed ? (ed.lampiran_url || '') : '')}" placeholder="https://…/panduan.pdf"></div>
+            <div class="field"><label>Urutan</label><input type="number" name="urutan" value="${ed ? Number(ed.urutan || 0) : rows.length + 1}" min="0"></div>
+          </div>
+          <label class="check mb-2"><input type="checkbox" name="published" value="1" ${!ed || ed.published ? 'checked' : ''}> Terbitkan (tampil di sekolah)</label>
+          <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}${ed ? 'Simpan Perubahan' : 'Tambah Panduan'}</button></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h3>Daftar Petunjuk (${rows.length})</h3><div class="sub">Sinkron otomatis ke semua sekolah</div></div></div>
+        <div class="table-wrap" style="max-height:64vh;overflow:auto"><table><thead><tr><th>#</th><th>Judul</th><th>Kategori</th><th>Status</th><th></th></tr></thead><tbody>
+          ${rows.length ? rows.map(g => `<tr>
+            <td class="num">${g.urutan || '-'}</td>
+            <td><b>${esc(g.judul)}</b><div class="t-sub">${esc((g.ringkas || '').slice(0, 70))}</div></td>
+            <td class="small">${esc(g.kategori || '-')}</td>
+            <td>${g.published ? ui.badge('Terbit', 'green') : ui.badge('Draf', 'gray')}</td>
+            <td class="nowrap">
+              <a class="btn btn-sm" href="${req.BASE}/super-admin/petunjuk?edit=${g.id}">${ui.icon('edit')}</a>
+              <form method="post" action="${req.BASE}/super-admin/petunjuk/${g.id}/hapus" style="display:inline" data-confirm="Hapus panduan ini dari semua sekolah?">
+                <button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>
+            </td></tr>`).join('')
+        : `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px">Belum ada panduan.</td></tr>`}
+        </tbody></table></div>
+        <div class="alert info mt-2">${ui.icon('info')}<div>Akun sekolah hanya dapat <b>membaca</b> panduan; seluruh upaya tambah/ubah/hapus dari sisi sekolah ditolak (403).</div></div>
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'Master Petunjuk Pengguna', sub: 'Sumber tunggal materi panduan seluruh sekolah', active: '/super-admin/petunjuk', content, user: u }));
+  });
+
+  post('/super-admin/petunjuk/simpan', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const row = saas.guideSave({
+        id: req.body.id, judul: req.body.judul, kategori: req.body.kategori, ringkas: req.body.ringkas,
+        konten: req.body.konten, video_url: req.body.video_url, lampiran_url: req.body.lampiran_url,
+        urutan: req.body.urutan, published: req.body.published ? 1 : 0, oleh: u.nama
+      });
+      if (!row) throw new Error('Judul panduan wajib diisi.');
+      saas.logSaas(u, req.body.id ? 'EDIT PANDUAN' : 'TAMBAH PANDUAN', 'panduan', row.judul);
+      res.redirect(req.BASE + flash('/super-admin/petunjuk', 'ok', 'Panduan disimpan & langsung tampil di seluruh sekolah.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/petunjuk', 'err', e.message));
+    }
+  });
+  post('/super-admin/petunjuk/:id/hapus', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const g = saas.guideDelete(req.params.id);
+    if (g) saas.logSaas(u, 'HAPUS PANDUAN', 'panduan', g.judul);
+    res.redirect(req.BASE + flash('/super-admin/petunjuk', 'ok', 'Panduan dihapus dari seluruh sekolah.'));
+  });
+
+  /* ================= PORTAL SLUG & CUSTOM DOMAIN (dari daftar sekolah) ================= */
+  post('/super-admin/sekolah/:id/portal', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const t = saas.tenantById(req.params.id);
+    if (!t) return res.redirect(req.BASE + flash('/super-admin/sekolah', 'err', 'Sekolah tidak ditemukan.'));
+    try {
+      if (req.body.portal_slug !== undefined && String(req.body.portal_slug).trim() !== '') {
+        saas.setPortalSlug(t.id, String(req.body.portal_slug).trim(), u);
+      }
+      if (req.body.custom_domain !== undefined) {
+        const dom = String(req.body.custom_domain || '').trim();
+        if (!dom) saas.setCustomDomain(t.id, '', u);
+        else saas.setCustomDomain(t.id, dom, u, 'pending');
+      }
+      if (typeof refreshPortalMap === 'function') refreshPortalMap();
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'ok', 'Alamat portal / domain sekolah diperbarui.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'err', e.message));
+    }
+  });
+
+  post('/super-admin/sekolah/:id/domain/verifikasi', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const t = saas.tenantById(req.params.id);
+    if (!t) return res.redirect(req.BASE + flash('/super-admin/sekolah', 'err', 'Sekolah tidak ditemukan.'));
+    try {
+      if (!t.custom_domain) throw new Error('Sekolah ini belum mengajukan domain khusus.');
+      const chk = await saas.checkDns(t.custom_domain);
+      if (!chk.ok) {
+        saas.setCustomDomain(t.id, t.custom_domain, u, 'failed');
+        throw new Error('DNS belum mengarah dengan benar: ' + chk.note);
+      }
+      saas.setCustomDomain(t.id, t.custom_domain, u, 'verified');
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'ok', `Domain ${t.custom_domain} terverifikasi & aktif (${chk.note}).`));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'err', e.message));
+    }
+  });
+
+  post('/super-admin/sekolah/:id/domain/hapus', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      saas.setCustomDomain(req.params.id, '', u);
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + req.params.id, 'ok', 'Domain khusus dilepas dari sekolah.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/sekolah/' + req.params.id, 'err', e.message));
+    }
+  });
+
 };

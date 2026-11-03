@@ -193,7 +193,7 @@ const today = new Date().toISOString().slice(0, 10);
 
   /* 7. beasiswa: kalkulator dua arah + pratinjau */
   await visit('/beasiswa', async page => {
-    await page.selectOption('[data-bea-grup]', String(g1.id));
+    await page.check(`[data-bea-group="${g1.id}"]`);
     ok('pilihan bulan muncul untuk grup bulanan', await page.locator('[data-bea-bulan]').first().isVisible());
     await page.fill('[data-bea-nominal]', '150000');
     const pct = await page.inputValue('[data-bea-persen]');
@@ -205,9 +205,7 @@ const today = new Date().toISOString().slice(0, 10);
     ok('isi persentase menghitung nominal otomatis', baseNom > 0 && nom !== '150.000', nom);
     await page.locator('input[name="nama"]').fill('Beasiswa Uji UI');
     await page.locator('input[name="penerima"]').first().check();
-    await page.click('[data-bea-preview]');
-    ok('modal pratinjau beasiswa terbuka', await page.locator('#mBeaPreview.show').count() === 1);
-    ok('pratinjau menampilkan rekap potongan', await page.locator('[data-bea-preview-body]').getByText('Total Potongan').count() >= 1);
+    ok('nominal potongan terisi setelah pilih penerima', (await page.inputValue('[data-bea-nominal]')).replace(/\./g, '').length > 0);
     ok('tanpa overflow horizontal', (await overflow(page)) <= 2, String(await overflow(page)));
   });
 

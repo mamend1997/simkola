@@ -1,9 +1,9 @@
 'use strict';
 /**
  * Sumber tunggal untuk berkas backup SIMKEU Sekolah.
- * Dipakai oleh menu Backup & Restore (unduh manual) DAN oleh integrasi
- * Auto-Backup Google Drive (gdrive.js), supaya isi ZIP yang diunggah ke
- * cloud selalu identik dengan backup yang bisa diunduh/direstore manual.
+ * Dipakai oleh menu Backup & Restore (unduh manual) DAN oleh auto-backup
+ * Telegram (backup_tg.js), supaya isi ZIP yang dikirim ke Telegram selalu
+ * identik dengan backup yang bisa diunduh/direstore manual.
  */
 const lib = require('./lib');
 
@@ -33,8 +33,8 @@ function csvOf(rows) {
   return [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\r\n');
 }
 
-/** ZIP backup database: database.json + data/<tabel>.csv + README.txt */
-function buildDatabaseZip(db) {
+/** ZIP backup database: database.json + data/<tabel>.csv + README.txt (+ berkas tambahan) */
+function buildDatabaseZip(db, opts = {}) {
   const dump = dumpAll(db);
   const files = [
     { name: 'database.json', data: JSON.stringify(dump, null, 1) },
@@ -52,8 +52,9 @@ function buildDatabaseZip(db) {
     }
   ];
   for (const t of TABLES) files.push({ name: `data/${t}.csv`, data: csvOf(dump.tables[t] || []) });
+  for (const f of (opts.extraFiles || [])) if (f && f.name) files.push(f);
   const rows = TABLES.reduce((s, t) => s + (dump.tables[t] || []).length, 0);
-  return { buffer: lib.zip(files), dump, rows, tables: TABLES.length };
+  return { buffer: lib.zip(files), dump, rows, tables: TABLES.length + (opts.extraFiles || []).length };
 }
 
 const BULAN_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -66,7 +67,28 @@ function backupFileName(d = new Date()) {
   return `Backup_SIMKEU_${p(d.getDate())}${BULAN_EN[d.getMonth()]}${d.getFullYear()}_${p(d.getHours())}${p(d.getMinutes())}.zip`;
 }
 
-/** pola nama berkas backup yang dibuat aplikasi ini (dasar kebijakan retensi) */
-const BACKUP_NAME_RE = /^Backup_SIMKEU_\d{2}[A-Za-z]{3}\d{4}_\d{4}\.zip$/;
+/**
+ * Nama berkas backup TINGKAT SEKOLAH (auto-backup Telegram):
+ *   Backup_SIMKEU_SK01_03Nov2026_0600.zip
+ */
+function tenantBackupName(kode, d = new Date()) {
+  const p = n => String(n).padStart(2, '0');
+  const kodeBersih = String(kode || 'SEKOLAH').replace(/[^A-Za-z0-9]+/g, '').toUpperCase() || 'SEKOLAH';
+  return `Backup_SIMKEU_${kodeBersih}_${p(d.getDate())}${BULAN_EN[d.getMonth()]}${d.getFullYear()}_${p(d.getHours())}${p(d.getMinutes())}.zip`;
+}
+/**
+ * Nama berkas backup SELURUH SaaS (auto-backup Super Admin):
+ *   Backup_FULL_SIMKEU_03Nov2026_0600.zip
+ */
+function fullBackupName(d = new Date()) {
+  const p = n => String(n).padStart(2, '0');
+  return `Backup_FULL_SIMKEU_${p(d.getDate())}${BULAN_EN[d.getMonth()]}${d.getFullYear()}_${p(d.getHours())}${p(d.getMinutes())}.zip`;
+}
 
-module.exports = { TABLES, dumpAll, csvOf, buildDatabaseZip, backupFileName, BACKUP_NAME_RE, BULAN_EN };
+/** pola nama berkas backup yang dibuat aplikasi ini (dasar kebijakan retensi) */
+const BACKUP_NAME_RE = /^Backup_(SIMKEU_[A-Z0-9]+|FULL_SIMKEU)_\d{2}[A-Za-z]{3}\d{4}_\d{4}\.zip$/;
+
+module.exports = {
+  TABLES, dumpAll, csvOf, buildDatabaseZip,
+  backupFileName, tenantBackupName, fullBackupName, BACKUP_NAME_RE, BULAN_EN
+};

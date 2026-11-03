@@ -86,14 +86,16 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ---------- admin: pengaturan alamat portal ---------- */
   await page.goto(base + '/login');
+  await page.fill('input[name=kode]', 'SK01');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
   await page.fill('input[name=password]', 'admin123');
   await Promise.all([page.waitForNavigation(), page.click('button[type=submit]')]);
   await page.goto(base + '/sekolah');
   ok('form alamat portal ada', await page.locator('input[name=portal_slip_slug]').count() === 1);
+  ok('form URL portal publik (slug unik) ada', await page.locator('form[action$="/sekolah/portal"] input[name=portal_slug]').count() === 1);
   await page.fill('input[name=portal_slip_slug]', 'portal-slip-pegawai');
   await page.fill('input[name=portal_pegawai_slug]', 'piutang-pegawai');
-  await Promise.all([page.waitForNavigation(), page.click('form[action$="/sekolah"] button.btn-primary')]);
+  await Promise.all([page.waitForNavigation(), page.click('button:has-text("Simpan Identitas")')]);
   ok('simpan alamat portal berhasil', /berhasil disimpan/.test((await page.locator('main.content').innerText())));
   const r2 = await fetch(base + '/portal-slip-pegawai', { redirect: 'manual' });
   ok('alamat baru portal slip dapat dibuka', r2.status === 200);

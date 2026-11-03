@@ -111,19 +111,11 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
     })));
   ok('tanpa overflow horizontal (beasiswa)', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));
 
-  /* ---------- 4. petunjuk pengguna ---------- */
+  /* ---------- 4. petunjuk pengguna (READ ONLY sejak ronde 23) ---------- */
   await go('/petunjuk');
-  ok('halaman petunjuk punya form tambah', (await page.locator('#fPanduan').count()) === 1);
-  await page.fill('#fPanduan input[name=judul]', 'Panduan Uji UI');
-  await page.fill('#fPanduan input[name=video_url]', 'https://youtu.be/dQw4w9WgXcQ');
-  await page.click('button[form=fPanduan]');
-  await page.waitForLoadState('domcontentloaded');
-  ok('kartu petunjuk muncul', (await page.locator('.guide-card', { hasText: 'Panduan Uji UI' }).count()) >= 1);
-  const card = page.locator('.guide-card', { hasText: 'Panduan Uji UI' }).first();
-  await card.locator('button', { hasText: 'Tonton Video' }).click();
-  await page.waitForTimeout(300);
-  ok('video YouTube tersemat (iframe embed)', (await page.locator('.video-embed iframe[src*="youtube.com/embed/dQw4w9WgXcQ"]').count()) === 1);
-  await page.keyboard.press('Escape');
+  ok('halaman petunjuk TANPA form tambah (read-only)', (await page.locator('#fPanduan').count()) === 0);
+  ok('halaman petunjuk menampilkan pencarian', (await page.locator('input[name=q]').count()) === 1);
+  ok('ada penanda baca saja', /hanya baca|Baca saja/i.test(await page.content()));
 
   /* ---------- 5. mobile 390px ---------- */
   await page.close();

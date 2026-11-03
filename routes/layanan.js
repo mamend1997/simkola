@@ -8,12 +8,13 @@
  * · /perpanjang    → checkout QRIS manual + unggah bukti transfer
  * ==================================================================
  */
-const mailer = require('../mailer');
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flashUrl, saas }) => {
   const { esc, rupiah, tglID, nowStamp } = lib;
 
   const durasiLabel = d => (Number(d) >= 365 ? '12 Bulan (+365 hari)' : '1 Bulan (+30 hari)');
+  const pkgName = kode => { const p = saas.packageByKode(kode); return p ? p.nama : (kode || '-'); };
+  const pkgPrice = (kode, d) => saas.packagePrice(kode, d);
 
   function statusBadge(st) {
     return ui.badge(st.label, st.color === 'red' ? 'red' : st.color === 'amber' ? 'amber' : st.color === 'blue' ? 'blue' : 'green');
@@ -41,11 +42,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
     const tagihanTerbit = saas.db.prepare("SELECT * FROM saas_payments WHERE tenant_id=? AND status='issued' ORDER BY id DESC LIMIT 1").get(t.id);
     const logo = dbm.getSetting('sekolah_logo', '') || t.logo || '';
     const nominal = tagihanTerbit && Number(tagihanTerbit.nominal) ? Number(tagihanTerbit.nominal) : saas.priceOf(30);
-    const mcfg = mailer.tenantMailConfig(dbm);
-    let logRows = [];
-    try {
-      logRows = dbm.db.prepare("SELECT * FROM cloud_backup WHERE pemicu IN ('jadwal','manual','email') ORDER BY id DESC LIMIT 6").all();
-    } catch (e) { logRows = []; }
 
     const infoRow = (label, value) => `<div class="list-row"><div><div class="mt">${esc(label)}</div><div class="nm">${value}</div></div></div>`;
 
@@ -62,13 +58,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
           <div>
             <div style="font-size:19px;font-weight:800;letter-spacing:-.02em">${esc(t.nama)}</div>
             <div class="small muted">Kode Sekolah <b class="mono" style="font-size:14px;letter-spacing:.14em">${esc(t.school_code)}</b>
-              · Paket <b>${esc(saas.PAKET[t.paket] || t.paket)}</b></div>
+              · Paket <b>${esc(pkgName(t.paket))}</b></div>
           </div>
         </div>
         <div class="list">
           ${infoRow('Status', statusBadge(st))}
           ${infoRow('Tanggal Register', esc(tglID(t.registered_at || '-')))}
-          ${infoRow('Paket Langganan', esc(saas.PAKET[t.paket] || t.paket) + ` <span class="t-sub">(${lifetime ? 'Lifetime' : 'berlangganan'})</span>`)}
+          ${infoRow('Paket Langganan', esc(pkgName(t.paket)) + ` <span class="t-sub">(${lifetime ? 'Lifetime' : 'berlangganan'})</span>`)}
           ${infoRow('Nominal Tagihan', tagihanTerbit
         ? `<b>${rupiah(nominal)}</b> <span class="badge amber plain">tagihan terbit ${esc(tglID(String(tagihanTerbit.program || tagihanTerbit.dibuat_at || '').slice(0, 10)))}</span>`
         : `<b>${rupiah(nominal)}</b> / bulan <span class="t-sub">· ${rupiah(saas.priceOf(365))} / tahun</span>`)}
@@ -78,6 +74,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
         ? `<div class="alert ok mt-2">${ui.icon('check')}<div><b>Akses Gratis / Seumur Hidup.</b> Sekolah ini dibebaskan dari penagihan perpanjangan dan tidak akan pernah ditangguhkan otomatis.</div></div>`
         : `<div class="flex mt-2" style="gap:10px;flex-wrap:wrap">
               <a class="btn btn-primary" href="${c.base}/perpanjang">${ui.icon('refresh')}Perpanjang Masa Aktif</a>
+              <a class="btn" href="${c.base}/info-layanan/paket">${ui.icon('layers')}Upgrade Paket</a>
               ${pending ? `<span class="badge amber plain">Pengajuan sedang diverifikasi</span>` : ''}
             </div>`}
       </div>
@@ -107,112 +104,39 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
           ${riwayat.some(p => p.alasan) ? `<p class="help mt-1">Catatan: ${esc((riwayat.find(p => p.alasan) || {}).alasan || '')}</p>` : ''}
         </div>
       </div>
-    </div>
-
-    <div class="card mt-3">
-      <div class="card-head"><div><h3>${ui.icon('database', 'i-sm')} Auto-Backup Database via Email</h3>
-        <div class="sub">Berkas .zip dikirim 2× sehari (06:00 &amp; 15:00), lalu dihapus dari server</div></div>
-        ${mcfg.aktif ? ui.badge('Aktif', 'green') : ui.badge('Nonaktif', 'gray')}</div>
-      <div class="alert info">${ui.icon('info')}<div>Gunakan <b>App Password</b> Gmail (bukan password akun) bila memakai Gmail.
-        Format nama berkas: <code>Backup_SIMKEU_DDMMYYYY_HHMM.zip</code>. Berkas sementara langsung dihapus setelah email terkirim agar penyimpanan server tidak penuh.</div></div>
-      <form method="post" action="${c.base}/info-layanan/mail">
-        <div class="row2">
-          <div class="field"><label>Email Penerima Backup</label><input type="email" name="mail_to" value="${esc(mcfg.to)}" placeholder="bendahara@sekolah.sch.id" required></div>
-          <div class="field"><label>Email Pengirim (akun SMTP)</label><input type="email" name="mail_from" value="${esc(mcfg.from)}" placeholder="simkeu@gmail.com"></div>
-        </div>
-        <div class="row3">
-          <div class="field"><label>SMTP Host</label><input type="text" name="mail_host" value="${esc(mcfg.host)}" placeholder="smtp.gmail.com"></div>
-          <div class="field"><label>SMTP Port</label><input type="text" name="mail_port" value="${esc(mcfg.port)}" placeholder="587"></div>
-          <div class="field"><label>Enkripsi</label>
-            <select name="mail_secure">
-              <option value="0" ${mcfg.secure === '0' ? 'selected' : ''}>STARTTLS (587)</option>
-              <option value="1" ${mcfg.secure === '1' ? 'selected' : ''}>SSL/TLS (465)</option>
-            </select></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Email Pengirim (akun SMTP)</label><input type="text" name="mail_user" value="${esc(mcfg.user)}" placeholder="simkeu@gmail.com"></div>
-          <div class="field"><label>App Password</label><input type="password" name="mail_pass" value="${esc(mcfg.pass)}" placeholder="app password 16 karakter" autocomplete="new-password"></div>
-        </div>
-        <label class="check mb-2"><input type="checkbox" name="mail_aktif" value="1" ${mcfg.aktif ? 'checked' : ''}> Aktifkan pengiriman otomatis 06:00 &amp; 15:00</label>
-        <div class="form-actions">
-          <button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan</button>
-        </div>
-      </form>
-      <div class="flex mt-2" style="gap:10px;flex-wrap:wrap">
-        <form method="post" action="${c.base}/info-layanan/mail/uji">${mailerButtons()}</form>
-        <form method="post" action="${c.base}/info-layanan/mail/backup">${mailerButtons('primary')}</form>
-      </div>
-      <div class="table-wrap short mt-2"><table><thead><tr><th>Waktu</th><th>Berkas</th><th class="num">Ukuran</th><th>Status</th><th>Pesan</th></tr></thead><tbody>
-        ${logRows.length ? logRows.map(r => `<tr>
-          <td class="nowrap">${esc(r.waktu || '')}</td>
-          <td class="mono small">${esc(r.nama_berkas || '-')}</td>
-          <td class="num">${r.ukuran ? Math.round(r.ukuran / 1024) + ' KB' : '-'}</td>
-          <td>${r.status === 'sukses' ? ui.badge('Sukses', 'green') : ui.badge('Gagal', 'red')}</td>
-          <td class="small">${esc(r.pesan || '')}</td>
-        </tr>`).join('') : `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px">Belum ada riwayat pengiriman.</td></tr>`}
-      </tbody></table></div>
     </div>`;
 
-    page(req, res, { title: 'Info Layanan', sub: 'Status langganan, tagihan & backup email', active: 'layanan', content });
+    page(req, res, { title: 'Info Layanan', sub: 'Status langganan, tagihan & paket', active: 'layanan', content });
   });
 
-  function mailerButtons(kind) {
-    return kind === 'primary'
-      ? `<button class="btn btn-primary">${ui.icon('upload')}Backup &amp; Kirim Sekarang</button>`
-      : `<button class="btn">${ui.icon('check')}Uji Kirim Email</button>`;
-  }
-
-  post('/info-layanan/mail', (req, res) => {
+  /* ---------------- Upgrade / ganti paket langganan ---------------- */
+  get('/info-layanan/paket', (req, res) => {
     guard(req, res, 'dashboard', 'view');
-    const b = req.body || {};
-    try {
-      const host = String(b.mail_host || '').trim();
-      const port = Number(b.mail_port) || 587;
-      const aktif = b.mail_aktif ? '1' : '0';
-      if (aktif === '1') {
-        const chk = mailer.validateConfig({ host, port, from: b.mail_from || b.mail_user, user: b.mail_user });
-        if (chk) throw new Error(chk);
-        if (!String(b.mail_to || '').trim()) throw new Error('Email penerima backup wajib diisi.');
-      }
-      const map = {
-        mail_to: b.mail_to, mail_host: host, mail_port: port, mail_secure: b.mail_secure === '1' ? '1' : '0',
-        mail_from: b.mail_from || b.mail_user, mail_user: b.mail_user, mail_pass: b.mail_pass, mail_aktif: aktif
-      };
-      for (const [k, v] of Object.entries(map)) dbm.setSetting(k, String(v ?? ''));
-      dbm.logAudit(req.user, 'EDIT', 'backup', 'Memperbarui pengaturan auto-backup email');
-      res.redirect(req.BASE + flashUrl('/info-layanan', 'ok', 'Pengaturan auto-backup email disimpan.'));
-    } catch (e) {
-      res.redirect(req.BASE + flashUrl('/info-layanan', 'err', e.message));
-    }
-  });
-
-  post('/info-layanan/mail/uji', async (req, res) => {
-    guard(req, res, 'dashboard', 'view');
-    const to = mailer.tenantMailConfig(dbm).to;
-    try {
-      const cfg = mailer.tenantMailConfig(dbm);
-      await mailer.send(
-        { host: cfg.host, port: cfg.port, secure: cfg.secure, user: cfg.user, pass: cfg.pass, from: cfg.from },
-        {
-          to, subject: 'Uji Kirim Email — ' + dbm.getSetting('sekolah_nama', 'Sekolah'), text:
-            'Ini email uji dari ' + dbm.getSetting('sekolah_nama', 'Sekolah') + '.\nWaktu: ' + nowStamp() +
-            '\n\nJika email ini diterima, pengaturan SMTP sudah benar dan backup otomatis 06:00 & 15:00 akan dikirim ke alamat ini.'
-        }
-      );
-      res.redirect(req.BASE + flashUrl('/info-layanan', 'ok', 'Email uji berhasil dikirim ke ' + to + '.'));
-    } catch (e) {
-      res.redirect(req.BASE + flashUrl('/info-layanan', 'err', 'Gagal kirim: ' + e.message));
-    }
-  });
-
-  post('/info-layanan/mail/backup', async (req, res) => {
-    guard(req, res, 'dashboard', 'view');
-    try {
-      const r = await mailer.sendTenantBackup(dbm, { trigger: 'manual', user: req.user.nama });
-      res.redirect(req.BASE + flashUrl('/info-layanan', 'ok', `Backup ${r.nama} (${Math.round(r.ukuran / 1024)} KB) terkirim ke ${r.to}.`));
-    } catch (e) {
-      res.redirect(req.BASE + flashUrl('/info-layanan', 'err', 'Backup gagal: ' + e.message));
-    }
+    const c = ctx(req);
+    const t = req.tenant;
+    const current = saas.packageByKode(t.paket) || saas.defaultPackage();
+    const list = saas.packageRows();
+    const pending = saas.pendingPayment(t.id);
+    const content = `<div class="card mb-3">
+      <div class="card-head"><div><h3>${ui.icon('layers', 'i-sm')} Paket Langganan</h3>
+        <div class="sub">Paket aktif: <b>${esc(current.nama)}</b> (${esc(current.keterangan || '')})</div></div>
+        ${ui.badge(current.nama, 'blue')}</div>
+      ${Number(t.is_lifetime_free) ? `<div class="alert ok">${ui.icon('check')}<div><b>Akses Lifetime.</b> Paket tidak memengaruhi masa aktif — semua fitur tetap bisa dipakai sesuai pengaturan Super Admin.</div></div>` : ''}
+      ${pending ? `<div class="alert warn">${ui.icon('clock')}<div>Masih ada pengajuan pembayaran yang menunggu verifikasi. Selesaikan dulu sebelum mengganti paket.</div></div>` : ''}
+      <div class="pk-grid">
+        ${list.map(p => `<div class="card pk-card ${p.kode === current.kode ? 'on' : ''}">
+          <div class="between"><div class="t-strong" style="font-size:16px">${esc(p.nama)}</div>
+            ${p.kode === current.kode ? ui.badge('Aktif', 'green') : ''}</div>
+          <div class="small muted" style="margin:6px 0 10px">${esc(p.keterangan || '')}</div>
+          <div class="pk-price">${rupiah(p.harga_bulan)}<span class="t-sub"> / bulan</span></div>
+          <div class="small muted">${rupiah(p.harga_tahun)} / 12 bulan</div>
+          ${p.kode === current.kode ? '' : `<a class="btn btn-primary btn-block mt-2" href="${c.base}/perpanjang?paket=${encodeURIComponent(p.kode)}">${ui.icon('refresh')}Pilih ${esc(p.nama)}</a>`}
+        </div>`).join('')}
+      </div>
+      <p class="help mt-2">Perubahan paket diproses bersama perpanjangan: pilih paket → bayar via QRIS → Super Admin memverifikasi →
+        paket &amp; masa aktif langsung diperbarui.</p>
+    </div>`;
+    page(req, res, { title: 'Paket Langganan', sub: 'Upgrade paket & fitur sekolah', active: 'layanan', content });
   });
 
   /* ---------------- Checkout perpanjangan (QRIS manual) ---------------- */
@@ -222,6 +146,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
     const t = req.tenant;
     const lifetime = !!Number(t.is_lifetime_free);
     const pending = saas.pendingPayment(t.id);
+    const pkgList = saas.packageRows();
+    const paketSel = String(req.query.get('paket') || '').trim().toLowerCase();
+    const paketTujuan = (paketSel && saas.packageByKode(paketSel)) ? saas.packageByKode(paketSel)
+      : (saas.packageByKode(t.paket) || saas.defaultPackage());
     const qris = saas.get('qris_image', '');
     const nama = saas.get('qris_nama', '');
     const nomor = saas.get('qris_nomor', '');
@@ -237,12 +165,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
           ? `<div class="alert warn">${ui.icon('clock')}<div><b>Menunggu verifikasi.</b> Pengajuan tanggal ${esc(tglID(pending.dibuat_at))} (${esc(durasiLabel(pending.durasi))}) masih diproses. Form dikunci untuk mencegah pengiriman ganda.</div></div>
              <a class="btn btn-block" href="${c.base}/info-layanan">Lihat Status Pengajuan</a>`
           : `<form method="post" action="${c.base}/perpanjang">
+              <div class="field"><label>Paket Langganan</label>
+                <select name="paket">
+                  ${pkgList.map(p => `<option value="${esc(p.kode)}" ${p.kode === paketTujuan.kode ? 'selected' : ''}>${esc(p.nama)} — ${rupiah(p.harga_bulan)}/bln${p.kode === t.paket ? ' (paket aktif)' : ''}</option>`).join('')}
+                </select></div>
               <div class="field"><label>Durasi Perpanjangan</label>
                 <div class="opt-list">
                   <label class="opt"><input type="radio" name="durasi" value="30" checked>
-                    <span><b>1 Bulan</b> (+30 hari) · ${rupiah(saas.priceOf(30))}</span></label>
+                    <span><b>1 Bulan</b> (+30 hari) · ${rupiah(pkgPrice(paketTujuan.kode, 30))}</span></label>
                   <label class="opt"><input type="radio" name="durasi" value="365">
-                    <span><b>12 Bulan</b> (+365 hari) · ${rupiah(saas.priceOf(365))} <em class="t-sub">lebih hemat</em></span></label>
+                    <span><b>12 Bulan</b> (+365 hari) · ${rupiah(pkgPrice(paketTujuan.kode, 365))} <em class="t-sub">lebih hemat</em></span></label>
                 </div>
               </div>
               <div class="field"><label>Bukti Transfer (JPG/PNG, maks 5 MB)</label>
@@ -274,8 +206,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
         <div class="card">
           <div class="card-head"><div><h3>Ringkasan Tagihan</h3></div></div>
           <div class="list">
-            <div class="list-row"><div><div class="mt">Nominal 1 bulan</div><div class="nm">${rupiah(saas.priceOf(30))}</div></div></div>
-            <div class="list-row"><div><div class="mt">Nominal 12 bulan</div><div class="nm">${rupiah(saas.priceOf(365))}</div></div></div>
+            <div class="list-row"><div><div class="mt">Paket dipilih</div><div class="nm">${esc(paketTujuan.nama)}</div></div></div>
+            <div class="list-row"><div><div class="mt">Nominal 1 bulan</div><div class="nm">${rupiah(pkgPrice(paketTujuan.kode, 30))}</div></div></div>
+            <div class="list-row"><div><div class="mt">Nominal 12 bulan</div><div class="nm">${rupiah(pkgPrice(paketTujuan.kode, 365))}</div></div></div>
             <div class="list-row"><div><div class="mt">Masa aktif sekarang</div><div class="nm">${Number(t.is_lifetime_free) ? 'Lifetime' : esc(tglID(t.expires_at || '-'))}</div></div></div>
           </div>
           <p class="help mt-1">Perpanjangan dihitung dari tanggal berakhir terakhir (atau hari ini bila sudah lewat), bukan dari tanggal pembayaran.</p>
@@ -312,8 +245,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
       if (!m) throw new Error('Bukti transfer harus berupa gambar JPG atau PNG.');
       const ext = m[2].toLowerCase().replace('jpeg', 'jpg');
       const url = await uploadMedia(b64, `bukti-${t.school_code}-${Date.now()}.${ext}`);
+      const paket = String(req.body.paket || '').trim().toLowerCase();
       const id = saas.submitPayment(t.id, {
-        durasi, bukti_url: url,
+        durasi, bukti_url: url, paket,
         pengirim: req.body.pengirim, catatan: req.body.catatan
       });
       dbm.logAudit(req.user, 'PENGAJUAN', 'layanan', `Mengirim bukti perpanjangan ${durasi} hari (pengajuan #${id})`);

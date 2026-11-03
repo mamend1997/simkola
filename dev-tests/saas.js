@@ -53,9 +53,10 @@ async function req(method, url, body, opt = {}) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
   }
   const r = await fetch(base + url, { method, headers, body: payload, redirect: 'manual' });
+  const buf = Buffer.from(await r.arrayBuffer());
   return {
-    status: r.status, text: await r.text(), loc: r.headers.get('location') || '',
-    setCookie: r.headers.get('set-cookie') || ''
+    status: r.status, text: buf.toString('utf8'), buf, loc: r.headers.get('location') || '',
+    setCookie: r.headers.get('set-cookie') || '', type: r.headers.get('content-type') || ''
   };
 }
 const cookieOf = sc => String(sc || '').split(';')[0];
@@ -138,7 +139,7 @@ function startFakeSmtp() {
   let c1 = cookieOf(r.setCookie);
   r = await req('GET', '/', null, { cookie: c1 });
   ok('dashboard tenant 1 tampil', r.status === 200 && /Ringkasan Keuangan/.test(r.text), r.status);
-  ok('kartu Info Layanan muncul di dashboard', /Info Layanan Sekolah/.test(r.text));
+  ok('kartu Info Layanan ringkas muncul di dashboard', /id="infoLayanan"/.test(r.text) && /svc-mini/.test(r.text));
 
   r = await req('POST', '/login', { kode: 'ZZ99', email: 'admin@sekolah.sch.id', password: 'admin123' });
   ok('kode sekolah salah ditolak', r.status === 303 && /tidak%20ditemukan|tidak\+ditemukan/.test(r.loc), r.loc);
@@ -150,18 +151,19 @@ function startFakeSmtp() {
   r = await req('POST', '/register', {
     nama: 'SMP Negeri 2 Contoh', alamat: 'Jl. Melati 5', kepala: 'Dra. Ani',
     admin_nama: 'Bendahara SMPN 2', admin_email: 'admin@smpn2.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', telp: '08123', paket: 'standard'
+    admin_password: 'rahasia123', admin_password2: 'rahasia123', telp: '08123', paket: 'basic'
   });
   ok('registrasi sekolah baru redirect', r.status === 303, r.status);
   const t2 = sdb.prepare("SELECT * FROM tenants WHERE nama LIKE 'SMP Negeri 2%'").get();
   ok('tenant baru dibuat', !!t2);
-  ok('kode sekolah baru otomatis SK02', t2 && t2.school_code === 'SK02', t2 && t2.school_code);
+  // ronde 24: kode sekolah dibuat ACAK 4 karakter (bukan SK01/SK02 berurutan)
+  ok('kode sekolah baru acak 4 karakter', t2 && /^[A-Z0-9]{4}$/.test(t2.school_code) && !/^SK\d\d$/.test(t2.school_code), t2 && t2.school_code);
   ok('tenant baru punya berkas database sendiri', t2 && fs.existsSync(t2.db_file), t2 && t2.db_file);
   ok('tenant baru bukan lifetime', t2 && Number(t2.is_lifetime_free) === 0);
   ok('masa uji coba ditetapkan', t2 && !!t2.expires_at);
-  ok('paket standard → fitur pro mati', t2 && JSON.parse(t2.features).iuran === 0);
+  ok('paket Basic → fitur Pro (payroll) mati', t2 && JSON.parse(t2.features).payroll === 0 && JSON.parse(t2.features).iuran === 1);
 
-  r = await req('POST', '/login', { kode: 'SK02', email: 'admin@smpn2.sch.id', password: 'rahasia123' });
+  r = await req('POST', '/login', { kode: t2.school_code, email: 'admin@smpn2.sch.id', password: 'rahasia123' });
   ok('login sekolah baru dengan kodenya', r.status === 303 && r.setCookie.includes('simkeu_sid'), r.loc);
   const c2 = cookieOf(r.setCookie);
   r = await req('GET', '/', null, { cookie: c2 });
@@ -191,7 +193,7 @@ function startFakeSmtp() {
 
   r = await req('GET', '/super-admin', null, { cookie: cs });
   ok('dashboard super admin', r.status === 200 && /Dashboard SaaS/.test(r.text), r.status);
-  ok('daftar sekolah tampil di dashboard', r.text.includes('SMP Negeri 2 Contoh') && r.text.includes('SK02'));
+  ok('daftar sekolah tampil di dashboard', r.text.includes('SMP Negeri 2 Contoh') && r.text.includes(t2.school_code));
   r = await req('GET', '/super-admin/sekolah', null, { cookie: cs });
   ok('tabel daftar sekolah lengkap', /Kode<\/th><th>Paket/.test(r.text.replace(/\s+/g, '').replace(/<th[^>]*>/g, '<th>')) || r.text.includes('Daftar Sekolah'));
   ok('kolom masa aktif & status ada', r.text.includes('Masa Aktif') && r.text.includes('Status'));
@@ -218,17 +220,18 @@ function startFakeSmtp() {
 
   // feature flagging: matikan fitur iuran pada tenant 2
   const feats = JSON.parse(t2.features);
-  const keep = Object.keys(feats).filter(k => k !== 'iuran');
+  const keep = Object.keys(feats).filter(k => k !== 'payroll');
   r = await req('POST', `/super-admin/sekolah/${t2.id}/fitur`, { fitur: keep }, { cookie: cs });
   ok('simpan feature flag', r.status === 303, r.loc);
   const t2b = sdb.prepare('SELECT * FROM tenants WHERE id=?').get(t2.id);
-  ok('fitur iuran tersimpan mati', JSON.parse(t2b.features).iuran === 0);
+  ok('fitur payroll tersimpan mati', JSON.parse(t2b.features).payroll === 0);
   r = await req('GET', '/', null, { cookie: c2 });
-  ok('menu iuran hilang dari navigasi', !/href="\/iuran"/.test(r.text), 'masih ada link /iuran');
-  r = await req('GET', '/iuran', null, { cookie: c2 });
-  ok('URL langsung /iuran diblokir', r.status === 403 && /belum tersedia/.test(r.text), r.status);
+  ok('menu payroll hilang dari navigasi', !/href="\/payroll"/.test(r.text), 'masih ada link /payroll');
+  // ronde 24: iuran/kelas adalah fitur inti (semua paket) → yang diblokir adalah fitur Pro
+  r = await req('GET', '/payroll', null, { cookie: c2 });
+  ok('URL langsung fitur Pro (/payroll) diblokir', r.status === 403 && /belum tersedia/.test(r.text), r.status);
   r = await req('GET', '/', null, { cookie: c1 });
-  ok('sekolah lifetime tetap bisa akses iuran', r.status === 200 && /href="\/iuran"/.test(r.text));
+  ok('sekolah lifetime tetap bisa akses payroll', r.status === 200 && /href="\/payroll"/.test(r.text));
 
   // login as tenant (mode bantuan)
   r = await req('POST', `/super-admin/sekolah/${t1.id}/masuk`, {}, { cookie: cs });
@@ -253,7 +256,10 @@ function startFakeSmtp() {
   r = await req('GET', '/perpanjang', null, { cookie: c2 });
   ok('checkout menampilkan instruksi QRIS', r.status === 200 && r.text.includes('178.000') === false && r.text.includes('Yayasan Pendidikan Contoh'), r.status);
   ok('checkout menampilkan 2 pilihan durasi', /name="durasi" value="30"/.test(r.text) && /name="durasi" value="365"/.test(r.text));
-  ok('harga perpanjangan mengikuti pengaturan', /Rp\s*175\.000/.test(r.text.replace(/&nbsp;/g, ' ')), 'harga tidak sesuai');
+  // ronde 24: nominal mengikuti PAKET sekolah (master paket), bukan harga global tunggal
+  const pkgRow = sdb.prepare('SELECT * FROM saas_packages WHERE kode=?').get(t2.paket) || {};
+  const hargaTxt = new Intl.NumberFormat('id-ID').format(Number(pkgRow.harga_bulan) || 0);
+  ok('harga perpanjangan mengikuti paket sekolah', r.text.replace(/&nbsp;/g, ' ').includes(hargaTxt), 'harga ' + hargaTxt + ' tidak ada');
   r = await req('GET', '/perpanjang', null, { cookie: c1 });
   ok('sekolah lifetime tidak ditawari perpanjangan', r.text.includes('berstatus Lifetime'));
 
@@ -310,52 +316,16 @@ function startFakeSmtp() {
   ok('info layanan menampilkan kode sekolah', r.text.includes('SK01'));
   ok('info layanan menampilkan status lifetime', /Lifetime/.test(r.text));
 
-  /* ================= TAHAP 6 — backup email SMTP ================= */
-  // set konfigurasi SMTP lewat form tenant (tanpa unggah berkas)
-  r = await req('POST', '/info-layanan/mail', {
-    mail_to: 'bendahara@smpn2.sch.id', mail_host: '127.0.0.1', mail_port: String(SMTP_PORT), mail_secure: '0',
-    mail_from: 'backup@smpn2.sch.id', mail_user: 'backup@smpn2.sch.id', mail_pass: 'app-pass', mail_aktif: '1'
-  }, { cookie: c2 });
-  ok('simpan pengaturan backup email tenant', r.status === 303 && /ok=/.test(r.loc), r.loc);
-  ok('konfigurasi SMTP tersimpan di database sekolah', t2db.prepare("SELECT v FROM settings WHERE k='mail_host'").get().v === '127.0.0.1');
-  r = await req('POST', '/info-layanan/mail/uji', {}, { cookie: c2 });
-  ok('uji kirim email berhasil', r.status === 303 && /ok=/.test(r.loc), r.loc);
-  ok('server SMTP menerima email uji', mailSink.length >= 1, 'tidak ada email');
-  r = await req('POST', '/info-layanan/mail/backup', {}, { cookie: c2 });
-  ok('backup & kirim sekarang berhasil', r.status === 303 && /ok=/.test(r.loc), r.loc);
-  const lastMail = mailSink[mailSink.length - 1] || { raw: '' };
-  ok('email berisi lampiran zip', /Content-Disposition: attachment; filename="Backup_SIMKEU_/.test(lastMail.raw), lastMail.raw.slice(0, 300));
-  ok('nama berkas sesuai format Backup_SIMKEU_DDMMYYYY_HHMM.zip', /Backup_SIMKEU_\d{2}[A-Za-z]{3}\d{4}_\d{4}\.zip/.test(lastMail.raw));
-  ok('email memuat nama sekolah pengirim', /SMP Negeri 2 Contoh/.test(lastMail.raw));
-  const leftTmp = fs.readdirSync(os.tmpdir()).filter(f => f.startsWith('simkeu-mail-'));
-  ok('berkas zip sementara dihapus setelah terkirim (auto-cleanup)', leftTmp.length === 0, leftTmp.join(','));
-  ok('riwayat backup email tercatat sukses', t2db.prepare("SELECT COUNT(*) c FROM cloud_backup WHERE status='sukses'").get().c >= 1);
-
-  // panel super admin backup email
-  r = await req('POST', '/super-admin/backup/simpan', {
-    mail_to: 'owner@simkeu.id', mail_host: '127.0.0.1', mail_port: String(SMTP_PORT), mail_secure: '0',
-    mail_from: 'backup@simkeu.id', mail_user: 'backup@simkeu.id', mail_pass: 'x', mail_aktif: '1'
-  }, { cookie: cs });
-  ok('simpan konfigurasi backup email super admin', r.status === 303 && /ok=/.test(r.loc), r.loc);
-  const before = mailSink.length;
-  r = await req('POST', '/super-admin/backup/kirim', {}, { cookie: cs });
-  ok('backup seluruh SaaS terkirim', r.status === 303 && /ok=/.test(r.loc), r.loc);
-  ok('email backup SaaS diterima', mailSink.length === before + 1);
-  const saasMail = mailSink[mailSink.length - 1] || { raw: '' };
-  ok('lampiran backup SaaS berisi semua sekolah', /Backup_SIMKEU_/.test(saasMail.raw) && saasMail.raw.length > 2000);
-  ok('log backup SaaS tercatat', sdb.prepare("SELECT COUNT(*) c FROM saas_backup_log WHERE status='sukses'").get().c >= 1);
-
-  // validasi SMTP salah
-  r = await req('POST', '/super-admin/backup/simpan', { mail_to: '', mail_host: '', mail_user: '', mail_aktif: '1' }, { cookie: cs });
-  ok('validasi konfigurasi SMTP wajib', r.status === 303 && /err=/.test(r.loc), r.loc);
-
-  /* ================= keamanan akses ================= */
-  r = await req('GET', '/super-admin', null, { cookie: c2 });
-  ok('sesi sekolah tidak bisa membuka /super-admin', r.status === 303 && /super-admin\/login/.test(r.loc), r.status + ' ' + r.loc);
-  r = await req('GET', '/super-admin/sekolah', null, {});
-  ok('/super-admin tanpa sesi dialihkan ke login', r.status === 303 && /super-admin\/login/.test(r.loc));
-  r = await req('GET', '/super-admin/backup', null, { cookie: c2 });
-  ok('cookie sekolah tidak membuka panel backup SaaS', r.status === 303, r.status);
+  /* ================= TAHAP 6 — auto-backup (Telegram, ronde 23) ================= */
+  r = await req('GET', '/pengaturan-backup', null, { cookie: c1 });
+  ok('halaman pengaturan auto-backup tersedia', r.status === 200 && /Auto-Backup Telegram/.test(r.text), r.status);
+  r = await req('POST', '/pengaturan-backup/simpan', { tg_token: 'abc', tg_chat: '', tg_aktif: '1' }, { cookie: c1 });
+  ok('validasi token Telegram wajib valid', r.status === 303 && /err=/.test(r.loc), r.loc);
+  r = await req('GET', '/super-admin/backup', null, { cookie: cs });
+  ok('panel auto-backup server (Telegram) tersedia', r.status === 200 && /Auto-Backup Server/.test(r.text));
+  ok('panel menyediakan unduhan langsung', /download-zip/.test(r.text) && /download-sql/.test(r.text));
+  r = await req('GET', '/super-admin/backup/download-zip', null, { cookie: cs });
+  ok('unduh ZIP seluruh sistem', r.status === 200 && r.buf.length > 1000 && r.buf.slice(0, 2).toString() === 'PK', r.status + ' ' + r.type + ' len=' + r.buf.length);
 
   /* ================= keamanan akun super admin ================= */
   r = await req('POST', '/super-admin/password', { password_lama: 'salah', password_baru: 'BaruSekali123', password_ulang: 'BaruSekali123' }, { cookie: cs });

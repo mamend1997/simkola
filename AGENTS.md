@@ -515,7 +515,7 @@ node dev-tests/ui-round19.js  # 17 cek Playwright: urutan baris kwitansi, TTD "C
 
 ---
 
-## Ronde 20 — Manajemen Sistem: Auto-Backup Google Drive (ZIP, retensi 30 hari, jadwal 2× sehari)
+## Ronde 20 — Manajemen Sistem: Auto-Backup cloud (SUDAH DIHAPUS di ronde 23, lihat bawah)
 
 ### Berkas & modul baru
 - `backupdata.js` — sumber tunggal isi ZIP backup: `TABLES` (termasuk `cloud_backup`), `dumpAll(db)`, `csvOf`, `buildDatabaseZip(db)` (database.json + data/*.csv + README.txt), `backupFileName(date)` → `Backup_SIMKEU_03Nov2026_0600.zip`, `BACKUP_NAME_RE`. Dipakai bersama `/backup/download-zip` (routes/sistem.js) → isi ZIP manual & cloud identik.
@@ -538,10 +538,10 @@ node dev-tests/ui-round19.js  # 17 cek Playwright: urutan baris kwitansi, TTD "C
 
 ### Test
 ```bash
-node dev-tests/cloud.js     # 77 cek: nama berkas dinamis, parsing kredensial, JWT/token cache, multipart & resumable,
+node dev-tests/cloud.js     # (DIHAPUS ronde 23) 77 cek: nama berkas dinamis, parsing kredensial, JWT/token cache, multipart & resumable,
                             # retensi 30 hari (hanya berkas backup), runBackup + log, scheduler sekali per slot,
                             # RBAC 403 untuk staff, kredensial tidak bocor ke HTML
-node dev-tests/ui-cloud.js  # 20 cek Playwright: 4 kartu status, form kredensial/Folder ID, simpan via UI,
+node dev-tests/ui-cloud.js  # (DIHAPUS ronde 23) 20 cek Playwright: 4 kartu status, form kredensial/Folder ID, simpan via UI,
                             # tombol manual nonaktif saat belum dikonfigurasi, mobile 390px, tanpa error JS
 ```
 
@@ -707,3 +707,295 @@ node dev-tests/ui-saas.js  # 29 cek Playwright: portal super admin (desktop+mobi
   Tidak dipakai kode (sekarang memakai `.db`), aman dibiarkan.
 - Bila suatu saat muncul `SQLITE_READONLY` pada control plane/tenant: pindahkan `SAAS_DB_PATH` dan
   folder `tenants/` ke direktori di luar folder aplikasi lewat `.env`.
+
+
+---
+
+## Ronde 23 — hapus backup lama, Telegram, tiket, pengumuman/maintenance, WA, slug/domain, leger dinamis
+
+### 1. Sistem backup lama DIHAPUS (jangan dihidupkan lagi)
+- `gdrive.js`, `mailer.js` (SMTP), `routes/backup_cloud.js`, `dev-tests/cloud.js`, `dev-tests/ui-cloud.js` **dihapus**.
+- Setting lama (`gdrive_*`, `mail_*`) tidak dipakai lagi. Kartu Google Drive di `routes/sistem.js` &
+  `routes/layanan.js` diganti rujukan ke **Pengaturan Auto-Backup (Telegram)**.
+- `backupdata.js` dipakai bersama: `buildDatabaseZip(db, { extraFiles })`, `tenantBackupName(kode)`
+  → `Backup_SIMKEU_<KODE>_DDMMYYYY_HHMM.zip`, `fullBackupName()` → `Backup_FULL_SIMKEU_DDMMYYYY_HHMM.zip`.
+
+### 2. Auto-backup Telegram (2× sehari 06:00 & 15:00)
+- `telegram.js`: klien Bot API tanpa dependency (`getMe`, `sendMessage`, `sendDocument` via FormData/Blob),
+  `mask()`, `looksValidToken()`, `writeTemp()`, `cleanup()`, `sweepTemps()`, `slotNow()`.
+  Base URL bisa dioverride `TELEGRAM_API_BASE` (dipakai tes dengan server Telegram tiruan).
+- `backup_tg.js`: `tenantConfig/saveTenantConfig` (setting `tg_token`, `tg_chat`, `tg_aktif`, `tg_slots`, `tg_last`),
+  `saasConfig` (control plane: `tg_token`, `tg_chat`, `tg_aktif`, `backup_slots`, `backup_last`),
+  `runTenantBackup`, `runSaasBackup`, `scheduleTick`, `registerJobs`, `startScheduler`.
+- **Auto-cleanup wajib**: berkas `.zip`/`.sql` ditulis ke `os.tmpdir()` berawalan `simkeu-tg-` dan
+  **selalu** dihapus di blok `finally` (sukses maupun gagal). `sweepTemps()` menyapu sisa > 1 jam.
+- Halaman sekolah: `/pengaturan-backup` (token disamarkan, uji koneksi, kirim sekarang, riwayat `cloud_backup`).
+- Halaman Super Admin: `/super-admin/backup` (auto-backup server + statistik queue + riwayat `saas_backup_log`).
+- **Unduhan langsung**: `GET /super-admin/backup/download-zip` dan `/download-sql`
+  (dump control plane + seluruh database sekolah; berkas sementara langsung dihapus).
+
+### 3. Queue worker (`queue.js`)
+- Tabel `saas_jobs` (control plane): `jenis, payload, status, attempts, run_at, last_error`.
+- `queue.register/push/drain/start`; handler terdaftar di `backup_tg.registerJobs()`:
+  `backup.tenant`, `backup.saas`, `wa.reminder`, `wa.notify`, `billing.daily`.
+- Job `running` dikembalikan ke `pending` saat server start (anti job menggantung).
+- Cron penagihan (`server.runBillingTick`) **hanya mengantrekan** `billing.daily`, tidak menjalankan inline.
+- Tombol **Proses Antrean Sekarang** (`POST /super-admin/backup/antrean`) memanggil `queue.drain()`.
+
+### 4. Master Petunjuk Pengguna (read-only di sekolah)
+- Tabel control plane `master_guides` (+ CRUD di `/super-admin/petunjuk`).
+- `routes/panduan.js` DITULIS ULANG: `/petunjuk` hanya menampilkan materi terbit (pencarian judul,
+  detail `?id=`, render markdown ringan). **`POST /petunjuk/save|delete|urut` selalu 403** untuk akun sekolah.
+- Tabel lama `panduan` (per sekolah) tidak lagi dipakai UI.
+
+### 5. Reset password admin sekolah (Super Admin)
+- `POST /super-admin/sekolah/:id/reset-password` (`lib.hashPassword` = scrypt + salt).
+- Modal per sekolah di tabel (`mReset<id>`) dengan tombol **Generate Acak** (`data-generate-pw`).
+- Kredensial ditampilkan **sekali** lewat `saas.credNoticeSet/Take` + modal `mCredBaru`
+  dengan tombol **Salin Info Login** (`data-copy-login`).
+
+### 6. Audit Logs terpusat
+- Tabel `audit_log` di control plane (dibuat di `db.js` agar `logAudit` selalu bisa menulis):
+  `tenant_id, tenant_nama, user_id, user_nama, role, ip, aksi, modul, detail, created_at`.
+- `db.runWithMeta({ip,tenantId,tenantNama}, fn)` — server.js membungkus setiap request
+  (`clientIp` dari `x-forwarded-for`). `dbm.logAudit` menulis ke DB sekolah **dan** control plane;
+  `saas.logSaas` juga menulis ke `audit_log` (role `super_admin`).
+- Halaman `/super-admin/audit` (filter tanggal, sekolah, aktivitas, pencarian).
+
+### 7. Pengumuman global & Maintenance Mode
+- Tabel `announcements` (`tipe: banner|popup`, `warna`, `mulai/selesai`, `aktif`) + `/super-admin/pengumuman`.
+- `saas.visibleAnnouncements()` → `ui.layout({ announcements })` merender banner di atas konten dan pop-up
+  `mAnn<id>` (auto-show sekali per sesi via `data-autoshow`).
+- `saas.maintenance()`/`setMaintenance()` (setting `maintenance_aktif/pesan/selesai`).
+  Saat aktif, **semua** request non-`/super-admin` dijawab halaman **503 "Sistem Dalam Perbaikan"**
+  (`maintenancePage`), termasuk `/login`. `/files/*` tetap boleh (aset gambar).
+
+### 8. Tiket kendala (helpdesk)
+- Tabel `tickets` + `ticket_messages`. Sekolah: `/bantuan` (form + riwayat) dan `/bantuan/:id` (percakapan).
+- Super Admin: `/super-admin/tiket` (filter status/pencarian, balas + lampiran, ubah status
+  Open → In Progress → Resolved; balasan admin pertama otomatis `in_progress`).
+
+### 9. WA Gateway pusat
+- Setting control plane `wa_api_url/wa_api_token/wa_sender/wa_payload/wa_aktif`; `saas.sendWA()`
+  mendukung payload `form` (target+message) & `json`. Halaman `/super-admin/wa` + tombol Uji Kirim.
+- `saas.notifyTenantAdmin()` dipakai otomatis: **approve/reject pembayaran** (lewat queue `wa.notify`)
+  dan **pengingat H-7** (queue `wa.reminder` dari job `billing.daily`, sekali per hari per sekolah
+  via `wa_reminder_done`). Nomor diambil dari `tenants.contact_telp`.
+
+### 10. portal_slug unik & custom domain
+- Kolom baru `tenants`: `portal_slug` (unique), `custom_domain` (unique), `custom_domain_status`
+  (`''|pending|verified|failed`), `tg_*`, `wa_notify`.
+- `saas.slugify/slugFromName/setPortalSlug/portalSlugError` (reserved = `dbm.RESERVED_SLUGS` + halaman SaaS),
+  slug default otomatis dari nama sekolah ("SDN 1 Jakarta" → `sdn-1-jakarta`, bentrok → `-2`).
+- **Routing publik** (server.js): `/portal` (default sekolah 1), `/<slug>/portal`, `/portal/<slug>`,
+  `<slug>`/`<slug>/<sub>` (alamat portal lama dari settings sekolah), `?kode=SK01`.
+  Slug tidak dikenal → halaman **404 Sekolah Tidak Ditemukan**.
+- Domain khusus: `saas.tenantByDomain(host)` (header `x-forwarded-host`/`host`). Status belum
+  `verified` → halaman **404 Domain Belum Terverifikasi**; verified → portal diakar domain.
+- `saas.checkDns()` (CNAME `PORTAL_CNAME_TARGET`/`saas_base_url` atau A `SERVER_IP`).
+  Sekolah: `/sekolah` (form URL portal + domain + petunjuk DNS). Super Admin: kolom URL Portal &
+  Custom Domain di daftar sekolah + `Verifikasi & Aktifkan Domain` / `Hapus Domain`.
+- SSL/HTTPS diserahkan ke proxy (Caddy) — **jangan** menjalankan/mengubah Caddy dari sandbox.
+
+### 11. Storage terisolasi & sesi
+- `storage.js`: nama berkas `t<tenant_id>-<jenis>-<YYYYMMDDHHMMSS>-<acak6>-<namaasli>`; folder
+  `storage/tenants/<id>/<jenis>/` untuk mode lokal (disajikan `/files/<id>/<jenis>/<nama>`),
+  atau media proxy bila `APP_MEDIA_TOKEN` tersedia. `uploadMedia(b64, filename, { jenis })`.
+- Sesi: cookie `simkeu_sid` harus cocok `sessions.tenant_id` dengan tenant yang dimuat, dan
+  `users.tenant_id` (bila terisi) harus sama — jika tidak, sesi dihancurkan.
+- **UNIQUE gabungan**: `ensureTenantUniqueIndexes()` → `uq_siswa_tenant_nisn`, `uq_pegawai_tenant_nip`
+  (kolom `pegawai.nip` baru), `uq_transaksi_tenant_bukti`, `uq_iuran_tenant_kuitansi`
+  (partial index: hanya bila nilai tidak kosong). Dipanggil dari `migrateTenantColumns`.
+
+### 12. Leger Honor DINAMIS (kolom bisa diatur sekolah)
+- Tabel `payroll_kolom` (kode, label, tipe `penerimaan|potongan|info`, nilai `uang|jam`, `rumus`,
+  `urutan`, `sistem`, `aktif`) + `payroll_nilai` (payroll_id, kolom_kode, nilai).
+- 20 kolom bawaan di-seed `seedPayrollColumns()`; kolom **bawaan** memakai kolom lama tabel `payroll`
+  (`PAYROLL_LEGACY`) agar kasbon/posting/slip lama tetap bekerja. Kolom bawaan tidak bisa dihapus.
+- `payrollEval()` = parser rumus aman (**tanpa `eval`**): `+ - * / ( )`, `round/min/max/abs`,
+  variabel = kode kolom lain + `honor_pembantu`, `honor_wali`, `sertifikasi_rate`.
+- `payrollDynamic(periode)` → `{ cols, rows (din, penerimaanDinamis…), totals.perKode }`;
+  `payrollRows()` menimpa `penerimaan/potongan/diterima` dengan hasil dinamis sehingga **posting BKU,
+  slip, portal, dan neraca ikut struktur kolom**.
+- Halaman `/payroll/kolom`: tambah/ubah nama/tipe/satuan/rumus, aktif/nonaktif, hapus (kustom saja),
+  geser urutan (naik/turun). Form simpan memakai nama `${id}_c_<kode>` (server tetap menerima format lama).
+- Cetak (`/payroll/cetak?mode=leger`) & export Excel memakai kolom + urutan + baris total dinamis;
+  Excel memuat blok tanda tangan Bendahara & Kepala Sekolah.
+- `public/app.js`: blok `payrollDynamic()` menghitung ulang baris (`js-calc`, `js-din`), total
+  penerimaan/potongan/THP, dan **footer per kolom** (`[data-foot-kode]`) secara real-time —
+  rumus di klien mencerminkan `payrollEval`.
+
+### Gotcha ronde ini
+- `CREATE INDEX` di dalam `SCHEMA` gagal pada database lama bila kolomnya belum ada
+  (`no such column: nip`) → tambahkan kolom lewat `ALTER` di bootstrap, index unik dibuat setelah
+  `migrateTenantColumns`.
+- `ui.printPage()` juga dirender untuk dokumen cetak — jangan menambahkan variabel `layout()`
+  (mis. `announcements`) di luar `layout()` (pernah menyebabkan 500 di `/cetak/sertifikasi`).
+- `/tmp` di sandbox tidak persisten antar perintah Bash → tes yang butuh salinan DB produksi harus
+  membuat folder + menyalin dalam **satu** perintah/berkas skrip (`dev-tests/liveclone.js`).
+- Berkas sah: `data/tenants/tenant-2.sqlite`, `tenant-3.sqlite` adalah sisa uji lama yang
+  read-only & tidak dipakai (database tenant kini `tenant-<id>.db`).
+
+### Tes
+```bash
+node dev-tests/round23.js   # 127 cek: hapus backup lama, Telegram (fake API) + auto-cleanup,
+                            # unduhan .zip/.sql, panduan read-only 403, reset password + kredensial,
+                            # audit logs, pengumuman/maintenance, tiket, WA (approve & H-7), slug/domain,
+                            # storage terisolasi, unique per sekolah, leger dinamis + export/cetak
+node dev-tests/ui-saas.js   # 45 cek Playwright: portal Super Admin (semua menu baru, modal reset +
+                            # generate acak), halaman sekolah (petunjuk read-only, tiket, auto-backup,
+                            # kolom leger), blokir fitur Pro untuk paket Standard, mobile 390px
+node dev-tests/liveclone.js # 27 cek migrasi memakai SALINAN database produksi (data tidak disentuh)
+```
+
+
+---
+
+## Ronde 24 — jenjang & tingkat kelas, login ringkas, branding dinamis, paket, anti-spam
+
+### 1. Master jenjang & tingkat (db.js)
+- `JENJANG` = `{'PAUD/TK': [KB,TK-A,TK-B], 'SD/MI': [I..VI], 'SMP/MTs': [VII..IX],
+  'SMA/MA': [X..XII], 'SMK': [X..XII], 'KUSTOM': []}`.
+- `TINGKAT_MASTER` (pra-sekolah KB/TK-A/TK-B/PAUD + I..XII), `TINGKAT_ALIAS` (1→I … 12→XII),
+  `tingkatUrut()`, `tingkatNaik()` (menjaga konvensi ANGKA: 7→8, 12→lulus), `tingkatLabel()`.
+- Setting sekolah: `jenjang_pendidikan` + `tingkat_aktif` (JSON). `tingkatAktif()` (fallback preset jenjang),
+  `setTingkatAktif()`, `jenjangPreset()`, `applyJenjangPreset(jenjang, force)`.
+- **Kolom baru**: `kelas.nama_kelas` (disinkronkan dengan `nama`; backfill otomatis),
+  `iuran_nominal.tingkat` ('' = default semua tingkat).
+- `kelasList()` mengurutkan menurut `tingkatUrut` lalu `urutan`/nama; `kelasById()` mengembalikan `nama_kelas`.
+- `cloneKelasTa()` memakai `tingkatNaik`; `autoGraduateStudents()` meluluskan kelas yang `tingkatNaik()===''`.
+
+### 2. Halaman "Pengaturan Kelas & Tingkat" (`/kelas/tingkat`, routes/kelas_tingkat.js)
+- Pilih jenjang → preset tingkat otomatis; centang tingkat aktif; tambah/hapus tingkat KUSTOM
+  (tidak bisa dihapus bila masih dipakai kelas); tambah kelas langsung per tingkat
+  (`nama` = `nama_kelas`, contoh `VII-A`, `7 Al-Farabi`).
+- Form Data Kelas (`routes/akademik.js`) memakai `tingkatAktif()` — **bukan** daftar tetap X/XI/XII.
+- Profil sekolah (`POST /sekolah`) menyimpan `jenjang_pendidikan`; bila jenjang BERUBAH preset tingkat
+  otomatis diterapkan. `register` juga mengirim jenjang → `createTenantDatabase({ jenjang })`.
+
+### 3. Tagihan per tingkat
+- `iuran_nominal.tingkat`: nominal khusus per tingkat; `iuranNominalMap(grupId, tingkat)` (fallback default),
+  `iuranTotalFor(grupId, tingkat)`, `siswaTingkat(siswaId, taId)`.
+- Form grup iuran & form edit nominal punya **"Terapkan Tagihan Berdasarkan Tingkat"**;
+  `POST /iuran/grup/:id/nominal` hanya menimpa baris tingkat yang dipilih lalu menyinkronkan tagihan
+  yang belum dibayar **sesuai tingkat siswa**.
+- Penetapan grup ke siswa memakai tarif tingkat siswa (bukan satu tarif untuk semua).
+
+### 4. Filter laporan per tingkat & kelas
+- `iuranTagihanRows({ tingkat: [...] })` (filter baru) → dipakai halaman `?r=tunggakan` baru.
+- `GET /laporan?r=tunggakan&tingkat=..&kelas=..` = **Tunggakan per Tingkat** (rekap per tingkat + per kelas,
+  KPI, filter multi-pilih). Cetak: `/cetak/tunggakan`, Excel: `/export/tunggakan`.
+- `/iuran/data` (multi-pilih Tingkat + Kelas) dan `/iuran/transaksi` (dropdown Tingkat) ikut mendukung filter;
+  `iuranBayarRows` kini mengembalikan `k.tingkat`.
+
+### 5. Login utama disederhanakan
+- `/login` hanya 3 kolom: **Kode Sekolah (4 karakter), Username/Email, Password**.
+- Tautan "Portal Orang Tua" dan "Super Admin Pusat" **dihapus** dari halaman login
+  (portal `/portal` & `/super-admin` tetap hidup, hanya tidak ditautkan).
+- Halaman login memakai **branding DEFAULT sistem** (nama+logo Super Admin), bukan logo sekolah.
+
+### 6. Branding dinamis
+- Super Admin: `/super-admin/branding` → `saas_nama`, logo default (`saas_logo`), favicon default
+  (`saas_favicon`), `trial_hari`, paket default, + pengaturan anti-spam.
+- Sekolah: logo (`sekolah_logo`) & `app_nama` lewat `/tema`/`/sekolah` (sudah ada).
+- **Favicon**: `sysFavicon()` (server.js) memakai `saas_favicon` → `saas_logo` → SVG inisial nama aplikasi;
+  route `/favicon.ico` memilih logo tenant bila ada konteks sekolah (sesi, custom domain, atau slug pada path),
+  selain itu favicon default sistem.
+
+### 7. Trial, kode acak, paket dinamis
+- `trial_hari` (Super Admin) → pendaftaran mandiri: `expires_at = hari ini + trial`.
+- `nextSchoolCode()` sekarang **acak 4 karakter** (alfanumerik tanpa O/0/I/1, mis. `WJ79`) — bukan SK01/SK02.
+  Tenant 1 (instalasi) tetap memakai kode lamanya.
+- Tabel `saas_packages` (+ seed Basic/Standard/Pro) & CRUD `/super-admin/paket`:
+  `packageRows/ByKode/ById/defaultPackage/packagePrice/packageSave/packageDelete/packageSetDefault/setPackage`.
+  **Default = Basic** untuk pendaftaran mandiri (`paket_default`).
+- `saas_payments.paket_tujuan`: checkout dapat memilih paket; `submitPayment({ paket })` menghitung nominal
+  dari paket; **approve** menerapkan `setPackage()` (fitur mengikuti preset paket).
+- Tenant: `/info-layanan/paket` (kartu paket + tombol pilih) → `/perpanjang?paket=pro` (QRIS).
+- Fitur inti `siswa`, `kelas`, `program`, `mutasi_kelas`, `iuran` kini **std:1** (semua paket) —
+  Pro tetap untuk payroll/pegawai/ekskul/beasiswa/piutang lain/backup cloud.
+
+### 8. Anti-spam pendaftaran
+- Tabel `reg_attempts` + `regStatus/regHit/regLog` (setting `reg_limit_per_hour` default 2,
+  `reg_block_hours` default 24). Pesan: "Terlalu banyak permintaan pendaftaran. Silakan coba beberapa saat lagi."
+- CAPTCHA opsional (`captcha_provider` = off|recaptcha|turnstile, `captcha_site_key`, `captcha_secret`):
+  `verifyCaptcha()` memanggil endpoint resmi; **nonaktif default** dan tidak memblokir bila secret kosong.
+  Widget dirender di form `/register` (Turnstile/`grecaptcha`).
+
+### Gotcha ronde ini
+- **Index pada SCHEMA tidak boleh menyebut kolom hasil ALTER** (`iuran_nominal(tingkat)`) —
+  DB lama akan gagal `no such column` sebelum migrasi jalan. Buat index setelah ALTER.
+- `public/app.js`: `$$`/`$` hanya ada **di dalam IIFE**; blok yang ditambahkan setelahnya wajib memakai
+  `qsa`/`qs` (kalau tidak: `ReferenceError: $$ is not defined` di semua halaman).
+- `data-autosubmit` pada select di dalam form **POST** akan men-submit form; untuk pindah filter pakai
+  `data-nominal-tingkat-jump` (handler JS melakukan navigasi GET).
+- Kode sekolah tidak lagi berurutan → tes harus membaca `tenants.school_code`, bukan menulis `SK02`.
+
+### Tes
+```bash
+node dev-tests/round24.js     # 84 cek: preset jenjang, login ringkas, branding, paket CRUD, kode acak,
+                              # trial, rate limit, pengaturan tingkat, kelas per tingkat, tarif per tingkat,
+                              # filter & cetak/export tunggakan, upgrade paket, favicon
+node dev-tests/ui-round24.js  # 29 cek Playwright: login 3 kolom, halaman tingkat (preset & tambah kelas),
+                              # laporan tunggakan, paket sekolah, branding & paket Super Admin, mobile 390px
+```
+
+
+---
+
+## Ronde 25 — kontrol fitur per paket, kartu paket di pendaftaran, kartu layanan ringkas, pindah auto-backup
+
+### 1. Kontrol fitur per PAKET (menu Paket Langganan)
+- `saas_packages.fitur` kini menyimpan **peta fitur lengkap** paket (array kode fitur atau objek `{kode:0|1}`),
+  bukan lagi `{std:1}`.
+- Helper baru (saas.js): `packageFeatureMap(pkg)`, `packageFeatureLabels(pkg)`, `packageSelfTrial(pkg)`,
+  `packageTrialDays(pkg)`. `packageFeatureMap()` menerima array maupun objek (format lama tetap jalan).
+- `setPackage()` dan `createTenant()` memakai `packageFeatureMap(pkg)` → **fitur sekolah mengikuti paket**.
+- Form `/super-admin/paket` punya grid centang semua `FEATURES` + tombol **Pilih Semua/Kosongkan**
+  (atribut generik `data-check-name-all|none` di `public/app.js`).
+- Paket default hasil seed: Basic (25 fitur, termasuk siswa/kelas/iuran), Standard (+pegawai, piutang
+  sertifikasi & lainnya, catatan, tarif honor), Pro (semua fitur).
+
+### 2. Pendaftaran: kartu paket + alur WhatsApp
+- `/register` menampilkan **kartu paket** (judul, harga bulan/tahun, badge, daftar fitur dari
+  `packageFeatureLabels()`); dropdown paket dihapus.
+- Kolom baru `saas_packages.self_trial` (boleh daftar mandiri + trial) & `trial_hari` (durasi per paket).
+  Basic = self_trial; paket lain = berbayar.
+- `POST /register`: paket non-self_trial → **redirect ke WhatsApp admin** (`https://wa.me/<nomor>?text=…`,
+  pesan memuat nama paket, harga, nama sekolah & admin) dan **tenant tidak dibuat**.
+- Nomor admin: setting `wa_admin_number` (diatur di `/super-admin/branding`), helper `waAdminNumber()`,
+  `waAdminLink(pkg, {sekolah, admin})`, `normalizeWa()` (08xx → 628xx).
+- Trial default kini **7 hari** (`trial_hari`, migrasi `mig_trial7` mengubah nilai lama 30 → 7);
+  durasi paket menimpa nilai global bila diisi.
+
+### 3. Kartu Info Layanan dashboard dibuat ringkas
+- `routes/dashboard.js` → `layananCard` memakai `.card.svc-mini` satu baris (ikon + Paket / Masa aktif /
+  Biaya / Status + tombol Detail & Perpanjang), id tetap `#infoLayanan` (kompatibel tes lama).
+- CSS baru di `public/app.css`: `.svc-mini`, `.pk-grid`, `.pk-card`, `.pk-pick`, `.pk-feats`, `.pk-feat-grid`.
+
+### 4. Auto-backup dipindah ke menu Auto Backup + riwayat bisa dihapus
+- Kartu "Auto-Backup Database" **dihapus** dari `/info-layanan` (dan tidak ada di `/perpanjang`).
+- `/pengaturan-backup` kini menampilkan **riwayat 30 pengiriman** + tombol hapus per baris &
+  **Hapus Semua Riwayat** → `POST /pengaturan-backup/riwayat/hapus` (`id` kosong = hapus semua),
+  guard `backup.create`, audit `HAPUS / backup`.
+- Catatan: menu auto-backup adalah fitur **Pro** (`backup_cloud`), jadi sekolah paket Basic/Standard
+  tetap tidak melihatnya (feature flagging).
+
+### Catatan implementasi tambahan
+- `migratePackageFeatures()` (dipanggil `ensureBootstrap()`) mengubah `fitur` paket lama (`{std:1}`)
+  menjadi **array kode fitur** sekali saja (flag `mig_pkgfitur_v1`) — paket yang sudah memakai array
+  (hasil sunting Super Admin) tidak disentuh.
+- `packageTrialDays()` memperlakukan `trial_hari` NULL/kosong sebagai "ikut setting global"
+  (jangan memakai `Number(null)` → 0).
+- Paket terpilih di `/register`: query `?paket=` → paket default (bila `self_trial`) → paket pertama yang
+  `self_trial` → paket default. Jadi sekolah baru tetap bisa langsung daftar walaupun paket default
+  yang dipilih Super Admin adalah paket berbayar.
+- `data-check-name-all|none="<name>"` = hook JS generik untuk mencentang semua input dengan `name` tsb
+  di dalam form (dipakai grid fitur paket).
+
+### Tes
+```bash
+node dev-tests/round25.js   # 47 cek: peta fitur paket + edit di Super Admin, kartu paket di /register,
+                            # Basic → daftar + trial 7 hari, paket berbayar → wa.me (tanpa tenant),
+                            # kartu layanan ringkas, auto-backup pindah & hapus riwayat + audit
+```

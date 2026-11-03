@@ -1326,3 +1326,196 @@ function terbilang(n) {
     renumber();
   }());
 })();
+
+var qsa = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
+var qs = function (sel, root) { return (root || document).querySelector(sel); };
+
+/* ---------- reset password (panel Super Admin): generate & salin kredensial ---------- */
+function pwAcak(len) {
+  var L = 'abcdefghijkmnopqrstuvwxyz', U = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  var D = '23456789', S = '#@$%&*!?';
+  var all = L + U + D + S, out = [];
+  out.push(U[Math.floor(Math.random() * U.length)]);
+  out.push(L[Math.floor(Math.random() * L.length)]);
+  out.push(D[Math.floor(Math.random() * D.length)]);
+  out.push(S[Math.floor(Math.random() * S.length)]);
+  while (out.length < (len || 12)) out.push(all[Math.floor(Math.random() * all.length)]);
+  for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = out[i]; out[i] = out[j]; out[j] = t; }
+  return out.join('');
+}
+qsa('[data-generate-pw]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var form = b.closest('form');
+    var inp = form && form.querySelector('.js-newpw');
+    if (!inp) return;
+    inp.value = pwAcak(12);
+    inp.type = 'text';
+    inp.focus();
+    inp.select && inp.select();
+  });
+});
+qsa('[data-copy-login]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = b.getAttribute('data-copy-text') || '';
+    function done() {
+      var old = b.innerHTML;
+      b.innerHTML = '✓ Tersalin';
+      setTimeout(function () { b.innerHTML = old; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { window.prompt('Salin kredensial:', text); });
+    } else { window.prompt('Salin kredensial:', text); }
+  });
+});
+
+/* ---------- Leger honor DINAMIS: hitung ulang baris & footer ---------- */
+(function payrollDynamic() {
+  var cols = window.__PAY_COLS || [];
+  var base = window.__PAY_VARS || {};
+  if (!cols.length || !document.querySelector('[data-payroll-row]')) return;
+
+  function num(v) {
+    var s = String(v === undefined || v === null ? '' : v).trim();
+    if (!s) return 0;
+    s = s.replace(/\s|Rp/gi, '');
+    if (s.indexOf(',') > -1) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(/\./g, '');
+    var n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+  // evaluator rumus kecil (mirror payrollEval di server)
+  function evaluate(expr, vars) {
+    var src = String(expr || '').replace(/\s+/g, '');
+    var i = 0;
+    function peek() { return src[i]; }
+    function number() {
+      var m = /^\d+(\.\d+)?/.exec(src.slice(i));
+      if (!m) throw new Error('angka');
+      i += m[0].length; return Number(m[0]);
+    }
+    function factor() {
+      if (peek() === '(') { i++; var v = additive(); if (peek() !== ')') throw new Error(')'); i++; return v; }
+      if (peek() === '-') { i++; return -factor(); }
+      if (peek() === '+') { i++; return factor(); }
+      if (/[0-9.]/.test(peek() || '')) return number();
+      var m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+      if (!m) throw new Error('token');
+      i += m[0].length;
+      var name = m[0];
+      if (peek() === '(') {
+        i++; var args = [];
+        if (peek() !== ')') { for (;;) { args.push(additive()); if (peek() === ',') { i++; continue; } break; } }
+        if (peek() !== ')') throw new Error(')');
+        i++;
+        if (name === 'round') return Math.round(args[0] || 0);
+        if (name === 'min') return Math.min.apply(null, args);
+        if (name === 'max') return Math.max.apply(null, args);
+        if (name === 'abs') return Math.abs(args[0] || 0);
+        throw new Error('fungsi');
+      }
+      return Number(vars[name]) || 0;
+    }
+    function multiplicative() {
+      var v = factor();
+      while (peek() === '*' || peek() === '/') {
+        var op = src[i++], r = factor();
+        v = op === '*' ? v * r : (r === 0 ? 0 : v / r);
+      }
+      return v;
+    }
+    function additive() {
+      var v = multiplicative();
+      while (peek() === '+' || peek() === '-') {
+        var op = src[i++], r = multiplicative();
+        v = op === '+' ? v + r : v - r;
+      }
+      return v;
+    }
+    if (!src) return 0;
+    var out = additive();
+    if (i !== src.length) throw new Error('sisa');
+    return out;
+  }
+
+  function fmt(n, satuan) {
+    n = Math.round((Number(n) || 0) * 100) / 100;
+    if (satuan === 'jam') return String(n).replace('.', ',');
+    return Math.round(n).toLocaleString('id-ID');
+  }
+
+  function recalc() {
+    var foot = {};
+    var totP = 0, totK = 0;
+    qsa('[data-payroll-row]').forEach(function (tr) {
+      var vars = Object.assign({}, base);
+      // nilai manual dulu
+      qsa('.js-din', tr).forEach(function (inp) {
+        vars[inp.getAttribute('data-kode')] = num(inp.value);
+      });
+      // kolom berumus: beberapa lintasan agar bisa saling rujuk
+      for (var pass = 0; pass < 3; pass++) {
+        cols.forEach(function (c) {
+          if (!c.rumus) return;
+          try { vars[c.kode] = Math.round(evaluate(c.rumus, vars) * 100) / 100; } catch (e) { vars[c.kode] = Number(vars[c.kode]) || 0; }
+        });
+      }
+      // tulis hasil rumus ke sel
+      qsa('.js-calc', tr).forEach(function (el) {
+        var k = el.getAttribute('data-kode');
+        el.textContent = fmt(vars[k], el.getAttribute('data-satuan'));
+      });
+      var P = 0, K = 0;
+      cols.forEach(function (c) {
+        var v = Number(vars[c.kode]) || 0;
+        if (c.tipe === 'penerimaan') P += v;
+        else if (c.tipe === 'potongan') K += v;
+        foot[c.kode] = (foot[c.kode] || 0) + v;
+      });
+      P = Math.round(P); K = Math.round(K);
+      totP += P; totK += K;
+      var ep = qs('.js-penerimaan', tr), ek = qs('.js-potongan', tr), ed = qs('.js-diterima', tr);
+      if (ep) ep.textContent = 'Rp ' + P.toLocaleString('id-ID');
+      if (ek) ek.textContent = 'Rp ' + K.toLocaleString('id-ID');
+      if (ed) {
+        ed.textContent = 'Rp ' + (P - K).toLocaleString('id-ID');
+        ed.style.color = (P - K) < 0 ? 'var(--red)' : 'var(--ink)';
+      }
+    });
+    // footer mengikuti urutan & nama kolom
+    cols.forEach(function (c) {
+      var cell = document.querySelector('[data-foot-kode="' + c.kode + '"]');
+      if (cell) cell.textContent = fmt(foot[c.kode] || 0, c.satuan);
+    });
+    var fp = document.querySelector('[data-foot="penerimaan"]');
+    var fk = document.querySelector('[data-foot="potongan"]');
+    var fd = document.querySelector('[data-foot="diterima"]');
+    if (fp) fp.textContent = 'Rp ' + totP.toLocaleString('id-ID');
+    if (fk) fk.textContent = 'Rp ' + totK.toLocaleString('id-ID');
+    if (fd) fd.textContent = 'Rp ' + (totP - totK).toLocaleString('id-ID');
+  }
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('js-din')) recalc();
+  });
+  recalc();
+})();
+
+/* ---------- iuran: pindah tingkat tarif (reload, bukan submit POST) ---------- */
+qsa('[data-nominal-tingkat-jump]').forEach(function (sel) {
+  sel.addEventListener('change', function () {
+    var base = sel.getAttribute('data-nominal-tingkat-jump');
+    var v = sel.value;
+    window.location.href = base + (v ? '?tingkat=' + encodeURIComponent(v) + '#nominal' : '#nominal');
+  });
+  sel.removeAttribute('data-autosubmit');
+  sel.setAttribute('data-no-autosubmit', '1');
+});
+
+/* ---------- ceklis generik berdasarkan atribut name (mis. daftar fitur paket) ---------- */
+qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var name = btn.getAttribute('data-check-name-all') || btn.getAttribute('data-check-name-none');
+    var on = btn.hasAttribute('data-check-name-all');
+    var scope = btn.closest('form') || document;
+    qsa('input[name="' + name + '"]', scope).forEach(function (i) { if (!i.disabled) i.checked = on; });
+  });
+});

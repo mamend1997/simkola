@@ -389,6 +389,47 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
   }
 
   /* ---------- hub ---------- */
+  /**
+   * Rekapitulasi TUNGGAKAN iuran siswa dikelompokkan per TINGKAT lalu per KELAS.
+   * Filter: tingkat (multi) dan kelas (multi). Dipakai halaman laporan, cetak, dan Excel.
+   */
+  function tunggakanData(taId, tingkatSel, kelasSel) {
+    const tags = dbm.iuranTagihanRows({
+      taId, aktifOnly: true,
+      tingkat: (tingkatSel && tingkatSel.length) ? tingkatSel : undefined,
+      kelasId: (kelasSel && kelasSel.length) ? kelasSel : undefined
+    });
+    const byTingkat = new Map();
+    const byKelas = new Map();
+    for (const t of tags) {
+      const tk = String(t.tingkat || '') || '(tanpa tingkat)';
+      const kl = String(t.kelas_nama || '') || '(tanpa kelas)';
+      const sisa = Math.max(0, Number(t.sisa) || 0);
+      if (!byTingkat.has(tk)) byTingkat.set(tk, { tingkat: tk, siswa: new Set(), tagihan: 0, dibayar: 0, sisa: 0, n: 0 });
+      const a = byTingkat.get(tk);
+      a.siswa.add(t.siswa_id); a.tagihan += Number(t.nominal) || 0; a.dibayar += Number(t.terbayar) || 0; a.sisa += sisa; a.n++;
+      const key = tk + '||' + kl;
+      if (!byKelas.has(key)) byKelas.set(key, { tingkat: tk, kelas: kl, siswa: new Set(), tagihan: 0, dibayar: 0, sisa: 0, n: 0 });
+      const b = byKelas.get(key);
+      b.siswa.add(t.siswa_id); b.tagihan += Number(t.nominal) || 0; b.dibayar += Number(t.terbayar) || 0; b.sisa += sisa; b.n++;
+    }
+    const urut = a => dbm.tingkatUrut(a.tingkat === '(tanpa tingkat)' ? '' : a.tingkat);
+    const lv = [...byTingkat.values()].map(x => ({ ...x, siswa: x.siswa.size })).sort((a, b) => urut(a) - urut(b));
+    const lk = [...byKelas.values()].map(x => ({ ...x, siswa: x.siswa.size }))
+      .sort((a, b) => urut(a) - urut(b) || String(a.kelas).localeCompare(String(b.kelas)));
+    const total = lv.reduce((acc, x) => ({
+      tagihan: acc.tagihan + x.tagihan, dibayar: acc.dibayar + x.dibayar, sisa: acc.sisa + x.sisa
+    }), { tagihan: 0, dibayar: 0, sisa: 0 });
+    total.siswa = new Set(tags.map(t => t.siswa_id)).size;
+    total.tagihanRows = tags.length;
+    return { byTingkat: lv, byKelas: lk, total, tags };
+  }
+  function tingkatKelasFilter(req) {
+    const tingkat = (req.query.getAll ? req.query.getAll('tingkat') : []).map(x => String(x || '').trim()).filter(Boolean);
+    const kelas = (req.query.getAll ? req.query.getAll('kelas') : []).map(Number).filter(Boolean);
+    return { tingkat, kelas };
+  }
+
   get('/laporan', (req, res) => {
     guard(req, res, 'laporan', 'view');
     const c = ctx(req);
@@ -417,6 +458,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const tabs = [
       ['bku', 'Buku Kas Umum (BKU)'], ['neraca', 'Rekonsiliasi Kas'],
       ['lra', 'Realisasi Anggaran (LRA)'], ['piutang', 'Piutang & SPP'],
+      ['tunggakan', 'Tunggakan per Tingkat'],
       ['sertifikasi', 'Piutang Sertifikasi'],
       ['lainnya', 'Piutang Lainnya'],
       ['aruskas', 'Laporan Arus Kas'], ['pembantu', 'Buku Pembantu & Rekap']
@@ -651,6 +693,53 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           <td class="t-sub">${esc(x.keterangan || '-')}</td></tr>`).join('') || '<tr><td colspan="8" class="center muted">Belum ada data piutang lainnya</td></tr>'}
         </tbody><tfoot><tr><td colspan="3">TOTAL</td><td class="num">${rupiah(totalNominal)}</td><td class="num">${rupiah(totalDibayar)}</td><td class="num">${rupiah(totalSisa)}</td><td colspan="2"></td></tr></tfoot></table></div>
         <div class="alert info">${ui.icon('info')}<div>Piutang lainnya <b>${dbm.piutangLainnyaTampil() ? 'ditampilkan' : 'disembunyikan'}</b> pada Akun Aset Riil — ubah melalui sakelar di menu <a href="${c.base}/piutang-lainnya"><b>Piutang Lainnya</b></a>.</div></div>`;
+    } else if (r === 'tunggakan') {
+      const tf = tingkatKelasFilter(req);
+      const tg = tunggakanData(taId, tf.tingkat, tf.kelas);
+      const kelasAll = dbm.kelasList(taId, {});
+      const qsT = new URLSearchParams();
+      tf.tingkat.forEach(x => qsT.append('tingkat', x));
+      tf.kelas.forEach(x => qsT.append('kelas', x));
+      qsT.set('ta', taId);
+      actions = `<a class="btn" target="_blank" href="${c.base}/cetak/tunggakan?${qsT}">${ui.icon('printer')}Cetak PDF</a>
+        ${canExport ? `<a class="btn btn-primary" href="${c.base}/export/tunggakan?${qsT}">${ui.icon('download')}Export Excel</a>` : ''}`;
+      const tgl = (val, nm) => `<label class="check"><input type="checkbox" name="${nm}" value="${esc(val)}" ${(nm === 'tingkat' ? tf.tingkat : tf.kelas.map(String)).includes(String(val)) ? 'checked' : ''}> ${esc(dbm.tingkatLabel(val) + ' (' + val + ')')}</label>`;
+      preview = `<form method="get" action="${c.base}/laporan" class="filterbar">
+          <input type="hidden" name="r" value="tunggakan">
+          <div class="field"><label>Tahun Pelajaran</label><select name="ta">${taList.map(t => `<option value="${t.id}" ${String(t.id) === String(taId) ? 'selected' : ''}>${esc(t.nama)}</option>`).join('')}</select></div>
+          <div class="field"><label>Tingkat Kelas</label>
+            <details class="multipick"><summary>${tf.tingkat.length ? tf.tingkat.length + ' dipilih' : 'Semua tingkat'}</summary>
+              <div class="multipick-list">${dbm.tingkatAktif().map(t => tgl(t, 'tingkat')).join('')}</div></details></div>
+          <div class="field"><label>Kelas Spesifik</label>
+            <details class="multipick"><summary>${tf.kelas.length ? tf.kelas.length + ' dipilih' : 'Semua kelas'}</summary>
+              <div class="multipick-list">${kelasAll.map(k => `<label class="check"><input type="checkbox" name="kelas" value="${k.id}" ${tf.kelas.includes(Number(k.id)) ? 'checked' : ''}> ${esc(k.nama_kelas || k.nama)}</label>`).join('')}</div></details></div>
+          <button class="btn">${ui.icon('filter')}Terapkan</button>
+          ${tf.tingkat.length || tf.kelas.length ? `<a class="btn" href="${c.base}/laporan?r=tunggakan&ta=${taId}">Reset</a>` : ''}
+        </form>
+        <div class="kpi-grid mb-2" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+          <div class="kpi ic-blue"><div class="lbl">Siswa</div><div class="val" style="font-size:18px">${tg.total.siswa}</div></div>
+          <div class="kpi ic-orange"><div class="lbl">Total Tagihan</div><div class="val" style="font-size:18px">${rupiah(tg.total.tagihan)}</div></div>
+          <div class="kpi ic-green"><div class="lbl">Sudah Dibayar</div><div class="val" style="font-size:18px">${rupiah(tg.total.dibayar)}</div></div>
+          <div class="kpi ic-red"><div class="lbl">Tunggakan</div><div class="val" style="font-size:18px">${rupiah(tg.total.sisa)}</div></div>
+        </div>
+        <div class="t-strong mb-1">A. Rekap per Tingkat Kelas</div>
+        <div class="table-wrap mb-3 sticky-head"><table><thead><tr>
+          <th>Tingkat</th><th class="num">Siswa</th><th class="num">Tagihan</th><th class="num">Dibayar</th><th class="num">Tunggakan</th><th class="num">% Tertagih</th></tr></thead><tbody>
+          ${tg.byTingkat.map(x => `<tr><td class="t-strong">${esc(dbm.tingkatLabel(x.tingkat === '(tanpa tingkat)' ? '' : x.tingkat))}</td>
+            <td class="num">${x.siswa}</td><td class="num">${rupiah(x.tagihan)}</td><td class="num">${rupiah(x.dibayar)}</td>
+            <td class="num" style="color:${x.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(x.sisa)}</td>
+            <td class="num">${x.tagihan ? Math.round((x.dibayar / x.tagihan) * 100) : 0}%</td></tr>`).join('') || '<tr><td colspan="6" class="center muted">Belum ada data</td></tr>'}
+        </tbody><tfoot><tr><td>TOTAL</td><td class="num">${tg.total.siswa}</td><td class="num">${rupiah(tg.total.tagihan)}</td>
+          <td class="num">${rupiah(tg.total.dibayar)}</td><td class="num">${rupiah(tg.total.sisa)}</td>
+          <td class="num">${tg.total.tagihan ? Math.round((tg.total.dibayar / tg.total.tagihan) * 100) : 0}%</td></tr></tfoot></table></div>
+        <div class="t-strong mb-1">B. Rekap per Kelas Spesifik</div>
+        <div class="table-wrap sticky-head"><table><thead><tr>
+          <th>Tingkat</th><th>Kelas</th><th class="num">Siswa</th><th class="num">Tagihan</th><th class="num">Dibayar</th><th class="num">Tunggakan</th></tr></thead><tbody>
+          ${tg.byKelas.map(x => `<tr><td>${esc(dbm.tingkatLabel(x.tingkat === '(tanpa tingkat)' ? '' : x.tingkat))}</td>
+            <td class="t-strong">${esc(x.kelas)}</td><td class="num">${x.siswa}</td><td class="num">${rupiah(x.tagihan)}</td>
+            <td class="num">${rupiah(x.dibayar)}</td><td class="num" style="color:${x.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(x.sisa)}</td></tr>`).join('') || '<tr><td colspan="6" class="center muted">Belum ada data</td></tr>'}
+        </tbody></table></div>
+        <p class="help mt-2">Angka mengikuti tagihan iuran siswa yang masih aktif. Beasiswa yang sudah dipotong otomatis mengurangi tunggakan.</p>`;
     } else {
       const p = piutangList(taId);
       const rekap = piutangRekap(p, pMode);
@@ -1110,6 +1199,63 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     [], ['Mengetahui, Kepala Sekolah', '', '', 'Bendahara'], [c.settings.sekolah_kepala || '', '', '', c.settings.sekolah_bendahara || '']
     ];
     xlsxSend(res, `LRA-TA-${(ta.nama || '').replace('/', '-')}${bulanSel ? '-Rincian-' + bulanSel : ''}.xlsx`, 'LRA', rows, [6, 12, 46, 16, 16, 16, 8]);
+  });
+
+  /* ================= TUNGGAKAN PER TINGKAT: cetak & Excel ================= */
+  get('/cetak/tunggakan', (req, res) => {
+    guard(req, res, 'laporan', 'view');
+    const c = ctx(req);
+    const taId = Number(req.query.get('ta') || c.taId || (dbm.activeTahun() || {}).id) || null;
+    const ta = taId ? dbm.tahunById(taId) : null;
+    const tf = tingkatKelasFilter(req);
+    const tg = tunggakanData(taId, tf.tingkat, tf.kelas);
+    const filterTxt = [
+      tf.tingkat.length ? 'Tingkat: ' + tf.tingkat.map(x => dbm.tingkatLabel(x)).join(', ') : 'Semua tingkat',
+      tf.kelas.length ? tf.kelas.length + ' kelas dipilih' : 'Semua kelas'
+    ].join(' · ');
+    const body = `${ui.kop(c.settings)}
+      <div class="doc-title"><h3>REKAPITULASI TUNGGAKAN IURAN SISWA</h3>
+        <div class="no">Tahun Pelajaran ${esc(ta ? ta.nama : '-')} · ${esc(filterTxt)}</div></div>
+      <table class="tbl"><thead><tr><th>Tingkat</th><th class="num">Siswa</th><th class="num">Tagihan</th><th class="num">Dibayar</th><th class="num">Tunggakan</th></tr></thead><tbody>
+        ${tg.byTingkat.map(x => `<tr><td>${esc(dbm.tingkatLabel(x.tingkat === '(tanpa tingkat)' ? '' : x.tingkat))}</td>
+          <td class="num">${x.siswa}</td><td class="num">${num(x.tagihan)}</td><td class="num">${num(x.dibayar)}</td><td class="num">${num(x.sisa)}</td></tr>`).join('')}
+      </tbody><tfoot><tr><td>TOTAL</td><td class="num">${tg.total.siswa}</td><td class="num">${num(tg.total.tagihan)}</td>
+        <td class="num">${num(tg.total.dibayar)}</td><td class="num">${num(tg.total.sisa)}</td></tr></tfoot></table>
+      <div class="t-strong" style="margin:4mm 0 1.5mm">RINCIAN PER KELAS</div>
+      <table class="tbl"><thead><tr><th>Tingkat</th><th>Kelas</th><th class="num">Siswa</th><th class="num">Tagihan</th><th class="num">Dibayar</th><th class="num">Tunggakan</th></tr></thead><tbody>
+        ${tg.byKelas.map(x => `<tr><td>${esc(dbm.tingkatLabel(x.tingkat === '(tanpa tingkat)' ? '' : x.tingkat))}</td>
+          <td>${esc(x.kelas)}</td><td class="num">${x.siswa}</td><td class="num">${num(x.tagihan)}</td>
+          <td class="num">${num(x.dibayar)}</td><td class="num">${num(x.sisa)}</td></tr>`).join('')}
+      </tbody></table>
+      ${ui.signBlock(c.settings, { tanggal: tglID(new Date().toISOString().slice(0, 10)) })}`;
+    res.html(ui.printPage({
+      settings: c.settings, base: c.base, title: 'Rekapitulasi Tunggakan per Tingkat',
+      body, backHref: '/laporan?r=tunggakan&ta=' + (taId || ''), backLabel: 'Kembali ke Laporan',
+      orient: printcfg.orient(req, dbm, 'laporan'), selfPath: req.url
+    }));
+  });
+
+  get('/export/tunggakan', (req, res) => {
+    if (!guard(req, res, 'laporan', 'export')) return;
+    const c = ctx(req);
+    const taId = Number(req.query.get('ta') || c.taId || (dbm.activeTahun() || {}).id) || null;
+    const ta = taId ? dbm.tahunById(taId) : null;
+    const tf = tingkatKelasFilter(req);
+    const tg = tunggakanData(taId, tf.tingkat, tf.kelas);
+    const rows = [...head(c.settings),
+      [{ v: 'REKAPITULASI TUNGGAKAN IURAN SISWA', bold: true }],
+      [`Tahun Pelajaran: ${ta ? ta.nama : '-'}`, '', tf.tingkat.length ? 'Tingkat: ' + tf.tingkat.map(x => dbm.tingkatLabel(x)).join(', ') : 'Semua tingkat'], [],
+      [{ v: 'A. REKAP PER TINGKAT', bold: true }],
+      [{ v: 'Tingkat', bold: true }, { v: 'Siswa', bold: true }, { v: 'Tagihan', bold: true }, { v: 'Dibayar', bold: true }, { v: 'Tunggakan', bold: true }],
+      ...tg.byTingkat.map(x => [dbm.tingkatLabel(x.tingkat === '(tanpa tingkat)' ? '' : x.tingkat), x.siswa, x.tagihan, x.dibayar, x.sisa]),
+      [{ v: 'TOTAL', bold: true }, { v: tg.total.siswa, bold: true }, { v: tg.total.tagihan, bold: true }, { v: tg.total.dibayar, bold: true }, { v: tg.total.sisa, bold: true }],
+      [],
+      [{ v: 'B. REKAP PER KELAS', bold: true }],
+      [{ v: 'Tingkat', bold: true }, { v: 'Kelas', bold: true }, { v: 'Siswa', bold: true }, { v: 'Tagihan', bold: true }, { v: 'Dibayar', bold: true }, { v: 'Tunggakan', bold: true }],
+      ...tg.byKelas.map(x => [dbm.tingkatLabel(x.tingkat === '(tanpa tingkat)' ? '' : x.tingkat), x.kelas, x.siswa, x.tagihan, x.dibayar, x.sisa]),
+      [], ['Mengetahui, Kepala Sekolah', '', '', 'Bendahara'], [c.settings.sekolah_kepala || '', '', '', c.settings.sekolah_bendahara || '']
+    ];
+    xlsxSend(res, `Tunggakan-Tingkat-TA-${String(ta ? ta.nama : '').replace('/', '-')}.xlsx`, 'Tunggakan per Tingkat', rows, [16, 22, 10, 16, 16, 16]);
   });
 
   get('/export/piutang', (req, res) => {

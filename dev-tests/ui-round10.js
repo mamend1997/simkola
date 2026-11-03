@@ -86,8 +86,8 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
   ok('payroll: tanpa error JS', r.errs.length === 0, r.errs.join(' | '));
   ok('payroll desktop tanpa overflow', r.overflow <= 2, String(r.overflow));
   r = await shot('/payroll?periode=' + periode, '01b-payroll-kasbon.png', { width: 1440, height: 1000 },
-    async page => { await page.locator('#kasbon').scrollIntoViewIfNeeded(); });
-  ok('panel kasbon tampil', r.errs.length === 0, r.errs.join(' | '));
+    async page => { await page.locator('table.payroll-table').scrollIntoViewIfNeeded(); });
+  ok('tabel leger dinamis tampil', r.errs.length === 0, r.errs.join(' | '));
 
   // tombol aksi baris (form attribute) harus benar-benar mengirim POST & mengubah urutan
   {
@@ -103,17 +103,22 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
     await ctx.close();
   }
 
-  // modal review berisi seluruh baris (bug form bersarang sudah diperbaiki)
+  // form leger dinamis: seluruh baris & kolom ikut terkirim (tanpa form bersarang)
   {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     await ctx.addCookies([{ name: cookie.split('=')[0], value: cookie.split('=').slice(1).join('='), url: base }]);
     const page = await ctx.newPage();
     await page.goto(base + '/payroll?periode=' + periode, { waitUntil: 'networkidle' });
-    await page.click('button:has-text("Review & Simpan Draf")');
-    await page.waitForTimeout(400);
-    const baris = await page.locator('#mPayrollReview [data-review-body] tbody tr').count();
-    ok('modal review memuat semua baris leger', baris === rows.length, `${baris}/${rows.length}`);
-    await page.screenshot({ path: path.join(OUT, '02-payroll-review.png') });
+    const info = await page.evaluate(() => ({
+      rows: document.querySelectorAll('tr[data-payroll-row]').length,
+      inputs: document.querySelectorAll('#fPayroll input[name$="_c_jam_efektif"], #fPayroll input.js-din').length,
+      foot: document.querySelectorAll('tfoot [data-foot-kode]').length,
+      actions: document.querySelectorAll('#fPayroll').length
+    }));
+    ok('form leger dinamis memuat semua baris', info.rows === rows.length, `${info.rows}/${rows.length}`);
+    ok('kolom dinamis punya input & footer total', info.inputs >= rows.length && info.foot >= 10, JSON.stringify(info));
+    ok('hanya satu form leger (tidak bersarang)', info.actions === 1);
+    await page.screenshot({ path: path.join(OUT, '02-payroll-dinamis.png') });
     await ctx.close();
   }
 

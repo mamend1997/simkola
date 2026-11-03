@@ -14,6 +14,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     return put;
   }
   const curPeriode = () => dbm.currentPeriode();
+  const esc0 = v => String(v === undefined || v === null ? '' : v);
   /** periode default: bulan berjalan bila masih di dalam TA terpilih, selain itu bulan awal TA */
   function defaultPeriode(ta) {
     const cur = curPeriode();
@@ -141,6 +142,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const periode = normPeriode(req.query.get('periode')) || defaultPeriode(c.ta);
     const rows = dbm.payrollRows(periode);
     const tot = dbm.payrollTotals(periode);
+    // struktur kolom dinamis (diatur sekolah pada /payroll/kolom)
+    const dyn = dbm.payrollDynamic(periode);
+    const cols = dyn.cols;
+    const dinMap = new Map(dyn.rows.map(r => [r.id, r]));
     // null = masih DRAF (termasuk saat transaksi BKU-nya sudah dihapus → otomatis terbuka kembali)
     const posted = dbm.payrollPost(periode);
     const editable = c.can('payroll', 'edit');
@@ -157,33 +162,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const F = (id, name, val, extra = '') => `<input type="text" inputmode="numeric" autocomplete="off" name="${id}_${name}" value="${esc(lib.moneyInput(val))}" data-money ${extra} ${canEdit ? '' : 'disabled'}>`;
     const HJ = (id, name, val) => `<input type="text" inputmode="decimal" autocomplete="off" name="${id}_${name}" value="${esc(val === undefined || val === null ? '' : String(Math.round(Number(val) * 100) / 100).replace('.', ','))}" ${canEdit ? '' : 'disabled'}>`;
 
+    const fmtVal = (c, v) => c.nilai === 'jam'
+      ? String(Math.round((Number(v) || 0) * 100) / 100).replace('.', ',')
+      : lib.moneyInput(v);
+
     const rowHtml = r => {
+      const d = dinMap.get(r.id) || { din: {}, dinComputed: {} };
       const neg = r.diterima < 0;
-      return `<tr data-payroll-row data-rid="${r.id}">
+      const cells = cols.map(c => {
+        const v = d.din ? d.din[c.kode] : 0;
+        if (c.rumus) {
+          return `<td class="num"><span class="js-calc" data-kode="${esc(c.kode)}" data-tipe="${esc(c.tipe)}" data-satuan="${esc(c.nilai)}">${esc(fmtVal(c, v))}</span></td>`;
+        }
+        const name = `${r.id}_c_${c.kode}`;
+        return `<td><input type="text" inputmode="${c.nilai === 'jam' ? 'decimal' : 'numeric'}" autocomplete="off"
+          name="${esc(name)}" value="${esc(fmtVal(c, v))}" class="js-din"
+          data-kode="${esc(c.kode)}" data-tipe="${esc(c.tipe)}" data-satuan="${esc(c.nilai)}"
+          ${c.nilai === 'uang' ? 'data-money' : ''} ${canEdit ? '' : 'disabled'}></td>`;
+      }).join('');
+      return `<tr data-payroll-row data-rid="${r.id}" data-diterima="${r.diterima}">
         <td class="pick-cell"><input type="checkbox" name="pilih" value="${r.id}" form="fHapusTerpilih" aria-label="Pilih ${esc(r.nama)}"${canEdit ? '' : ' disabled'}></td>
         <td class="sticky-col nm-cell"><div class="t-strong"><span class="drag-handle" draggable="true" title="Geser untuk ubah urutan">⠿</span> ${esc(r.nama)}</div>
           <div class="t-sub">${esc(r.jabatan || '-')} ${r.tipe === 'tu' ? ui.badge('TU', 'blue', 'plain') : ui.badge('Guru', 'orange', 'plain')}</div></td>
-        <td>${HJ(r.id, 'jam_efektif', r.jam_efektif)}</td>
-        <td>${HJ(r.id, 'jam_telat', r.jam_telat)}</td>
-        <td>${F(r.id, 'honor_jam', r.honor_jam)}</td>
-        <td class="num t-strong js-honor">${rupiah(r.honorMengajar)}</td>
-        <td>${F(r.id, 'tunjangan_jabatan', r.tunjangan_jabatan)}</td>
-        <td>${F(r.id, 'tunjangan_masa_kerja', r.tunjangan_masa_kerja)}</td>
-        <td>${F(r.id, 'lembur', r.lembur)}</td>
-        <td>${F(r.id, 'tambahan_penghasilan', r.tambahan_penghasilan)}</td>
-        <td>${F(r.id, 'tunjangan_khusus', r.tunjangan_khusus)}</td>
-        <td>${HJ(r.id, 'jam_pembantu_kepsek', r.jam_pembantu_kepsek)}<div class="t-sub js-pembantu">${rupiah(r.pembantuKepsek)}</div></td>
-        <td>${HJ(r.id, 'jam_wali_kelas', r.jam_wali_kelas)}<div class="t-sub js-wali">${rupiah(r.waliKelas)}</div></td>
-        <td class="num js-penerimaan">${rupiah(r.penerimaan)}</td>
-        <td class="num js-telat">${rupiah(r.potTelat)}<div class="t-sub">${r.jam_telat || 0} × 75% × ${esc(lib.moneyInput(r.honor_jam) || '0')}</div></td>
-        <td>${F(r.id, 'pot_dana_sosial', r.pot_dana_sosial)}</td>
-        <td>${F(r.id, 'pot_bpjs_kes', r.pot_bpjs_kes)}</td>
-        <td>${F(r.id, 'pot_bpjs_tk', r.pot_bpjs_tk)}</td>
-        <td class="js-sert-cell">${HJ(r.id, 'jam_sertifikasi', r.jam_sertifikasi)}
-          <div class="t-sub js-sert">${rupiah(r.sertifikasi)} <span class="muted">= ${String(Number(r.jam_sertifikasi) || 0).replace('.', ',')} jam × ${esc(lib.moneyInput(r.sertifikasiJam) || '12.500')}</span></div></td>
-        <td>${F(r.id, 'pot_kasbon', r.pot_kasbon)}<div class="t-sub">catatan slip</div></td>
-        <td class="num js-potongan">${rupiah(r.potongan)}</td>
-        <td class="num js-diterima t-strong" style="color:${neg ? 'var(--red)' : 'var(--ink)'}">${rupiah(r.diterima)}</td>
+        ${cells}
+        <td class="num js-penerimaan t-strong" data-val="${r.penerimaan}">${rupiah(r.penerimaan)}</td>
+        <td class="num js-potongan" style="color:var(--red)" data-val="${r.potongan}">${rupiah(r.potongan)}</td>
+        <td class="num js-diterima t-strong" data-val="${r.diterima}" style="color:${neg ? 'var(--red)' : 'var(--ink)'}">${rupiah(r.diterima)}</td>
         <td class="right nowrap">${canEdit ? `
           <button class="btn btn-sm btn-icon" form="${mkForm(r.id, '/payroll/urutkan', { id: r.id, periode, arah: 'up' })}" title="Pindah ke atas">${ui.icon('up')}</button>
           <button class="btn btn-sm btn-icon" form="${mkForm(r.id, '/payroll/urutkan', { id: r.id, periode, arah: 'down' })}" title="Pindah ke bawah">${ui.icon('down')}</button>
@@ -269,29 +273,30 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         <div class="table-wrap" style="max-height:70vh;overflow:auto">
           <table class="payroll-table"><thead><tr>
             <th class="pick-cell"><input type="checkbox" data-check-all-box="pilih" title="Pilih semua baris" aria-label="Pilih semua baris"></th>
-            <th class="sticky-col">Nama / Jabatan</th><th>Jam Efektif</th><th>Jam Telat</th><th>Honor / Jam</th><th>Honor Mengajar</th>
-            <th>Tunj. Jabatan</th><th>Tunj. Masa Kerja</th><th>Lembur</th><th>Tamb. Penghasilan</th><th>Tunj. Khusus</th>
-            <th>Pembantu Kepsek <span class="t-sub">(jam)</span></th><th>Wali Kelas <span class="t-sub">(jam)</span></th>
-            <th>Total Penerimaan</th><th>Pot. Telat (75%)</th><th>Dana Sosial</th><th>BPJS Kes</th><th>BPJS TK</th>
-            <th>Sertifikasi <span class="t-sub">(jam)</span></th><th>Kasbon <span class="t-sub">(slip)</span></th>
-            <th>Total Potongan</th><th>Diterima</th><th></th>
+            <th class="sticky-col">Nama / Jabatan</th>
+            ${cols.map(c => `<th>${esc(c.label)}${c.nilai === 'jam' ? ' <span class="t-sub">(jam)</span>' : ''}${c.rumus ? ' <span class="t-sub">auto</span>' : ''}</th>`).join('')}
+            <th>Total Penerimaan</th><th>Total Potongan</th><th>Diterima (THP)</th><th></th>
           </tr></thead><tbody>${rows.map(rowHtml).join('')}</tbody>
-          <tfoot><tr><td class="pick-cell"></td><td class="sticky-col">TOTAL (${rows.length} baris)</td><td colspan="3"></td><td class="num">${rupiah(tot.rows.reduce((s, r) => s + r.honorMengajar, 0))}</td>
-            <td colspan="7"></td><td class="num">${rupiah(tot.penerimaan)}</td><td class="num">${rupiah(tot.potTelat)}</td>
-            <td class="num">${rupiah(tot.danaSosial)}</td><td class="num">${rupiah(tot.bpjsKes)}</td><td class="num">${rupiah(tot.bpjsTk)}</td><td class="num">${rupiah(tot.sertifikasi)}<div class="t-sub">${String(Math.round((Number(tot.jamSertifikasi) || 0) * 100) / 100).replace('.', ',')} jam</div></td>
-            <td class="num">${rupiah(tot.kasbon)}</td>
-            <td class="num">${rupiah(tot.potongan)}</td><td class="num">${rupiah(tot.diterima)}</td><td></td></tr></tfoot>
+          <tfoot><tr><td class="pick-cell"></td><td class="sticky-col">TOTAL (${rows.length} baris)</td>
+            ${cols.map(c => `<td class="num" data-foot-kode="${esc(c.kode)}">${esc(fmtVal(c, dyn.totals.perKode[c.kode]))}</td>`).join('')}
+            <td class="num" data-foot="penerimaan">${rupiah(dyn.totals.penerimaan)}</td>
+            <td class="num" data-foot="potongan">${rupiah(dyn.totals.potongan)}</td>
+            <td class="num" data-foot="diterima">${rupiah(dyn.totals.diterima)}</td><td></td></tr></tfoot>
         </table></div>
         ${canEdit ? `<div class="form-actions">
           <button class="btn btn-primary" type="submit">${ui.icon('save')}Simpan Draf</button>
           <span class="muted small">Data langsung tersimpan &amp; tampil di portal publik slip gaji.</span></div>`
         : `<div class="alert info mt-2">${ui.icon('lock')}<div>${posted ? 'Leger periode ini sudah diposting ke BKU — terkunci. Hapus transaksi honor terkait di BKU Umum agar draf bisa diedit kembali.' : 'Role Anda hanya dapat melihat leger.'}</div></div>`}
       </form>` : ui.emptyState('Belum ada baris leger', 'Klik "Tarik Semua Pegawai" untuk mengisi otomatis dari master pegawai, atau tambah baris manual.')}
-      <p class="help mt-2">Rumus: <b>Honor Mengajar = Jam Efektif × Honor/Jam</b> · <b>Potongan Telat = Jam Telat × 75% × Honor/Jam</b> ·
-        <b>Pembantu Kepsek = Jam × ${rupiah(dbm.honorPembantuJam())}</b> · <b>Wali Kelas = Jam × ${rupiah(dbm.honorWaliJam())}</b> ·
-        <b>Sertifikasi = Jam Sertifikasi × ${rupiah(dbm.sertifikasiJam())}</b> (tarif diatur di <a href="${c.base}/tarif-honor">Pengaturan Nominal Tunjangan &amp; Honor</a>) ·
-        <b>Diterima = Total Penerimaan − Total Potongan</b>. Kolom <b>Kasbon</b> hanya dicatat untuk slip gaji (tidak memotong piutang otomatis).</p>
-      <script>window.__HONOR_TUGAS = ${dbm.honorPembantuJam()}; window.__HONOR_WALI = ${dbm.honorWaliJam()}; window.__SERT_RATE = ${dbm.sertifikasiJam()};</script>
+      <div class="between flex-wrap mt-2" style="gap:10px">
+        <p class="help" style="margin:0">Total <b>Diterima (THP) = Σ Penerimaan − Σ Potongan</b>, dihitung ulang otomatis setiap angka diubah.
+          Nama &amp; urutan kolom mengikuti <a href="${c.base}/payroll/kolom">Pengaturan Kolom Leger</a>; baris rekapitulasi di bawah tabel ikut urutan kolom.</p>
+        ${canEdit ? `<a class="btn btn-sm" href="${c.base}/payroll/kolom">${ui.icon('settings')}Pengaturan Kolom Leger</a>` : ''}
+      </div>
+      <script>
+        window.__PAY_COLS = ${JSON.stringify(cols.map(c => ({ kode: c.kode, tipe: c.tipe, rumus: c.rumus || '', satuan: c.nilai })))};
+        window.__PAY_VARS = { honor_pembantu: ${dbm.honorPembantuJam()}, honor_wali: ${dbm.honorWaliJam()}, sertifikasi_rate: ${dbm.sertifikasiJam()} };
+      </script>
       ${canEdit ? `<form id="fUrutan" method="post" action="${c.base}/payroll/urutan" style="display:none">
         <input type="hidden" name="periode" value="${esc(periode)}"><input type="hidden" name="ids" value="">
       </form>` : ''}
@@ -650,8 +655,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         const row = db.prepare('SELECT * FROM payroll WHERE id=? AND periode=?').get(id, periode);
         if (!row) continue;
         const data = {};
-        for (const f of JAM_FIELDS) data[f] = parseJam(req.body[`${id}_${f}`]);
-        for (const f of MONEY_FIELDS) data[f] = lib.parseMoney(req.body[`${id}_${f}`]);
+        // kolom dinamis mengirim nama `${id}_c_<kode>`; form lama memakai `${id}_<field>`
+        const pick = f => (req.body[`${id}_c_${f}`] !== undefined ? req.body[`${id}_c_${f}`] : req.body[`${id}_${f}`]);
+        for (const f of JAM_FIELDS) data[f] = parseJam(pick(f));
+        for (const f of MONEY_FIELDS) data[f] = lib.parseMoney(pick(f));
         // nominal sertifikasi selalu dihitung dari JAM × tarif (kolom pot_sertifikasi hanya cermin nominal)
         const sertNominal = Math.round((Number(data.jam_sertifikasi) || 0) * dbm.sertifikasiJam());
         db.prepare(`UPDATE payroll SET jam_efektif=?,jam_telat=?,jam_pembantu_kepsek=?,jam_wali_kelas=?,jam_sertifikasi=?,
@@ -662,8 +669,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
             data.honor_jam, data.tunjangan_jabatan, data.tunjangan_masa_kerja,
             data.lembur, data.tambahan_penghasilan, data.tunjangan_khusus,
             data.pot_dana_sosial, data.pot_bpjs_kes, data.pot_bpjs_tk, sertNominal, data.pot_kasbon, nowStamp(), id);
+        // ---- kolom DINAMIS: simpan kolom kustom (tanpa rumus) ke payroll_nilai ----
+        const colsNow = dbm.payrollKolomList();
+        for (const c of colsNow) {
+          if (c.rumus) continue;                       // kolom berumus dihitung otomatis
+          const raw = req.body[`${id}_c_${c.kode}`];
+          if (raw === undefined) continue;
+          if (dbm.PAYROLL_LEGACY.has(c.kode)) continue; // kolom bawaan sudah ditulis di atas
+          dbm.payrollNilaiSet(id, c.kode, c.nilai === 'jam' ? parseJam(raw) : lib.parseMoney(raw));
+        }
         const fresh = db.prepare('SELECT * FROM payroll WHERE id=?').get(id);
-        const calc = dbm.payrollCalc(fresh);
+        const dynRow = dbm.payrollDynamic(periode).rows.find(x => Number(x.id) === Number(id)) || {};
+        const calc = Object.assign(dbm.payrollCalc(fresh), {
+          penerimaan: dynRow.penerimaanDinamis !== undefined ? dynRow.penerimaanDinamis : dbm.payrollCalc(fresh).penerimaan,
+          potongan: dynRow.potonganDinamis !== undefined ? dynRow.potonganDinamis : dbm.payrollCalc(fresh).potongan,
+          diterima: dynRow.diterimaDinamis !== undefined ? dynRow.diterimaDinamis : dbm.payrollCalc(fresh).diterima
+        });
         syncMinus(fresh, calc);            // nilai minus tetap otomatis jadi piutang
         if (calc.diterima < 0) minusCount++;
         n++;
@@ -848,25 +869,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     guard(req, res, 'payroll', 'view');
     const c = ctx(req);
     const periode = /^\d{4}-\d{2}$/.test(req.query.get('periode') || '') ? req.query.get('periode') : defaultPeriode(c.ta);
-    const rows = dbm.payrollRows(periode);
-    const tot = dbm.payrollTotals(periode);
-    const head = ['NO', 'NAMA', 'JABATAN', 'TIPE', 'JAM EFEKTIF', 'JAM TELAT', 'HONOR/JAM', 'HONOR MENGAJAR',
-      'TUNJ. JABATAN', 'MASA KERJA', 'LEMBUR', 'TAMBAHAN PENGHASILAN', 'TUNJ. KHUSUS',
-      'JAM PEMBANTU KEPSEK', 'PEMBANTU KEPSEK', 'JAM WALI KELAS', 'WALI KELAS',
-      'PENERIMAAN', 'POT. TELAT', 'DANA SOSIAL', 'BPJS KES', 'BPJS TK', 'SERTIFIKASI', 'KASBON', 'POTONGAN', 'DITERIMA']
-      .map(v => ({ v, bold: true }));
+    const dyn = dbm.payrollDynamic(periode);
+    const cols = dyn.cols;
+    const rows = dyn.rows;
+    // judul kolom mengikuti PERSIS struktur kolom aktif (urutan & nama dari sekolah)
+    const head = ['NO', 'NAMA', 'JABATAN', 'TIPE', ...cols.map(c => String(c.label).toUpperCase()),
+      'TOTAL PENERIMAAN', 'TOTAL POTONGAN', 'DITERIMA (THP)'].map(v => ({ v, bold: true }));
     const body = rows.map((r, i) => [i + 1, r.nama, r.jabatan || '', r.tipe === 'tu' ? 'TU' : 'Guru',
-      Number(r.jam_efektif) || 0, Number(r.jam_telat) || 0, Number(r.honor_jam) || 0, r.honorMengajar,
-      Number(r.tunjangan_jabatan) || 0, Number(r.tunjangan_masa_kerja) || 0, Number(r.lembur) || 0,
-      Number(r.tambahan_penghasilan) || 0, Number(r.tunjangan_khusus) || 0,
-      Number(r.jam_pembantu_kepsek) || 0, r.pembantuKepsek, Number(r.jam_wali_kelas) || 0, r.waliKelas,
-      r.penerimaan, r.potTelat, Number(r.pot_dana_sosial) || 0, Number(r.pot_bpjs_kes) || 0,
-      Number(r.pot_bpjs_tk) || 0, r.sertifikasi, Number(r.pot_kasbon) || 0, r.potongan, r.diterima]);
-    body.push(['', 'TOTAL', '', '', '', '', '', tot.rows.reduce((s, r) => s + r.honorMengajar, 0),
-      tot.tunjanganJabatan, tot.masaKerja, tot.lembur, tot.tambahan, tot.khusus,
-      tot.jamPembantu, tot.pembantuKepsek, tot.jamWali, tot.waliKelas,
-      tot.penerimaan, tot.potTelat, tot.danaSosial, tot.bpjsKes, tot.bpjsTk, tot.sertifikasi, tot.kasbon, tot.potongan, tot.diterima]);
-    res.file(lib.xlsxBuffer('Leger ' + periode, [head, ...body], [5, 26, 22, 8, 9, 8, 12, 14, 13, 12, 11, 16, 16, 12, 14, 12, 12, 14, 12, 12, 12, 12, 13, 12, 14, 14]),
+      ...cols.map(c => Number(r.din[c.kode]) || 0),
+      r.penerimaanDinamis, r.potonganDinamis, r.diterimaDinamis]);
+    // baris rekapitulasi bawah: total tiap kolom mengikuti urutan yang sama
+    body.push(['', 'TOTAL', '', '',
+      ...cols.map(c => Math.round((Number(dyn.totals.perKode[c.kode]) || 0) * 100) / 100),
+      dyn.totals.penerimaan, dyn.totals.potongan, dyn.totals.diterima]);
+    body.push([]);
+    body.push(['', 'Mengetahui,', '', '', 'Bendahara Sekolah,', '', '', 'Kepala Sekolah,']);
+    body.push(['', esc0(c.settings.sekolah_kepala), '', '', esc0(c.settings.sekolah_bendahara)]);
+    body.push(['', '(............................................)', '', '', '(............................................)']);
+    const widths = [5, 26, 22, 8, ...cols.map(c => (c.nilai === 'jam' ? 10 : 13)), 15, 14, 15];
+    res.file(lib.xlsxBuffer('Leger ' + periode, [head, ...body], widths),
       `leger-honor-${periode}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   });
 
@@ -879,6 +900,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const mode = req.query.get('mode') === 'khusus' ? 'khusus' : 'leger';
     const rows = dbm.payrollRows(periode);
     const tot = dbm.payrollTotals(periode);
+    const dynAll = dbm.payrollDynamic(periode);
+    const dynCols = dynAll.cols;
+    const dynRows = dynAll.rows;
+    const dynTot = dynAll.totals;
     const orient = printcfg.orient(req, dbm, 'leger_honor');
     const size = paper === 'F4' ? '330mm 215mm' : 'A4 landscape';
     const sizeRule = paper === 'F4' ? (orient === 'portrait' ? '215mm 330mm' : '330mm 215mm') : `A4 ${orient === 'portrait' ? 'portrait' : 'landscape'}`;
@@ -911,25 +936,23 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         <div style="text-align:center;font-weight:800;font-size:11pt;margin:1mm 0 .5mm">LEGER HONOR GURU &amp; TATA USAHA</div>
         <div style="text-align:center;font-size:8.5pt;margin-bottom:2mm">${esc(titleOf(periode))}</div>
         <table class="leger-tbl ttd-tbl"><thead><tr>
-          <th style="width:6mm">No</th><th style="width:34mm">Nama</th><th style="width:24mm">Jabatan</th>
-          <th>Jam Efektif</th><th>Jam Telat</th><th>Honor/Jam</th><th>Honor Mengajar</th><th>Pot. Telat 75%</th>
-          <th>Tunj. Jabatan</th><th>Masa Kerja</th><th>Lembur</th><th>Pemb. Kepsek</th><th>Wali Kelas</th><th>Penerimaan</th>
-          <th>Dana Sosial</th><th>BPJS Kes</th><th>BPJS TK</th><th>Sertifikasi</th><th>Kasbon</th><th>Potongan</th><th>Diterima</th>
+          <th style="width:6mm">No</th><th style="width:32mm">Nama</th><th style="width:20mm">Jabatan</th>
+          ${dynCols.map(c => `<th>${esc(c.label)}</th>`).join('')}
+          <th>Penerimaan</th><th>Potongan</th><th>Diterima</th>
           <th class="ttd-col">Tanda Tangan / Terima</th></tr></thead><tbody>
-          ${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td>${esc(r.nama)}</td><td>${esc(r.jabatan || '-')}</td>
-            <td class="num">${String(r.jam_efektif).replace('.', ',')}</td><td class="num">${String(r.jam_telat).replace('.', ',')}</td>
-            <td class="num">${num(r.honor_jam)}</td><td class="num">${num(r.honorMengajar)}</td><td class="num">${num(r.potTelat)}</td>
-            <td class="num">${num(r.tunjangan_jabatan)}</td><td class="num">${num(r.tunjangan_masa_kerja)}</td><td class="num">${num(r.lembur)}</td>
-            <td class="num">${num(r.pembantuKepsek)}</td><td class="num">${num(r.waliKelas)}</td><td class="num">${num(r.penerimaan)}</td>
-            <td class="num">${num(r.pot_dana_sosial)}</td><td class="num">${num(r.pot_bpjs_kes)}</td><td class="num">${num(r.pot_bpjs_tk)}</td>
-            <td class="num">${num(r.sertifikasi)}</td><td class="num">${num(r.pot_kasbon)}</td><td class="num">${num(r.potongan)}</td><td class="num">${num(r.diterima)}</td>
-            <td class="ttd-cell"></td></tr>`).join('') || '<tr><td colspan="22" style="text-align:center">Tidak ada data</td></tr>'}
-        </tbody><tfoot><tr><td colspan="6" style="text-align:center">JUMLAH</td><td class="num">${num(tot.rows.reduce((s, r) => s + r.honorMengajar, 0))}</td><td class="num">${num(tot.potTelat)}</td>
-          <td class="num">${num(tot.tunjanganJabatan)}</td><td class="num">${num(tot.masaKerja)}</td><td class="num">${num(tot.lembur)}</td>
-          <td class="num">${num(tot.pembantuKepsek)}</td><td class="num">${num(tot.waliKelas)}</td><td class="num">${num(tot.penerimaan)}</td>
-          <td class="num">${num(tot.danaSosial)}</td><td class="num">${num(tot.bpjsKes)}</td><td class="num">${num(tot.bpjsTk)}</td><td class="num">${num(tot.sertifikasi)}</td><td class="num">${num(tot.kasbon)}</td><td class="num">${num(tot.potongan)}</td><td class="num">${num(tot.diterima)}</td><td></td></tr></tfoot></table>
-        <p style="font-size:6.8pt;margin-top:1.5mm">Catatan: Leger utama tidak memuat Tambahan Penghasilan &amp; Tunjangan Kepsek/Wakasek — lihat dokumen <b>Cetak Tunjangan Khusus</b>.
-        Rumus potongan telat = Jam Telat × 75% × Honor/Jam · Pembantu Kepsek &amp; Wali Kelas = Jam × ${num(dbm.honorTugasJam())}.
+          ${dynRows.map((r, i) => `<tr><td class="num">${i + 1}</td><td>${esc(r.nama)}</td><td>${esc(r.jabatan || '-')}</td>
+            ${dynCols.map(c => `<td class="num">${c.nilai === 'jam'
+        ? String(Math.round((Number(r.din[c.kode]) || 0) * 100) / 100).replace('.', ',')
+        : num(r.din[c.kode])}</td>`).join('')}
+            <td class="num">${num(r.penerimaanDinamis)}</td><td class="num">${num(r.potonganDinamis)}</td><td class="num">${num(r.diterimaDinamis)}</td>
+            <td class="ttd-cell"></td></tr>`).join('') || `<tr><td colspan="${dynCols.length + 7}" style="text-align:center">Tidak ada data</td></tr>`}
+        </tbody><tfoot><tr><td colspan="3" style="text-align:center">JUMLAH</td>
+          ${dynCols.map(c => `<td class="num">${c.nilai === 'jam'
+        ? String(Math.round((Number(dynTot.perKode[c.kode]) || 0) * 100) / 100).replace('.', ',')
+        : num(dynTot.perKode[c.kode])}</td>`).join('')}
+          <td class="num">${num(dynTot.penerimaan)}</td><td class="num">${num(dynTot.potongan)}</td><td class="num">${num(dynTot.diterima)}</td><td></td></tr></tfoot></table>
+        <p style="font-size:6.8pt;margin-top:1.5mm">Kolom dan urutannya mengikuti <b>Pengaturan Kolom Leger</b> sekolah.
+        Total <b>Diterima (THP) = jumlah seluruh kolom Penerimaan − jumlah seluruh kolom Potongan</b>.
         Kolom paling kanan digunakan sebagai bukti tanda terima honor oleh pegawai.</p>
         ${ui.signBlock(c.settings, { tempat: '', tanggal: tglID(dbm.periodeEnd(periode)) })}`;
     }

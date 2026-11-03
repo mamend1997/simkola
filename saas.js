@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS saas_payments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id INTEGER NOT NULL,
+  paket_tujuan TEXT,
   no_invoice TEXT,
   jenis TEXT NOT NULL DEFAULT 'perpanjangan',
   durasi INTEGER NOT NULL DEFAULT 30,
@@ -88,9 +89,68 @@ CREATE TABLE IF NOT EXISTS saas_backup_log (
 );
 CREATE INDEX IF NOT EXISTS idx_saas_pay_tenant ON saas_payments(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_saas_sess ON sessions(token);
+CREATE TABLE IF NOT EXISTS saas_packages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kode TEXT NOT NULL UNIQUE,
+  nama TEXT NOT NULL,
+  harga_bulan REAL NOT NULL DEFAULT 0,
+  harga_tahun REAL NOT NULL DEFAULT 0,
+  fitur TEXT,
+  self_trial INTEGER NOT NULL DEFAULT 0,
+  trial_hari INTEGER,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  aktif INTEGER NOT NULL DEFAULT 1,
+  urutan INTEGER NOT NULL DEFAULT 0,
+  keterangan TEXT,
+  created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS reg_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ip TEXT NOT NULL,
+  email TEXT,
+  hasil TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reg_attempts_ip ON reg_attempts(ip, created_at);
 `;
 
 S.exec(SCHEMA);
+
+/* ---------------- migrasi kolom control plane ---------------- */
+(function migrateControl() {
+  const cols = t => { try { return S.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
+  const add = (t, name, ddl) => { if (!cols(t).includes(name)) { try { S.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${ddl}`); } catch (e) { } } };
+  add('saas_payments', 'paket_tujuan', 'TEXT');
+  add('saas_packages', 'self_trial', 'INTEGER NOT NULL DEFAULT 0');
+  add('saas_packages', 'trial_hari', 'INTEGER');
+})();
+
+/**
+ * Migrasi format fitur paket lama ({std:1}) → peta fitur lengkap (array kode fitur).
+ * Dijalankan sekali (flag `mig_pkgfitur_v1`); paket yang SUDAH memakai array tidak diubah.
+ */
+function migratePackageFeatures() {
+  try {
+    if (S.prepare("SELECT v FROM saas_settings WHERE k='mig_pkgfitur_v1'").get()) return;
+    for (const p of S.prepare('SELECT * FROM saas_packages').all()) {
+      let arr = null;
+      try { const o = JSON.parse(p.fitur || 'null'); if (Array.isArray(o) && o.length) arr = o; } catch (e) { arr = null; }
+      let next = arr;
+      if (!next) {
+        const def = DEFAULT_PACKAGES.find(d => d.kode === p.kode);
+        if (def) next = def.fitur;
+        else {
+          const map = packageFeatureMap(p);
+          next = Object.keys(map).filter(k => map[k]);
+        }
+      }
+      if (Array.isArray(next)) S.prepare('UPDATE saas_packages SET fitur=? WHERE id=?').run(JSON.stringify(next), p.id);
+    }
+    const basic = S.prepare("SELECT * FROM saas_packages WHERE kode='basic'").get();
+    if (basic && !Number(basic.self_trial)) S.prepare('UPDATE saas_packages SET self_trial=1 WHERE id=?').run(basic.id);
+    S.prepare("INSERT OR REPLACE INTO saas_settings (k,v) VALUES ('mig_pkgfitur_v1','1')").run();
+  } catch (e) { console.error('[mig-pkgfitur]', e.message); }
+}
 
 /* ---------------- pengaturan control plane ---------------- */
 function get(k, d = '') {
@@ -107,9 +167,20 @@ function settings() {
 }
 
 const DEFAULT_SETTINGS = {
-  saas_nama: 'SIMKEU Cloud',
+  saas_nama: 'SIMKEU',
   saas_logo: '',
+  saas_favicon: '',
   saas_tema: '#4F46E5',
+  // paket default untuk pendaftaran mandiri
+  paket_default: 'basic',
+  // anti-spam pendaftaran
+  captcha_provider: 'off',        // off | recaptcha | turnstile
+  captcha_site_key: '',
+  captcha_secret: '',
+  reg_limit_per_hour: '2',
+  reg_block_hours: '24',
+  // nomor WhatsApp admin untuk paket berbayar (tombol di halaman pendaftaran)
+  wa_admin_number: '',
   // pembayaran perpanjangan
   qris_image: '',
   qris_nama: '',
@@ -117,7 +188,7 @@ const DEFAULT_SETTINGS = {
   qris_instruksi: 'Setelah melakukan pembayaran, unggah bukti transfer pada halaman perpanjangan. Verifikasi dilakukan maksimal 1x24 jam kerja.',
   harga_bulan: '150000',
   harga_tahun: '1500000',
-  trial_hari: '30',
+  trial_hari: '7',
   // auto-backup email (panel super admin)
   mail_aktif: '0',
   mail_to: '', mail_host: '', mail_port: '587', mail_secure: '0',
@@ -129,6 +200,15 @@ function initSettings() {
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
     S.prepare('INSERT OR IGNORE INTO saas_settings (k,v) VALUES (?,?)').run(k, v);
   }
+  // migrasi sekali: masa uji coba bawaan lama (30 hari) → 7 hari
+  try {
+    const flag = S.prepare("SELECT v FROM saas_settings WHERE k='mig_trial7'").get();
+    if (!flag) {
+      const cur = S.prepare("SELECT v FROM saas_settings WHERE k='trial_hari'").get();
+      if (cur && String(cur.v) === '30') S.prepare("UPDATE saas_settings SET v='7' WHERE k='trial_hari'").run();
+      S.prepare("INSERT OR REPLACE INTO saas_settings (k,v) VALUES ('mig_trial7','1')").run();
+    }
+  } catch (e) { }
 }
 initSettings();
 
@@ -165,11 +245,13 @@ const FEATURES = [
   { key: 'panduan', label: 'Petunjuk Pengguna', std: 1 },
   { key: 'piutang_lain', label: 'Piutang Sertifikasi', std: 0 },
   { key: 'piutang_lainnya', label: 'Piutang Lainnya', std: 0 },
-  { key: 'siswa', label: 'Data Siswa', std: 0 },
-  { key: 'kelas', label: 'Data Kelas', std: 0 },
-  { key: 'program', label: 'Program Keahlian', std: 0 },
-  { key: 'mutasi_kelas', label: 'Mutasi Kelas', std: 0 },
-  { key: 'iuran', label: 'Grup Iuran, SPP & Antrean Posting', std: 0 },
+  // data siswa, kelas & iuran adalah fitur INTI (semua paket) — sekolah butuh
+  // master kelas/tingkat untuk tagihan dan laporan per tingkat.
+  { key: 'siswa', label: 'Data Siswa', std: 1 },
+  { key: 'kelas', label: 'Data Kelas & Tingkat', std: 1 },
+  { key: 'program', label: 'Program Keahlian', std: 1 },
+  { key: 'mutasi_kelas', label: 'Mutasi Kelas', std: 1 },
+  { key: 'iuran', label: 'Grup Iuran, SPP & Antrean Posting', std: 1 },
   { key: 'pegawai', label: 'Data Pegawai', std: 0 },
   { key: 'payroll', label: 'Payroll & Leger Honor', std: 0 },
   { key: 'ekskul', label: 'Honor Pembina Ekskul', std: 0 },
@@ -243,7 +325,264 @@ function blockedFeature(t, pathname) {
 }
 
 /* ---------------- tenant (sekolah) ---------------- */
-const PAKET = { standard: 'Standard', pro: 'Pro' };
+/* Paket langganan dinamis (CRUD di panel Super Admin). `PAKET` tetap tersedia
+   sebagai label cepat dan selalu disegarkan dari tabel saas_packages. */
+const PAKET = { basic: 'Basic', standard: 'Standard', pro: 'Pro' };
+
+const DEFAULT_PACKAGES = [
+  {
+    kode: 'basic', nama: 'Basic', bulan: 100000, tahun: 1000000, default: 1, selfTrial: 1,
+    ket: 'BKU, transaksi, laporan, piutang, aset, backup',
+    fitur: ['dashboard', 'transaksi', 'rekon', 'mutasi_kas', 'tutup_bulanan', 'piutang', 'bku', 'coa',
+      'anggaran', 'saldo_awal', 'aset', 'import', 'tahun_ajaran', 'laporan', 'pengguna', 'sekolah',
+      'trash', 'audit', 'backup', 'panduan', 'siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran']
+  },
+  {
+    kode: 'standard', nama: 'Standard', bulan: 150000, tahun: 1500000, default: 0, selfTrial: 0,
+    ket: 'Basic + pegawai, piutang sertifikasi & lainnya, catatan',
+    fitur: ['dashboard', 'transaksi', 'rekon', 'mutasi_kas', 'tutup_bulanan', 'piutang', 'bku', 'coa',
+      'anggaran', 'saldo_awal', 'aset', 'import', 'tahun_ajaran', 'laporan', 'pengguna', 'sekolah',
+      'trash', 'audit', 'backup', 'panduan', 'siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran',
+      'pegawai', 'piutang_lain', 'piutang_lainnya', 'catatan', 'tarif_honor']
+  },
+  {
+    kode: 'pro', nama: 'Pro', bulan: 250000, tahun: 2500000, default: 0, selfTrial: 0,
+    ket: 'Semua fitur: payroll, ekskul, beasiswa, auto-backup cloud',
+    fitur: FEATURES.map(f => f.key)
+  }
+];
+function seedPackages() {
+  const n = S.prepare('SELECT COUNT(*) c FROM saas_packages').get().c;
+  if (n) return;
+  const ins = S.prepare(`INSERT OR IGNORE INTO saas_packages
+    (kode,nama,harga_bulan,harga_tahun,fitur,self_trial,is_default,aktif,urutan,keterangan,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,1,?,?,?,?)`);
+  const now = lib.nowStamp();
+  DEFAULT_PACKAGES.forEach((p, i) => ins.run(p.kode, p.nama, p.bulan, p.tahun,
+    JSON.stringify(packageFeatureMap({ fitur: JSON.stringify(p.fitur || []) }, p.kode)),
+    p.selfTrial ? 1 : 0, p.default, i + 1, p.ket, now, now));
+}
+
+/* ---------------- fitur per PAKET (dapat diatur di menu Paket Langganan) ---------------- */
+/**
+ * Peta fitur satu paket. `fitur` disimpan sebagai JSON:
+ *   · array kode fitur  → ["dashboard","transaksi", …]
+ *   · objek {kode:0|1}  → format lama
+ * Bila kosong/rusak → jatuh ke preset (pro = semua fitur, lainnya = preset standard).
+ */
+function packageFeatureMap(pkg, kodeFallback) {
+  const kode = String((pkg && pkg.kode) || kodeFallback || 'basic').toLowerCase();
+  let raw = pkg && pkg.fitur;
+  let obj = null;
+  try { obj = typeof raw === 'string' ? JSON.parse(raw || 'null') : (raw || null); } catch (e) { obj = null; }
+  if (Array.isArray(obj) && obj.length) {
+    const set = new Set(obj.map(x => String(x)));
+    const out = {};
+    for (const f of FEATURES) out[f.key] = set.has(f.key) ? 1 : 0;
+    return out;
+  }
+  if (obj && typeof obj === 'object' && Object.keys(obj).length) {
+    return parseFeatures(obj, kode === 'pro' ? 'pro' : 'standard');
+  }
+  return featureDefaults(kode === 'pro' ? 'pro' : 'standard');
+}
+/** daftar label fitur aktif sebuah paket (untuk kartu di halaman pendaftaran) */
+function packageFeatureLabels(pkg) {
+  const map = packageFeatureMap(pkg);
+  return FEATURES.filter(f => map[f.key]).map(f => f.label);
+}
+/** paket yang boleh didaftarkan mandiri (langsung aktif dengan masa uji coba) */
+function packageSelfTrial(pkg) {
+  return !!(pkg && Number(pkg.self_trial));
+}
+function packageTrialDays(pkg) {
+  const raw = pkg && pkg.trial_hari;
+  if (raw === null || raw === undefined || raw === '') return trialDays();
+  const d = Number(raw);
+  return Number.isFinite(d) && d >= 0 ? d : trialDays();
+}
+function packageRows(opts = {}) {
+  try {
+    return S.prepare('SELECT * FROM saas_packages' + (opts.all ? '' : ' WHERE aktif=1') + ' ORDER BY urutan, id').all();
+  } catch (e) { return []; }
+}
+function packageByKode(kode) {
+  return S.prepare('SELECT * FROM saas_packages WHERE kode=?').get(String(kode || '').trim().toLowerCase()) || null;
+}
+function packageById(id) { return S.prepare('SELECT * FROM saas_packages WHERE id=?').get(Number(id) || 0) || null; }
+function defaultPackage() {
+  const d = S.prepare('SELECT * FROM saas_packages WHERE is_default=1 AND aktif=1 ORDER BY urutan LIMIT 1').get();
+  return d || packageRows()[0] || { kode: 'basic', nama: 'Basic', harga_bulan: 0, harga_tahun: 0 };
+}
+function packageLabels() {
+  const out = {};
+  for (const p of packageRows({ all: true })) out[p.kode] = p.nama;
+  return out;
+}
+function packagePrice(kode, durasi) {
+  const p = packageByKode(kode);
+  if (p) return Number(Number(durasi) >= 365 ? p.harga_tahun : p.harga_bulan) || 0;
+  return priceOf(durasi);
+}
+function packageSave(d) {
+  const nama = String(d.nama || '').trim();
+  if (!nama) throw new Error('Nama paket wajib diisi.');
+  let kode = String(d.kode || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  if (!kode) kode = nama.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'paket';
+  const bulan = Math.max(0, Number(String(d.harga_bulan || '0').replace(/[^\d]/g, '')) || 0);
+  const tahun = Math.max(0, Number(String(d.harga_tahun || '0').replace(/[^\d]/g, '')) || 0);
+  const now = lib.nowStamp();
+  const aktif = d.aktif === undefined ? 1 : (d.aktif ? 1 : 0);
+  const selfTrial = d.self_trial ? 1 : 0;
+  const trialHari = d.trial_hari === undefined || d.trial_hari === '' ? null
+    : Math.max(0, Math.min(365, Number(d.trial_hari) || 0));
+  // peta fitur: array kode fitur (checkbox) → JSON; undefined = pertahankan nilai lama
+  const fiturJson = Array.isArray(d.fitur) ? JSON.stringify(d.fitur) : null;
+  if (d.id && packageById(d.id)) {
+    const cur = packageById(d.id);
+    S.prepare(`UPDATE saas_packages SET kode=?,nama=?,harga_bulan=?,harga_tahun=?,fitur=?,self_trial=?,trial_hari=?,keterangan=?,urutan=?,aktif=?,updated_at=? WHERE id=?`)
+      .run(kode, nama, bulan, tahun, fiturJson === null ? (cur.fitur || '{}') : fiturJson, selfTrial, trialHari,
+        String(d.keterangan || ''), Number(d.urutan) || cur.urutan, aktif, now, cur.id);
+    return packageById(cur.id);
+  }
+  if (packageByKode(kode)) throw new Error('Kode paket "' + kode + '" sudah dipakai.');
+  const info = S.prepare(`INSERT INTO saas_packages
+    (kode,nama,harga_bulan,harga_tahun,fitur,self_trial,trial_hari,is_default,aktif,urutan,keterangan,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)`).run(kode, nama, bulan, tahun,
+    fiturJson === null ? JSON.stringify(featureDefaults('standard')) : fiturJson,
+    selfTrial, trialHari, aktif,
+    Number(d.urutan) || (packageRows({ all: true }).length + 1), String(d.keterangan || ''), now, now);
+  return packageById(Number(info.lastInsertRowid));
+}
+function packageDelete(id) {
+  const p = packageById(id);
+  if (!p) return null;
+  const used = S.prepare('SELECT COUNT(*) c FROM tenants WHERE paket=?').get(p.kode).c;
+  if (used) throw new Error(`Paket "${p.nama}" masih dipakai ${used} sekolah. Pindahkan sekolah ke paket lain lebih dulu.`);
+  if (Number(p.is_default)) throw new Error('Paket default tidak dapat dihapus. Tandai paket lain sebagai default lebih dulu.');
+  S.prepare('DELETE FROM saas_packages WHERE id=?').run(p.id);
+  return p;
+}
+function packageSetDefault(id) {
+  const p = packageById(id);
+  if (!p) throw new Error('Paket tidak ditemukan.');
+  S.prepare('UPDATE saas_packages SET is_default=0').run();
+  S.prepare('UPDATE saas_packages SET is_default=1, aktif=1 WHERE id=?').run(p.id);
+  set('paket_default', p.kode);
+  return packageById(p.id);
+}
+
+/* ---------------- kontak admin untuk paket berbayar ---------------- */
+function waAdminNumber() {
+  return normalizeWa(get('wa_admin_number', '') || '');
+}
+function normalizeWa(raw) {
+  let s = String(raw || '').replace(/[^\d+]/g, '');
+  if (!s) return '';
+  if (s.startsWith('+')) s = s.slice(1);
+  if (s.startsWith('0')) s = '62' + s.slice(1);
+  if (s.startsWith('8')) s = '62' + s;
+  return s;
+}
+/**
+ * Tautan WhatsApp admin untuk paket yang HARUS BAYAR dulu.
+ * Pesan otomatis memuat nama paket & harga. null bila nomor admin belum diatur.
+ */
+function waAdminLink(pkg, extra = {}) {
+  const num = waAdminNumber();
+  if (!num) return null;
+  const nama = String((pkg && pkg.nama) || 'paket langganan');
+  const harga = pkg ? Number(pkg.harga_bulan) || 0 : 0;
+  const lines = [
+    `Halo Admin ${appName()}, saya ingin berlangganan paket *${nama}*.`,
+    harga ? `Harga paket: Rp ${harga.toLocaleString('id-ID')} / bulan` : '',
+    extra.sekolah ? `Sekolah: ${extra.sekolah}` : '',
+    extra.admin ? `Nama admin: ${extra.admin}` : '',
+    'Mohon informasi pembayaran & aktivasi. Terima kasih.'
+  ].filter(Boolean);
+  return 'https://wa.me/' + num + '?text=' + encodeURIComponent(lines.join('\n'));
+}
+
+/* ---------------- anti-spam pendaftaran ---------------- */
+function clientIpOf(req) {
+  const f = String((req.headers && (req.headers['x-forwarded-for'] || req.headers['x-real-ip'])) || '').split(',')[0].trim();
+  const ip = f || String((req.socket && req.socket.remoteAddress) || '').trim();
+  return ip.replace(/^::ffff:/, '') || 'unknown';
+}
+function regLimits() {
+  return {
+    perHour: Math.max(1, Number(get('reg_limit_per_hour', '2')) || 2),
+    blockHours: Math.max(0, Number(get('reg_block_hours', '24')) || 24)
+  };
+}
+function regLog(ip, email, hasil) {
+  try {
+    S.prepare('INSERT INTO reg_attempts (ip,email,hasil,created_at) VALUES (?,?,?,?)').run(String(ip || ''), String(email || ''), String(hasil || ''), lib.nowStamp());
+    // pangkas riwayat > 30 hari
+    S.prepare("DELETE FROM reg_attempts WHERE created_at < ?").run(lib.addDays ? lib.addDays(lib.todayISO(), -30) : lib.todayISO());
+  } catch (e) { }
+}
+/** status rate limit sebuah IP: { blocked, retryAfter, count } */
+function regStatus(ip) {
+  const lim = regLimits();
+  const now = Date.now();
+  const rows = S.prepare("SELECT * FROM reg_attempts WHERE ip=? ORDER BY id DESC LIMIT 50").all(String(ip || ''));
+  // blokir aktif?
+  const blockedRow = rows.find(r => r.hasil === 'blocked');
+  if (blockedRow) {
+    const at = new Date(String(blockedRow.created_at).replace(' ', 'T') + 'Z').getTime();
+    const until = at + lim.blockHours * 3600 * 1000;
+    if (now < until) return { blocked: true, until, retryMin: Math.ceil((until - now) / 60000), count: rows.length };
+  }
+  const hourAgo = new Date(now - 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const count = S.prepare("SELECT COUNT(*) c FROM reg_attempts WHERE ip=? AND created_at>=? AND hasil IN ('sukses','gagal')").get(String(ip || ''), hourAgo).c;
+  return { blocked: false, count, limit: lim.perHour };
+}
+/** catat percobaan; kembalikan { blocked:true } bila melewati batas */
+function regHit(ip, email, hasil) {
+  const lim = regLimits();
+  const st = regStatus(ip);
+  if (st.blocked) return { blocked: true, ...st };
+  regLog(ip, email, hasil);
+  const after = regStatus(ip);
+  if (!after.blocked && after.count > lim.perHour && hasil !== 'blocked') {
+    regLog(ip, email, 'blocked');
+    return { blocked: true, ...regStatus(ip), justBlocked: true };
+  }
+  return { blocked: false, ...after };
+}
+/** verifikasi captcha (reCAPTCHA v3 / Cloudflare Turnstile); null = lolos */
+async function verifyCaptcha(token, ip) {
+  const provider = String(get('captcha_provider', 'off') || 'off');
+  if (provider === 'off') return null;
+  const secret = String(get('captcha_secret', '') || '');
+  if (!secret) return null;   // belum dikonfigurasi → jangan blokir pendaftaran
+  const t = String(token || '').trim();
+  if (!t) return 'Verifikasi keamanan (captcha) gagal. Muat ulang halaman lalu coba lagi.';
+  const url = provider === 'turnstile'
+    ? 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
+    : 'https://www.google.com/recaptcha/api/siteverify';
+  try {
+    const body = new URLSearchParams({ secret, response: t });
+    if (ip) body.set('remoteip', ip);
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    const j = await r.json();
+    if (!j || j.success !== true) return 'Verifikasi keamanan (captcha) gagal. Silakan coba lagi.';
+    // reCAPTCHA v3: skor minimal 0.4
+    if (provider === 'recaptcha' && j.score !== undefined && Number(j.score) < 0.4) {
+      return 'Permintaan terdeteksi otomatis (skor keamanan rendah). Silakan coba lagi.';
+    }
+    return null;
+  } catch (e) {
+    return 'Verifikasi keamanan tidak dapat dihubungi. Coba beberapa saat lagi.';
+  }
+}
+function captchaConfig() {
+  return {
+    provider: String(get('captcha_provider', 'off') || 'off'),
+    siteKey: String(get('captcha_site_key', '') || '')
+  };
+}
 
 function allTenants() {
   return S.prepare('SELECT * FROM tenants ORDER BY id').all();
@@ -264,18 +603,26 @@ function normalizeCode(raw) {
   return String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
 }
 /** kode sekolah unik 4 karakter (SK01, SK02, …) */
+/**
+ * Kode sekolah 4 karakter ACAK & unik (alfanumerik, tanpa huruf/angka ambigu
+ * seperti O/0 dan I/1) — mis. K9B2, 7X4M, 3918. Bukan urutan statis (SK01/SK02).
+ */
 function nextSchoolCode() {
   const used = new Set(allTenants().map(t => String(t.school_code || '').toUpperCase()));
-  for (let i = 1; i <= 99; i++) {
-    const c = 'SK' + String(i).padStart(2, '0');
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const rnd = n => Math.floor(Math.random() * n);
+  for (let i = 0; i < 4000; i++) {
+    let c = '';
+    for (let j = 0; j < 4; j++) c += chars[rnd(chars.length)];
     if (!used.has(c)) return c;
   }
-  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  for (const a of letters) for (const b of letters) {
-    const c = 'S' + a + b;
-    if (!used.has(c)) return c;
+  // cadangan: kombinasi berbasis waktu (tetap 4 karakter)
+  for (let i = 0; i < 500; i++) {
+    const c = (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).toUpperCase()
+      .replace(/[^A-Z0-9]/g, '').slice(0, 4).padEnd(4, 'X');
+    if (c.length === 4 && !used.has(c)) return c;
   }
-  throw new Error('Kode sekolah sudah habis (maksimum 999 sekolah).');
+  throw new Error('Gagal membuat kode sekolah unik. Coba lagi.');
 }
 
 function todayISO() { return lib.todayISO(); }
@@ -313,9 +660,19 @@ function isBlocked(t) {
 }
 
 function logSaas(user, aksi, modul, detail, tenantId) {
+  const t = lib.nowStamp();
   try {
     S.prepare('INSERT INTO saas_audit (user_id,user_nama,aksi,modul,detail,tenant_id,created_at) VALUES (?,?,?,?,?,?,?)')
-      .run(user ? user.id : null, user ? user.nama : 'sistem', aksi, modul, detail || '', tenantId || null, lib.nowStamp());
+      .run(user ? user.id : null, user ? user.nama : 'sistem', aksi, modul, detail || '', tenantId || null, t);
+  } catch (e) { }
+  // masuk juga ke audit log terpusat (menu Audit Logs Super Admin)
+  try {
+    const tn = tenantId ? ((S.prepare('SELECT nama FROM tenants WHERE id=?').get(Number(tenantId)) || {}).nama || '') : '';
+    S.prepare(`INSERT INTO audit_log (tenant_id,tenant_nama,user_id,user_nama,role,ip,aksi,modul,detail,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+      tenantId ? Number(tenantId) : null, tn,
+      user ? user.id : null, user ? user.nama : 'sistem', 'super_admin', '',
+      String(aksi || ''), String(modul || ''), String(detail || ''), t);
   } catch (e) { }
 }
 
@@ -328,7 +685,9 @@ function createTenant(input = {}) {
   if (!nama) throw new Error('Nama sekolah wajib diisi.');
   const email = String(input.admin_email || '').trim();
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Email admin sekolah tidak valid.');
-  const paket = ['standard', 'pro'].includes(String(input.paket)) ? String(input.paket) : 'standard';
+  // paket: pilihan valid = kode pada master paket; default mengikuti paket default Super Admin
+  let paket = String(input.paket || '').trim().toLowerCase();
+  if (!paket || !packageByKode(paket)) paket = defaultPackage().kode;
   let code = normalizeCode(input.school_code);
   if (code) {
     if (code.length !== 4) throw new Error('Kode sekolah harus 4 karakter (huruf/angka).');
@@ -338,7 +697,11 @@ function createTenant(input = {}) {
   }
   const lifetime = Number(input.is_lifetime_free) ? 1 : 0;
   const trial = input.trial === false ? false : !lifetime;
-  const days = Number(input.days || (input.trial === false ? 365 : trialDays()) || 30);
+  // fitur & masa uji coba mengikuti PAKET yang dipilih (diatur di menu Paket Langganan)
+  const pkgRow = packageByKode(paket);
+  const featDefault = packageFeatureMap(pkgRow, paket);
+  const pkgTrial = pkgRow && pkgRow.trial_hari !== null && pkgRow.trial_hari !== undefined ? Number(pkgRow.trial_hari) : null;
+  const days = Number(input.days || (input.trial === false ? 365 : (pkgTrial !== null ? pkgTrial : trialDays())) || 30);
   const expires = input.expires_at ? String(input.expires_at).slice(0, 10)
     : (lifetime ? null : addDays(todayISO(), days));
   const now = lib.nowStamp();
@@ -351,17 +714,24 @@ function createTenant(input = {}) {
       String(input.contact_nama || input.admin_nama || ''), email, String(input.contact_telp || ''),
       String(input.alamat || ''), '', String(input.logo || ''),
       String(input.app_nama || ''), String(input.tema || ''),
-      JSON.stringify(featureDefaults(paket)), lifetime ? 0 : (trial ? 1 : 0),
+      JSON.stringify(featDefault), lifetime ? 0 : (trial ? 1 : 0),
       String(input.catatan || ''), now, now);
   const id = Number(info.lastInsertRowid);
   // berkas database sekolah baru mengikuti folder database utama (DB_PATH),
   // bukan selalu folder data aplikasi — supaya tes dengan DB sementara tidak menulis ke folder live
+  // slug portal default dari nama sekolah (mis. "SDN 1 Jakarta" → sdn-1-jakarta)
+  try {
+    const slugFn = module.exports.slugFromName;
+    const slug = slugFn ? slugFn(nama, id) : String(nama).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+    S.prepare('UPDATE tenants SET portal_slug=? WHERE id=?').run(slug, id);
+  } catch (e) { }
   const file = path.join(path.dirname(dbm.DB_PATH), 'tenants', 'tenant-' + id + '.db');
   S.prepare('UPDATE tenants SET db_file=? WHERE id=?').run(file, id);
   const tenant = tenantById(id);
 
   dbm.createTenantDatabase({
     id, file, school_code: code, nama,
+    jenjang: String(input.jenjang || ''),
     admin_email: email,
     admin_password: String(input.admin_password || 'sekolah123'),
     admin_nama: String(input.admin_nama || 'Administrator Sekolah'),
@@ -394,6 +764,22 @@ function updateTenant(id, patch = {}) {
       typeof f.features === 'string' ? f.features : JSON.stringify(f.features || featureDefaults(f.paket || 'standard')),
       lib.nowStamp(), id);
   logSaas(patch.user, 'EDIT SEKOLAH', 'tenant', `Memperbarui sekolah ${f.nama} (${f.school_code})`, id);
+  return tenantById(id);
+}
+
+/**
+ * Ubah paket langganan sebuah sekolah (upgrade/downgrade).
+ * Fitur mengikuti preset paket (Pro = semua fitur, selain itu preset Standard).
+ */
+function setPackage(id, kode, user) {
+  const t = tenantById(id);
+  if (!t) throw new Error('Sekolah tidak ditemukan.');
+  const p = packageByKode(kode);
+  if (!p) throw new Error('Paket tidak ditemukan.');
+  const feats = packageFeatureMap(p);
+  S.prepare('UPDATE tenants SET paket=?,features=?,updated_at=? WHERE id=?')
+    .run(p.kode, JSON.stringify(feats), lib.nowStamp(), id);
+  logSaas(user, 'UBAH PAKET', 'tenant', `${t.nama}: ${t.paket} → ${p.kode}`, id);
   return tenantById(id);
 }
 
@@ -475,23 +861,30 @@ function invoiceNo(id) {
 }
 
 /** pengajuan perpanjangan dari sisi sekolah (QRIS manual) */
-function submitPayment(tenantId, { durasi, bukti_url, pengirim, catatan }) {
+function submitPayment(tenantId, { durasi, bukti_url, pengirim, catatan, paket }) {
   const t = tenantById(tenantId);
   if (!t) throw new Error('Sekolah tidak ditemukan.');
   if (Number(t.is_lifetime_free)) throw new Error('Sekolah ini berstatus Lifetime — tidak perlu perpanjangan.');
   const d = Number(durasi) === 365 ? 365 : 30;
   if (!bukti_url) throw new Error('Bukti transfer wajib diunggah.');
+  // paket tujuan (upgrade/downgrade) — kosong berarti paket sekolah saat ini
+  let paketTujuan = String(paket || '').trim().toLowerCase();
+  if (paketTujuan && !packageByKode(paketTujuan)) throw new Error('Paket tujuan tidak ditemukan.');
+  if (!paketTujuan) paketTujuan = String(t.paket || '');
   const p = pendingPayment(tenantId);
   if (p) throw new Error('Masih ada pengajuan yang menunggu verifikasi. Tunggu persetujuan Super Admin sebelum mengirim lagi.');
   const now = lib.nowStamp();
+  const nominal = packagePrice(paketTujuan, d);
   const info = S.prepare(`INSERT INTO saas_payments
-    (tenant_id,no_invoice,jenis,durasi,nominal,status,bukti_url,pengirim,catatan,source,periode_mulai,dibuat_at,created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(tenantId, '', 'perpanjangan', d, priceOf(d), 'pending', String(bukti_url),
+    (tenant_id,paket_tujuan,no_invoice,jenis,durasi,nominal,status,bukti_url,pengirim,catatan,source,periode_mulai,dibuat_at,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(tenantId, paketTujuan, '', 'perpanjangan', d, nominal, 'pending', String(bukti_url),
       String(pengirim || ''), String(catatan || ''), 'tenant', t.expires_at || todayISO(), now, now);
   const id = Number(info.lastInsertRowid);
   S.prepare('UPDATE saas_payments SET no_invoice=? WHERE id=?').run(invoiceNo(id), id);
-  logSaas(null, 'PENGAJUAN BAYAR', 'pembayaran', `${t.nama} mengirim bukti transfer ${d} hari (Rp ${priceOf(d).toLocaleString('id-ID')})`, tenantId);
+  const pkg = packageByKode(paketTujuan);
+  logSaas(null, 'PENGAJUAN BAYAR', 'pembayaran',
+    `${t.nama} mengirim bukti transfer ${d} hari · paket ${pkg ? pkg.nama : paketTujuan} (Rp ${nominal.toLocaleString('id-ID')})`, tenantId);
   return id;
 }
 
@@ -502,6 +895,10 @@ function approvePayment(id, user) {
   const t = tenantById(p.tenant_id);
   const base = t.expires_at && String(t.expires_at).slice(0, 10) > todayISO() ? String(t.expires_at).slice(0, 10) : todayISO();
   const end = extendTenant(t.id, p.durasi, user || { nama: 'Super Admin' }, 'verifikasi pembayaran');
+  // bila pengajuan membawa paket tujuan (upgrade/downgrade) → terapkan sekarang
+  if (p.paket_tujuan && packageByKode(p.paket_tujuan) && String(p.paket_tujuan) !== String(t.paket)) {
+    try { setPackage(t.id, p.paket_tujuan, user || { nama: 'Super Admin' }); } catch (e) { }
+  }
   S.prepare(`UPDATE saas_payments SET status='approved', direview_at=?, direview_oleh=?, periode_mulai=?, periode_akhir=?, alasan=''
     WHERE id=?`).run(lib.nowStamp(), (user && user.nama) || 'Super Admin', base, end, id);
   // tagihan "issued" lama untuk sekolah ini dianggap selesai
@@ -620,8 +1017,20 @@ function stats() {
 }
 
 /* ---------------- bootstrap control plane ---------------- */
+
+
 function ensureBootstrap() {
   const admin = ensureAdmin();
+  seedPackages();
+  migratePackageFeatures();
+  // sekolah lama (sebelum fitur slug) → buatkan slug default dari nama sekolah
+  try {
+    for (const t of allTenants()) {
+      if (String(t.portal_slug || '').trim()) continue;
+      const slug = module.exports.slugFromName ? module.exports.slugFromName(t.nama, t.id) : null;
+      if (slug) S.prepare('UPDATE tenants SET portal_slug=? WHERE id=?').run(slug, t.id);
+    }
+  } catch (e) { }
   if (!allTenants().length) {
     let nama = 'Sekolah Pertama';
     try {
@@ -629,12 +1038,14 @@ function ensureBootstrap() {
       if (r && r.v) nama = r.v;
     } catch (e) { }
     const now = lib.nowStamp();
+    let slugDefault = 'sekolah-pertama';
+    try { slugDefault = module.exports.slugify ? module.exports.slugify(nama) : slugDefault; } catch (e) { }
     S.prepare(`INSERT INTO tenants (id,school_code,nama,paket,status,is_lifetime_free,expires_at,registered_at,
-        contact_email,db_file,features,trial,catatan,created_at,updated_at)
-      VALUES (1,'SK01',?,'pro','active',1,NULL,?,?,?,?,0,?,?,?)`)
+        contact_email,db_file,features,trial,catatan,created_at,updated_at,portal_slug)
+      VALUES (1,'SK01',?,'pro','active',1,NULL,?,?,?,?,0,?,?,?,?)`)
       .run(nama, todayISO(), '', dbm.DB_PATH, JSON.stringify(featureDefaults('pro')),
         'Sekolah pertama — data produksi dipindahkan apa adanya (akses gratis seumur hidup).',
-        now, now);
+        now, now, slugDefault);
     logSaas(null, 'MIGRASI TENANT 1', 'tenant', `Sekolah pertama "${nama}" ditetapkan sebagai tenant 1 (kode SK01, lifetime)`, 1);
   }
   return admin;
@@ -646,6 +1057,11 @@ module.exports = {
   FEATURES, FEATURE_MAP, PATH_FEATURES, PAKET, PAY_STATUS, SESSION_DAYS,
   get, set, settings, appName, appLogo, tema, priceOf, defaultPriceMonth, trialDays,
   featureDefaults, tenantFeatures, enabledKeys, blockedFeature, parseFeatures,
+  DEFAULT_PACKAGES, packageRows, packageByKode, packageById, defaultPackage, packageLabels, packagePrice,
+  packageSave, packageDelete, packageSetDefault, seedPackages, setPackage,
+  packageFeatureMap, packageFeatureLabels, packageSelfTrial, packageTrialDays,
+  regLimits, regStatus, regHit, regLog, clientIpOf, verifyCaptcha, captchaConfig,
+  waAdminNumber, waAdminLink, normalizeWa,
   allTenants, tenantById, tenantByCode, nextSchoolCode, normalizeCode, codeExists,
   createTenant, updateTenant, setFeatures, setLifetime, extendTenant, deleteTenant,
   statusOf, isBlocked, todayISO, addDays, daysBetween, logSaas,
@@ -655,3 +1071,10 @@ module.exports = {
   ensureAdmin, findAdmin, adminById, setAdminPassword,
   ensureBootstrap
 };
+
+/* ==================================================================
+   FITUR LANJUTAN control plane (dipasang sebagai properti modul ini)
+   ================================================================== */
+Object.assign(module.exports, require('./saas_extra')({
+  S, lib, dbm, get, set, allTenants, tenantById, logSaas, todayISO, addDays, daysBetween, PAKET, FEATURES
+}));

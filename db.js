@@ -33,9 +33,27 @@ const rootDb = new Database(DB_PATH);
 rootDb.pragma('journal_mode = WAL');
 rootDb.pragma('foreign_keys = ON');
 
+rootDb.__tenantId = 1;
+
 const controlDb = new Database(SAAS_DB_PATH);
 controlDb.pragma('journal_mode = WAL');
 controlDb.pragma('foreign_keys = ON');
+/* audit log lintas sekolah (dipakai panel Audit Logs Super Admin).
+   Dibuat di sini (bukan di saas.js) supaya logAudit() selalu punya tabel tujuan. */
+controlDb.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER, tenant_nama TEXT,
+  user_id INTEGER, user_nama TEXT, role TEXT,
+  ip TEXT, aksi TEXT, modul TEXT, detail TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);`);
+
+/** metadata request (IP & tenant) untuk audit log — diisi server.js per request */
+const metaStore = new AsyncLocalStorage();
+function runWithMeta(meta, fn) { return metaStore.run(meta || {}, fn); }
+function currentMeta() { return metaStore.getStore() || {}; }
 
 const DEMO_DB_PATH = process.env.DEMO_DB_PATH || path.join(DATA_DIR, 'demo.sqlite');
 const dbStore = new AsyncLocalStorage();
@@ -104,6 +122,34 @@ function tableNamesOf(conn) {
  * dengan id sekolah tersebut. Idempoten: tabel yang sudah punya kolom dilewati,
  * baris yang sudah terisi tidak diubah.
  */
+/**
+ * UNIQUE gabungan per sekolah: UNIQUE(tenant_id, kolom).
+ * Isolasi data sudah dijamin berkas database per sekolah; index ini menegaskan
+ * aturan di dalam satu sekolah (NISN, NIP, no. bukti, no. kuitansi).
+ * Hanya dibuat bila kolomnya ada dan data lama tidak duplikat.
+ */
+const TENANT_UNIQUE_IDX = [
+  ['uq_siswa_tenant_nisn', 'siswa', ['tenant_id', 'nisn']],
+  ['uq_pegawai_tenant_nip', 'pegawai', ['tenant_id', 'nip']],
+  ['uq_transaksi_tenant_bukti', 'transaksi', ['tenant_id', 'no_bukti']],
+  ['uq_iuran_tenant_kuitansi', 'iuran_bayar', ['tenant_id', 'no_kwitansi']]
+];
+function ensureTenantUniqueIndexes(conn) {
+  let made = 0;
+  for (const [name, table, cols] of TENANT_UNIQUE_IDX) {
+    try {
+      const t = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+      if (!t) continue;
+      const have = conn.pragma(`table_info("${table}")`).map(c => c.name);
+      if (!cols.every(c => have.includes(c))) continue;
+      const cond = cols.filter(c => c !== 'tenant_id').map(c => `COALESCE(${c},'')<>''`).join(' AND ');
+      conn.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON "${table}"(${cols.join(', ')}) WHERE ${cond}`);
+      made++;
+    } catch (e) { /* data lama duplikat → index dilewati */ }
+  }
+  return made;
+}
+
 function migrateTenantColumns(conn, tenantId) {
   const tid = Number(tenantId) || 1;
   let added = 0, filled = 0;
@@ -119,6 +165,7 @@ function migrateTenantColumns(conn, tenantId) {
       try { filled += conn.prepare(`UPDATE "${t}" SET tenant_id=? WHERE tenant_id IS NULL`).run(tid).changes; } catch (e) { }
     }
   })();
+  try { ensureTenantUniqueIndexes(conn); } catch (e) { }
   return { tables: tables.length, added, filled };
 }
 
@@ -216,7 +263,7 @@ CREATE TABLE IF NOT EXISTS pinjaman_mutasi (
 CREATE TABLE IF NOT EXISTS pegawai (
   id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT NOT NULL, jabatan TEXT DEFAULT '',
   tipe TEXT NOT NULL DEFAULT 'guru', no_rekening TEXT DEFAULT '', pemilik_rekening TEXT DEFAULT '',
-  aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT
+  nip TEXT, aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS payroll (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,6 +285,25 @@ CREATE TABLE IF NOT EXISTS payroll_post (
   posted_at TEXT, posted_by TEXT
 );
 /* status draf leger honor: mode potongan kasbon & catatan (leger tetap draf sampai diposting) */
+/* ---------- Leger Honor DINAMIS: kolom bisa ditambah/diubah sekolah ---------- */
+CREATE TABLE IF NOT EXISTS payroll_kolom (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kode TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  tipe TEXT NOT NULL DEFAULT 'penerimaan',
+  nilai TEXT NOT NULL DEFAULT 'uang',
+  rumus TEXT,
+  urutan INTEGER NOT NULL DEFAULT 0,
+  sistem INTEGER NOT NULL DEFAULT 0,
+  aktif INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS payroll_nilai (
+  payroll_id INTEGER NOT NULL,
+  kolom_kode TEXT NOT NULL,
+  nilai REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (payroll_id, kolom_kode)
+);
 CREATE TABLE IF NOT EXISTS payroll_draft (
   periode TEXT PRIMARY KEY,
   kasbon_auto INTEGER NOT NULL DEFAULT 1,
@@ -322,7 +388,7 @@ CREATE TABLE IF NOT EXISTS program_keahlian (
   ketua TEXT DEFAULT '', aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS kelas (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT NOT NULL, tingkat TEXT DEFAULT '',
+  id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT NOT NULL, nama_kelas TEXT, tingkat TEXT DEFAULT '',
   wali_kelas TEXT DEFAULT '', program_id INTEGER, tahun_ajaran_id INTEGER,
   aktif INTEGER NOT NULL DEFAULT 1, urutan INTEGER DEFAULT 0, created_at TEXT
 );
@@ -347,7 +413,7 @@ CREATE TABLE IF NOT EXISTS iuran_grup (
 );
 CREATE TABLE IF NOT EXISTS iuran_nominal (
   id INTEGER PRIMARY KEY AUTOINCREMENT, grup_id INTEGER NOT NULL, bulan INTEGER,
-  nominal REAL NOT NULL DEFAULT 0, UNIQUE (grup_id, bulan)
+  nominal REAL NOT NULL DEFAULT 0, tingkat TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS iuran_tagihan (
   id INTEGER PRIMARY KEY AUTOINCREMENT, grup_id INTEGER NOT NULL, siswa_id INTEGER NOT NULL,
@@ -409,7 +475,7 @@ CREATE TABLE IF NOT EXISTS piutang_lainnya_bayar (
 CREATE INDEX IF NOT EXISTS idx_pln_bayar ON piutang_lainnya_bayar(piutang_id);
 CREATE INDEX IF NOT EXISTS idx_pln_nama ON piutang_lainnya(nama);
 CREATE INDEX IF NOT EXISTS idx_pln_ta ON piutang_lainnya(tahun_ajaran_id);
-/* ---------- auto-backup Google Drive: riwayat eksekusi ---------- */
+/* ---------- riwayat auto-backup (Telegram) ---------- */
 CREATE TABLE IF NOT EXISTS cloud_backup (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   waktu TEXT, nama_berkas TEXT, ukuran INTEGER, file_id TEXT,
@@ -558,6 +624,103 @@ const KATEGORI_LABEL = {
   mutasi: ['Mutasi Kas & Biaya Administrasi (kelompok Pengeluaran)', 'blue']
 };
 
+/* ==================================================================
+   JENJANG PENDIDIKAN & MASTER TINGKAT KELAS
+   ------------------------------------------------------------------
+   Tingkat disimpan sebagai STRING pada `kelas.tingkat` (mis. "VII", "10",
+   "TK-A") supaya sekolah bebas memakai konvensi angka/romawi. Urutan
+   tampilan & kenaikan tingkat memakai TINGKAT_MASTER di bawah.
+   ================================================================== */
+const JENJANG = {
+  'PAUD/TK': { label: 'PAUD / TK', preset: ['KB', 'TK-A', 'TK-B'] },
+  'SD/MI': { label: 'SD / MI', preset: ['I', 'II', 'III', 'IV', 'V', 'VI'] },
+  'SMP/MTs': { label: 'SMP / MTs', preset: ['VII', 'VIII', 'IX'] },
+  'SMA/MA': { label: 'SMA / MA', preset: ['X', 'XI', 'XII'] },
+  'SMK': { label: 'SMK', preset: ['X', 'XI', 'XII'] },
+  'KUSTOM': { label: 'Kustom (pilih sendiri)', preset: [] }
+};
+/** seluruh opsi tingkat standar: pra-sekolah, I..XII, angka 1..12 */
+const TINGKAT_MASTER = [
+  { kode: 'KB', label: 'Kelompok Bermain' },
+  { kode: 'TK-A', label: 'TK A' },
+  { kode: 'TK-B', label: 'TK B' },
+  { kode: 'I', label: 'Tingkat I' }, { kode: 'II', label: 'Tingkat II' }, { kode: 'III', label: 'Tingkat III' },
+  { kode: 'IV', label: 'Tingkat IV' }, { kode: 'V', label: 'Tingkat V' }, { kode: 'VI', label: 'Tingkat VI' },
+  { kode: 'VII', label: 'Tingkat VII' }, { kode: 'VIII', label: 'Tingkat VIII' }, { kode: 'IX', label: 'Tingkat IX' },
+  { kode: 'X', label: 'Tingkat X' }, { kode: 'XI', label: 'Tingkat XI' }, { kode: 'XII', label: 'Tingkat XII' },
+  { kode: 'PAUD', label: 'PAUD' }
+];
+const TINGKAT_ALIAS = {
+  '1': 'I', '2': 'II', '3': 'III', '4': 'IV', '5': 'V', '6': 'VI', '7': 'VII', '8': 'VIII', '9': 'IX',
+  '10': 'X', '11': 'XI', '12': 'XII', 'TK A': 'TK-A', 'TKA': 'TK-A', 'TK B': 'TK-B', 'TKB': 'TK-B'
+};
+/** urutan angka tingkat: KB/PAUD = 0, TK-A = 1, I..XII = 1..12 */
+function tingkatUrut(t) {
+  const raw = String(t || '').trim().toUpperCase();
+  if (!raw) return 99;
+  const kode = TINGKAT_ALIAS[raw] || raw;
+  const idx = ['KB', 'PAUD', 'TK-A', 'TK-B', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'].indexOf(kode);
+  if (kode === 'KB' || kode === 'PAUD') return 0;
+  if (kode === 'TK-A') return 1;
+  if (kode === 'TK-B') return 2;
+  const roman = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'].indexOf(kode);
+  if (roman >= 0) return 3 + roman;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? 3 + n - 1 : 50 + (idx < 0 ? 0 : idx);
+}
+/** tingkat berikutnya saat naik kelas (XII / TK-B / 12 = lulus → '') */
+function tingkatNaik(t) {
+  const order = ['KB', 'TK-A', 'TK-B', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+  const raw = String(t || '').trim().toUpperCase();
+  // konvensi ANGKA (7, 8, … 12) dipertahankan sebagai angka
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    return (n > 0 && n < 12) ? String(n + 1) : '';
+  }
+  const kode = TINGKAT_ALIAS[raw] || raw;
+  const i = order.indexOf(kode);
+  if (i < 0) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0 && n < 12) return String(n + 1);
+    return '';
+  }
+  return order[i + 1] || '';
+}
+const tingkatLabel = t => {
+  const raw = String(t || '').trim();
+  if (!raw) return '-';
+  const m = TINGKAT_MASTER.find(x => x.kode.toUpperCase() === raw.toUpperCase());
+  return m ? m.label : raw;
+};
+/** preset tingkat berdasarkan jenjang (dipakai saat profil sekolah disimpan) */
+function jenjangPreset(jenjang) {
+  const j = JENJANG[String(jenjang || '').trim()];
+  return j ? j.preset.slice() : [];
+}
+/** daftar tingkat AKTIF sekolah (setting `tingkat_aktif` JSON; kosong = preset jenjang) */
+function tingkatAktif() {
+  let list = [];
+  try { list = JSON.parse(getSetting('tingkat_aktif', '[]') || '[]'); } catch (e) { list = []; }
+  if (!Array.isArray(list) || !list.length) list = jenjangPreset(getSetting('jenjang_pendidikan', ''));
+  if (!list.length) list = ['VII', 'VIII', 'IX'];
+  return list.map(x => String(x).trim()).filter(Boolean)
+    .sort((a, b) => tingkatUrut(a) - tingkatUrut(b));
+}
+function setTingkatAktif(list) {
+  const clean = [...new Set([].concat(list || []).map(x => String(x).trim()).filter(Boolean))]
+    .sort((a, b) => tingkatUrut(a) - tingkatUrut(b));
+  setSetting('tingkat_aktif', JSON.stringify(clean));
+  return clean;
+}
+/** aktifkan preset jenjang: bila tingkat_aktif masih kosong atau dipaksa */
+function applyJenjangPreset(jenjang, force) {
+  const cur = (() => { try { return JSON.parse(getSetting('tingkat_aktif', '[]') || '[]'); } catch (e) { return []; } })();
+  if (!force && Array.isArray(cur) && cur.length) return { changed: false, list: tingkatAktif() };
+  const preset = jenjangPreset(jenjang);
+  if (!preset.length) return { changed: false, list: tingkatAktif() };
+  return { changed: true, list: setTingkatAktif(preset) };
+}
+
 const BKU_UMUM = ['BKU Umum', 'Buku Kas Pembantu Bank', 'Buku Pembantu Pajak', 'Buku Pembantu Tunai', 'Rekapitulasi Barang Habis Pakai', 'Barang Modal'];
 const BKU_KEGIATAN = ['BKU UKK', 'BKU PKL', 'BKU SPMB', 'BKU Bantuan', 'BKU PSTS Ganjil', 'BKU PSTS Genap', 'BKU ASAS', 'BKU ASAT', 'BKU PSAJ', 'Dana Sosial', 'Infak Jumat'];
 /** 5 buku pembantu/rekap — saldo TIDAK diinput manual, hanya menerima rekapitulasi otomatis dari transaksi */
@@ -624,17 +787,44 @@ function bootstrap() {
       // ---- akun demo (sandbox): keterangan & penanda reset ----
       demo_catatan: 'Akun ini memakai database DUMMY terpisah. Semua perubahan tidak memengaruhi data sekolah.',
       demo_seed_ver: '1',
-      // ---- Auto-Backup Google Drive (menu Pengaturan Backup) ----
-      // kredensial Service Account (isi file JSON) & Folder ID tujuan
-      gdrive_credentials: '',
-      gdrive_folder_id: '',
-      gdrive_auto: '1',
-      gdrive_times: '06:00,15:00',
-      gdrive_retensi_hari: '30',
-      gdrive_done: '[]',
-      gdrive_last_slot: ''
+      // ---- Auto-Backup Telegram (menu Pengaturan Auto-Backup) ----
+      // bot token & chat id khusus sekolah ini; berkas .zip dikirim 2x sehari (06:00 & 15:00)
+      tg_token: '',
+      tg_chat: '',
+      tg_aktif: '1',
+      tg_slots: '06:00,15:00',
+      tg_last: '',
+      // ---- domain khusus (custom domain) — nilai kanonik ada di control plane ----
+      custom_domain: '',
+      custom_domain_status: '',
+      // ---- jenjang pendidikan & tingkat kelas aktif (preset otomatis) ----
+      jenjang_pendidikan: 'SMP/MTs',
+      tingkat_aktif: '["VII","VIII","IX"]'
     };
     for (const [k, v] of Object.entries(defaults)) setif.run(k, v);
+
+    // tebak JENJANG dari nama sekolah lama (hanya bila masih nilai bawaan)
+    (function guessJenjang() {
+      try {
+        const jNow = db.prepare("SELECT v FROM settings WHERE k='jenjang_pendidikan'").get();
+        const tNow = db.prepare("SELECT v FROM settings WHERE k='tingkat_aktif'").get();
+        const isDefault = !jNow || jNow.v === 'SMP/MTs';
+        const tDefault = !tNow || String(tNow.v || '').replace(/\s/g, '') === '["VII","VIII","IX"]';
+        if (!isDefault || !tDefault) return;
+        const nama = String((db.prepare("SELECT v FROM settings WHERE k='sekolah_nama'").get() || {}).v || '').toUpperCase();
+        let j = '';
+        if (/\bPAUD\b|\bTK\b|TAMAN KANAK/.test(nama)) j = 'PAUD/TK';
+        else if (/\bSMK\b/.test(nama)) j = 'SMK';
+        else if (/\bSMA\b|\bMA\b|MADRASAH ALIYAH/.test(nama)) j = 'SMA/MA';
+        else if (/\bSMP\b|\bMTS\b/.test(nama)) j = 'SMP/MTs';
+        else if (/\bSD\b|\bMI\b/.test(nama)) j = 'SD/MI';
+        if (!j) return;
+        const preset = jenjangPreset(j);
+        if (!preset.length) return;
+        setSetting('jenjang_pendidikan', j);
+        setSetting('tingkat_aktif', JSON.stringify(preset));
+      } catch (e) { }
+    })();
 
     // migrasi identitas sekolah lama → SMK PGRI Cikoneng (hanya bila masih nilai bawaan)
     if (db.prepare("SELECT v FROM settings WHERE k='sekolah_nama'").get()?.v === 'SMA NEGERI 1 NUSANTARA') {
@@ -773,6 +963,20 @@ function bootstrap() {
     // pegawai: kolom tipe (guru / tu) untuk rekap honor
     const pgCols = db.prepare('PRAGMA table_info(pegawai)').all().map(c => c.name);
     if (!pgCols.includes('tipe')) db.exec("ALTER TABLE pegawai ADD COLUMN tipe TEXT NOT NULL DEFAULT 'guru'");
+    if (!pgCols.includes('nip')) db.exec('ALTER TABLE pegawai ADD COLUMN nip TEXT');
+
+    // kelas.nama_kelas (nama tampilan kelas) — disinkronkan dengan kolom lama `nama`
+    const klsCols = db.prepare('PRAGMA table_info(kelas)').all().map(c => c.name);
+    if (!klsCols.includes('nama_kelas')) {
+      db.exec('ALTER TABLE kelas ADD COLUMN nama_kelas TEXT');
+      db.exec('UPDATE kelas SET nama_kelas=nama WHERE nama_kelas IS NULL');
+    }
+    // iuran_nominal.tingkat: nominal berbeda per tingkat kelas ('' = default semua tingkat)
+    const iunCols = db.prepare('PRAGMA table_info(iuran_nominal)').all().map(c => c.name);
+    if (!iunCols.includes('tingkat')) {
+      db.exec("ALTER TABLE iuran_nominal ADD COLUMN tingkat TEXT NOT NULL DEFAULT ''");
+    }
+    try { db.exec('CREATE INDEX IF NOT EXISTS idx_iuran_nominal_grup ON iuran_nominal(grup_id, tingkat)'); } catch (e) { }
 
     // payroll: tugas tambahan dipecah menjadi 2 komponen berbasis jam (Pembantu Kepsek & Wali Kelas)
     const payCols = db.prepare('PRAGMA table_info(payroll)').all().map(c => c.name);
@@ -971,6 +1175,7 @@ function bootstrap() {
       db.prepare('INSERT INTO users (nama,email,password,role,aktif,jabatan,created_at) VALUES (?,?,?,?,1,?,?)')
         .run('Bendahara Utama', 'admin@sekolah.sch.id', hashPassword('admin123'), 'super_admin', 'Bendahara Utama / Super Admin', nowStamp());
     }
+    seedPayrollColumns();
   })();
 }
 
@@ -1194,8 +1399,28 @@ function portalSlugError(raw, key) {
   return null;
 }
 function logAudit(user, aksi, modul, detail) {
-  db.prepare('INSERT INTO audit (user_id,user_nama,aksi,modul,detail,created_at) VALUES (?,?,?,?,?,?)')
-    .run(user ? user.id : null, user ? user.nama : 'system', aksi, modul, detail, nowStamp());
+  const t = nowStamp();
+  try {
+    db.prepare('INSERT INTO audit (user_id,user_nama,aksi,modul,detail,created_at) VALUES (?,?,?,?,?,?)')
+      .run(user ? user.id : null, user ? user.nama : 'system', aksi, modul, detail, t);
+  } catch (e) { }
+  // ---- audit log terpusat (Semua sekolah) ----
+  try {
+    const conn = dbStore.getStore();
+    if (conn && conn.__demoConn) return;              // sandbox demo tidak dicatat
+    const meta = currentMeta();
+    const tenantId = Number(meta.tenantId || (conn && conn.__tenantId) || 1);
+    let tenantNama = meta.tenantNama || '';
+    if (!tenantNama) {
+      try { tenantNama = (controlDb.prepare('SELECT nama FROM tenants WHERE id=?').get(tenantId) || {}).nama || ''; } catch (e) { }
+    }
+    controlDb.prepare(`INSERT INTO audit_log (tenant_id,tenant_nama,user_id,user_nama,role,ip,aksi,modul,detail,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+      tenantId, String(tenantNama || ''),
+      user ? user.id : null, user ? user.nama : 'sistem', user ? String(user.role || '') : 'sistem',
+      String(meta.ip || ''), String(aksi || ''), String(modul || ''), String(detail || ''), t
+    );
+  } catch (e) { }
 }
 /** tahun ajaran berdasarkan id */
 function tahunById(id) {
@@ -1903,7 +2128,8 @@ function autoGraduateStudents(prevTaId, user) {
     ? db.prepare(`SELECT s.id, s.nama, k.nama kelas_nama, k.tingkat FROM siswa s
         JOIN siswa_penempatan sp ON sp.siswa_id=s.id AND sp.tahun_ajaran_id=?
         JOIN kelas k ON k.id=sp.kelas_id
-        WHERE s.status='aktif' AND UPPER(COALESCE(k.tingkat,'')) IN ('XII','12') ORDER BY k.nama, s.nama`).all(prevTaId)
+        WHERE s.status='aktif' ORDER BY k.nama, s.nama`).all(prevTaId)
+        .filter(r => String(r.tingkat || '').trim() && tingkatNaik(r.tingkat) === '')
     : [];
   if (!rows.length) return { n: 0, siswa: [], sisa: 0 };
   let sisa = 0;
@@ -2110,6 +2336,250 @@ function honorWaliJam() {
   return v > 0 ? v : 50000;
 }
 /** hitung seluruh komponen honor satu baris leger */
+/* ==================================================================
+   LEGER HONOR DINAMIS — kolom penerimaan/potongan yang bisa diatur sekolah
+   ------------------------------------------------------------------
+   · payroll_kolom : definisi kolom (label, tipe penerimaan/potongan/info,
+                     satuan uang/jam, rumus opsional, urutan, aktif)
+   · payroll_nilai : nilai isian kolom NON-bawaan per baris leger
+   Kolom bawaan memakai kolom lama pada tabel `payroll` supaya fitur kasbon,
+   posting BKU, dan slip gaji tetap bekerja. Rumus dihitung aman (tanpa eval).
+   ================================================================== */
+const PAYROLL_DEFAULT_COLS = [
+  { kode: 'jam_efektif', label: 'Jam Efektif', tipe: 'info', nilai: 'jam', urutan: 10, sistem: 1 },
+  { kode: 'jam_telat', label: 'Jam Telat', tipe: 'info', nilai: 'jam', urutan: 20, sistem: 1 },
+  { kode: 'honor_jam', label: 'Honor / Jam', tipe: 'info', nilai: 'uang', urutan: 30, sistem: 1 },
+  { kode: 'honor_mengajar', label: 'Honor Mengajar', tipe: 'penerimaan', nilai: 'uang', rumus: 'jam_efektif * honor_jam', urutan: 40, sistem: 1 },
+  { kode: 'tunjangan_jabatan', label: 'Tunj. Jabatan', tipe: 'penerimaan', nilai: 'uang', urutan: 50 },
+  { kode: 'tunjangan_masa_kerja', label: 'Tunj. Masa Kerja', tipe: 'penerimaan', nilai: 'uang', urutan: 60 },
+  { kode: 'lembur', label: 'Lembur', tipe: 'penerimaan', nilai: 'uang', urutan: 70 },
+  { kode: 'tambahan_penghasilan', label: 'Tamb. Penghasilan', tipe: 'penerimaan', nilai: 'uang', urutan: 80 },
+  { kode: 'tunjangan_khusus', label: 'Tunj. Khusus', tipe: 'penerimaan', nilai: 'uang', urutan: 90 },
+  { kode: 'jam_pembantu_kepsek', label: 'Pembantu Kepsek (jam)', tipe: 'info', nilai: 'jam', urutan: 100 },
+  { kode: 'pembantu_kepsek', label: 'Honor Pembantu Kepsek', tipe: 'penerimaan', nilai: 'uang', rumus: 'jam_pembantu_kepsek * honor_pembantu', urutan: 110, sistem: 1 },
+  { kode: 'jam_wali_kelas', label: 'Wali Kelas (jam)', tipe: 'info', nilai: 'jam', urutan: 120 },
+  { kode: 'wali_kelas', label: 'Honor Wali Kelas', tipe: 'penerimaan', nilai: 'uang', rumus: 'jam_wali_kelas * honor_wali', urutan: 130, sistem: 1 },
+  { kode: 'pot_telat', label: 'Pot. Telat 75%', tipe: 'potongan', nilai: 'uang', rumus: 'jam_telat * 0.75 * honor_jam', urutan: 140, sistem: 1 },
+  { kode: 'pot_dana_sosial', label: 'Dana Sosial', tipe: 'potongan', nilai: 'uang', urutan: 150 },
+  { kode: 'pot_bpjs_kes', label: 'BPJS Kesehatan', tipe: 'potongan', nilai: 'uang', urutan: 160 },
+  { kode: 'pot_bpjs_tk', label: 'BPJS Tenaga Kerja', tipe: 'potongan', nilai: 'uang', urutan: 170 },
+  { kode: 'jam_sertifikasi', label: 'Sertifikasi (jam)', tipe: 'info', nilai: 'jam', urutan: 180 },
+  { kode: 'pot_sertifikasi', label: 'Penyesuaian Sertifikasi', tipe: 'potongan', nilai: 'uang', rumus: 'jam_sertifikasi * sertifikasi_rate', urutan: 190, sistem: 1 },
+  { kode: 'pot_kasbon', label: 'Kasbon', tipe: 'potongan', nilai: 'uang', urutan: 200 }
+];
+/** kolom lama pada tabel `payroll` yang menjadi tempat penyimpanan nilai */
+const PAYROLL_LEGACY = new Set(['jam_efektif', 'jam_telat', 'honor_jam', 'tunjangan_jabatan', 'tunjangan_masa_kerja',
+  'lembur', 'tambahan_penghasilan', 'tunjangan_khusus', 'jam_pembantu_kepsek', 'jam_wali_kelas',
+  'jam_sertifikasi', 'pot_dana_sosial', 'pot_bpjs_kes', 'pot_bpjs_tk', 'pot_kasbon']);
+
+function seedPayrollColumns() {
+  const n = db.prepare('SELECT COUNT(*) c FROM payroll_kolom').get().c;
+  if (n) return;
+  const ins = db.prepare(`INSERT OR IGNORE INTO payroll_kolom (kode,label,tipe,nilai,rumus,urutan,sistem,aktif,created_at)
+    VALUES (?,?,?,?,?,?,?,1,?)`);
+  for (const c of PAYROLL_DEFAULT_COLS) ins.run(c.kode, c.label, c.tipe, c.nilai, c.rumus || '', c.urutan, c.sistem || 0, nowStamp());
+}
+
+function payrollKolomList(opts = {}) {
+  const sql = 'SELECT * FROM payroll_kolom' + (opts.all ? '' : ' WHERE aktif=1') + ' ORDER BY urutan, id';
+  return db.prepare(sql).all();
+}
+function payrollKolomById(id) { return id ? db.prepare('SELECT * FROM payroll_kolom WHERE id=?').get(Number(id)) || null : null; }
+function payrollKolomByKode(kode) { return db.prepare('SELECT * FROM payroll_kolom WHERE kode=?').get(String(kode || '')) || null; }
+function kodeSlug(text) {
+  return String(text || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'kolom';
+}
+/**
+ * Simpan/perbarui satu kolom leger.
+ * · id kosong → kolom baru (kode dibuat dari label, wajib unik)
+ * · id ada    → ubah label/tipe/satuan/rumus/urutan (kode & sistem dipertahankan)
+ */
+function payrollKolomSave(data) {
+  const label = String(data.label || '').trim();
+  if (!label) throw new Error('Nama kolom wajib diisi.');
+  const tipe = ['penerimaan', 'potongan', 'info'].includes(String(data.tipe)) ? String(data.tipe) : 'penerimaan';
+  const nilai = String(data.nilai) === 'jam' ? 'jam' : 'uang';
+  const rumus = String(data.rumus || '').trim();
+  if (rumus) {
+    try { payrollFormulaTest(rumus); } catch (e) { throw new Error('Rumus tidak valid: ' + e.message); }
+  }
+  const urut = Number(data.urutan);
+  if (data.id && payrollKolomById(data.id)) {
+    const cur = payrollKolomById(data.id);
+    if (cur.sistem && tipe !== cur.tipe) throw new Error('Tipe kolom bawaan tidak dapat diubah.');
+    db.prepare('UPDATE payroll_kolom SET label=?,tipe=?,nilai=?,rumus=?,urutan=?,aktif=? WHERE id=?')
+      .run(label, cur.sistem ? cur.tipe : tipe, cur.sistem ? cur.nilai : nilai, rumus,
+        Number.isFinite(urut) ? urut : cur.urutan, data.aktif === undefined ? cur.aktif : (data.aktif ? 1 : 0), cur.id);
+    return payrollKolomById(cur.id);
+  }
+  let kode = kodeSlug(data.kode || label);
+  if (payrollKolomByKode(kode) || PAYROLL_LEGACY.has(kode)) kode = kode + '_' + Date.now().toString(36).slice(-4);
+  const info = db.prepare(`INSERT INTO payroll_kolom (kode,label,tipe,nilai,rumus,urutan,sistem,aktif,created_at)
+    VALUES (?,?,?,?,?,?,0,?,?)`).run(kode, label, tipe, nilai, rumus, Number.isFinite(urut) ? urut : 1000, data.aktif === false ? 0 : 1, nowStamp());
+  return payrollKolomById(Number(info.lastInsertRowid));
+}
+function payrollKolomDelete(id) {
+  const row = payrollKolomById(id);
+  if (!row) return null;
+  if (row.sistem) throw new Error('Kolom bawaan tidak dapat dihapus — ubah nama atau nonaktifkan saja.');
+  // histori lama tidak dihapus: nilai tetap tersimpan di payroll_nilai (hanya kolomnya yang hilang dari tampilan)
+  db.prepare('DELETE FROM payroll_kolom WHERE id=?').run(row.id);
+  return row;
+}
+function payrollKolomReorder(ids) {
+  const upd = db.prepare('UPDATE payroll_kolom SET urutan=? WHERE id=?');
+  ids.forEach((id, i) => upd.run((i + 1) * 10, Number(id)));
+  return ids.length;
+}
+
+/* ---------------- evaluator rumus (aman, tanpa eval) ---------------- */
+function payrollFormulaTest(expr) {
+  return payrollEval(expr, {});
+}
+function payrollEval(expr, vars) {
+  const src = String(expr || '').replace(/\s+/g, '');
+  let i = 0;
+  const peek = () => src[i];
+  function number() {
+    const m = /^\d+(\.\d+)?/.exec(src.slice(i));
+    if (!m) throw new Error('angka diharapkan pada posisi ' + (i + 1));
+    i += m[0].length;
+    return Number(m[0]);
+  }
+  function factor() {
+    if (peek() === '(') {
+      i++;
+      const v = additive();
+      if (peek() !== ')') throw new Error('kurung tutup hilang');
+      i++;
+      return v;
+    }
+    if (peek() === '-') { i++; return -factor(); }
+    if (peek() === '+') { i++; return factor(); }
+    if (/[0-9.]/.test(peek() || '')) return number();
+    const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+    if (!m) throw new Error('tanda tidak dikenal pada posisi ' + (i + 1));
+    i += m[0].length;
+    const name = m[0];
+    if (peek() === '(') {
+      i++;
+      const args = [];
+      if (peek() !== ')') {
+        for (;;) {
+          args.push(additive());
+          if (peek() === ',') { i++; continue; }
+          break;
+        }
+      }
+      if (peek() !== ')') throw new Error('kurung tutup hilang pada fungsi ' + name);
+      i++;
+      if (name === 'round') return Math.round(args[0] || 0);
+      if (name === 'min') return Math.min(...args);
+      if (name === 'max') return Math.max(...args);
+      if (name === 'abs') return Math.abs(args[0] || 0);
+      throw new Error('fungsi ' + name + ' tidak dikenal');
+    }
+    const v = vars[name];
+    if (v === undefined) throw new Error('variabel "' + name + '" tidak dikenal');
+    return Number(v) || 0;
+  }
+  function multiplicative() {
+    let v = factor();
+    while (peek() === '*' || peek() === '/') {
+      const op = src[i++];
+      const r = factor();
+      v = op === '*' ? v * r : (r === 0 ? 0 : v / r);
+    }
+    return v;
+  }
+  function additive() {
+    let v = multiplicative();
+    while (peek() === '+' || peek() === '-') {
+      const op = src[i++];
+      const r = multiplicative();
+      v = op === '+' ? v + r : v - r;
+    }
+    return v;
+  }
+  if (!src) return 0;
+  const out = additive();
+  if (i !== src.length) throw new Error('sisa ekspresi tidak terbaca pada posisi ' + (i + 1));
+  return out;
+}
+
+/** nilai isian dinamis satu periode: { payroll_id: { kode: nilai } } */
+function payrollNilaiMap(periode) {
+  const map = new Map();
+  let rows = [];
+  try {
+    rows = db.prepare(`SELECT n.payroll_id, n.kolom_kode, n.nilai FROM payroll_nilai n
+      JOIN payroll p ON p.id=n.payroll_id WHERE p.periode=?`).all(periode);
+  } catch (e) { rows = []; }
+  for (const r of rows) {
+    if (!map.has(r.payroll_id)) map.set(r.payroll_id, {});
+    map.get(r.payroll_id)[r.kolom_kode] = Number(r.nilai) || 0;
+  }
+  return map;
+}
+/** hitung nilai semua kolom untuk satu baris leger */
+function payrollCompute(row, values, cols) {
+  const vars = {
+    honor_pembantu: honorPembantuJam(),
+    honor_wali: honorWaliJam(),
+    sertifikasi_rate: sertifikasiJam()
+  };
+  // 1) nilai awal: kolom bawaan dari tabel payroll, sisanya dari payroll_nilai
+  for (const c of cols) {
+    const legacy = PAYROLL_LEGACY.has(c.kode) ? row[c.kode] : undefined;
+    vars[c.kode] = Number(legacy !== undefined ? legacy : (values[c.kode] || 0)) || 0;
+  }
+  // 2) kolom berumus dihitung (beberapa lintasan agar rumus bisa saling rujuk)
+  const computed = {};
+  for (let pass = 0; pass < 3; pass++) {
+    for (const c of cols) {
+      if (!c.rumus) continue;
+      try { vars[c.kode] = Math.round(payrollEval(c.rumus, vars) * 100) / 100; } catch (e) { vars[c.kode] = 0; }
+      computed[c.kode] = true;
+    }
+  }
+  // 3) total
+  let penerimaan = 0, potongan = 0;
+  for (const c of cols) {
+    const v = Number(vars[c.kode]) || 0;
+    if (c.tipe === 'penerimaan') penerimaan += v;
+    else if (c.tipe === 'potongan') potongan += v;
+  }
+  penerimaan = Math.round(penerimaan); potongan = Math.round(potongan);
+  return { vals: vars, computed, penerimaan, potongan, diterima: penerimaan - potongan };
+}
+/** data leger dinamis satu periode + total per kolom (mengikuti urutan kolom) */
+function payrollDynamic(periode) {
+  const cols = payrollKolomList();
+  const rows = db.prepare(`SELECT * FROM payroll WHERE periode=?
+      ORDER BY CASE WHEN COALESCE(urutan,0)=0 THEN id ELSE urutan END, id`).all(periode);
+  const nilai = payrollNilaiMap(periode);
+  const perKode = {};
+  for (const c of cols) perKode[c.kode] = 0;
+  let penerimaan = 0, potongan = 0;
+  const out = rows.map(r => {
+    const d = payrollCompute(r, nilai.get(r.id) || {}, cols);
+    for (const c of cols) perKode[c.kode] += Number(d.vals[c.kode]) || 0;
+    penerimaan += d.penerimaan; potongan += d.potongan;
+    return Object.assign({}, r, {
+      din: d.vals, dinComputed: d.computed,
+      penerimaanDinamis: d.penerimaan, potonganDinamis: d.potongan, diterimaDinamis: d.diterima
+    });
+  });
+  return {
+    cols, rows: out, totals: { perKode, penerimaan, potongan, diterima: penerimaan - potongan, n: out.length }
+  };
+}
+/** simpan nilai dinamis satu baris (dipanggil handler /payroll/simpan) */
+function payrollNilaiSet(payrollId, kode, value) {
+  db.prepare(`INSERT INTO payroll_nilai (payroll_id,kolom_kode,nilai) VALUES (?,?,?)
+    ON CONFLICT(payroll_id,kolom_kode) DO UPDATE SET nilai=excluded.nilai`).run(payrollId, String(kode), Number(value) || 0);
+}
+
 function payrollCalc(r) {
   const n = v => Number(v) || 0;
   const rate = honorPembantuJam();
@@ -2139,9 +2609,22 @@ function payrollCalc(r) {
 }
 function payrollRows(periode) {
   // urutan = urutan input/import (DILARANG di-sort abjad); baris tanpa urutan memakai id
-  return db.prepare(`SELECT * FROM payroll WHERE periode=?
+  const rows = db.prepare(`SELECT * FROM payroll WHERE periode=?
       ORDER BY CASE WHEN COALESCE(urutan,0)=0 THEN id ELSE urutan END, id`).all(periode)
     .map(r => ({ ...r, ...payrollCalc(r) }));
+  // kolom dinamis: total penerimaan/potongan/diterima mengikuti definisi kolom sekolah
+  let dyn = null;
+  try { dyn = payrollDynamic(periode); } catch (e) { dyn = null; }
+  if (!dyn) return rows;
+  const map = new Map(dyn.rows.map(r => [r.id, r]));
+  return rows.map(r => {
+    const d = map.get(r.id);
+    if (!d) return r;
+    return {
+      ...r, din: d.din, dinComputed: d.dinComputed,
+      penerimaan: d.penerimaanDinamis, potongan: d.potonganDinamis, diterima: d.diterimaDinamis
+    };
+  });
 }
 function payrollTotals(periode) {
   const rows = payrollRows(periode);
@@ -2308,9 +2791,12 @@ function arusKasData(taId, from, to, bkuIds) {
 function cloneKelasTa(prevTaId, newTaId, opts = {}) {
   const prev = tahunById(prevTaId), next = tahunById(newTaId);
   if (!prev || !next || Number(prev.id) === Number(next.id)) return { kelas: 0, siswa: 0 };
+  // tingkat akhir (XII / 12 / TK-B) → '' (siswa lulus, kelas tidak disalin)
   const nextTingkat = t => {
-    const s = String(t || '').trim().toUpperCase();
-    return ({ X: 'XI', '10': '11', XI: 'XII', '11': '12' })[s] || '';
+    const raw = String(t || '').trim();
+    if (!raw) return '';
+    if (tingkatUrut(raw) >= tingkatUrut('XII') && tingkatNaik(raw) === '') return '';
+    return tingkatNaik(raw);
   };
   const rename = (nama, dari, ke) => {
     const n = String(nama || '');
@@ -2332,9 +2818,9 @@ function cloneKelasTa(prevTaId, newTaId, opts = {}) {
       if (!namaBaru) continue;
       const dup = db.prepare('SELECT * FROM kelas WHERE tahun_ajaran_id=? AND lower(nama)=lower(?)').get(next.id, namaBaru);
       if (dup) { mapKelas.set(Number(k.id), Number(dup.id)); continue; }
-      const info = db.prepare(`INSERT INTO kelas (nama,tingkat,wali_kelas,program_id,tahun_ajaran_id,aktif,urutan,created_at)
-        VALUES (?,?,?,?,?,?,?,?)`)
-        .run(namaBaru, tingkatBaru, k.wali_kelas || '', k.program_id || null, next.id, k.aktif ? 1 : 0, k.urutan || 0, nowStamp());
+      const info = db.prepare(`INSERT INTO kelas (nama,nama_kelas,tingkat,wali_kelas,program_id,tahun_ajaran_id,aktif,urutan,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(namaBaru, namaBaru, tingkatBaru, k.wali_kelas || '', k.program_id || null, next.id, k.aktif ? 1 : 0, k.urutan || 0, nowStamp());
       mapKelas.set(Number(k.id), Number(info.lastInsertRowid));
       nKelas++;
     }
@@ -2462,6 +2948,12 @@ function createTenantDatabase(opts = {}) {
     if (opts.app_nama) setSetting('app_nama', String(opts.app_nama));
     if (opts.tema) setSetting('tema_warna', String(opts.tema));
     if (opts.logo) setSetting('sekolah_logo', String(opts.logo));
+    // jenjang pendidikan → preset tingkat kelas otomatis untuk sekolah baru
+    if (opts.jenjang) {
+      setSetting('jenjang_pendidikan', String(opts.jenjang));
+      const preset = jenjangPreset(opts.jenjang);
+      if (preset.length) setTingkatAktif(preset);
+    }
     // akun admin sekolah (menggantikan akun bawaan admin@sekolah.sch.id / admin123)
     if (opts.admin_email) {
       const pw = hashPassword(opts.admin_password || 'admin123');
@@ -2769,11 +3261,14 @@ function kelasList(taId, opts = {}) {
   const args = [];
   if (taId) { sql += ' AND k.tahun_ajaran_id=?'; args.push(taId); }
   if (opts.aktifOnly) sql += ' AND k.aktif=1';
-  sql += ' ORDER BY k.tingkat, k.urutan, k.nama';
-  return db.prepare(sql).all(...args);
+  sql += ' ORDER BY k.urutan, COALESCE(k.nama_kelas, k.nama), k.id';
+  return db.prepare(sql).all(...args)
+    .map(k => ({ ...k, nama_kelas: k.nama_kelas || k.nama, tingkat_urut: tingkatUrut(k.tingkat) }))
+    .sort((a, b) => (a.tingkat_urut - b.tingkat_urut) || (a.urutan - b.urutan) || String(a.nama).localeCompare(String(b.nama)));
 }
 function kelasById(id) {
-  return db.prepare(`SELECT k.*, p.nama program_nama FROM kelas k LEFT JOIN program_keahlian p ON p.id=k.program_id WHERE k.id=?`).get(id);
+  const k = db.prepare(`SELECT k.*, p.nama program_nama FROM kelas k LEFT JOIN program_keahlian p ON p.id=k.program_id WHERE k.id=?`).get(id);
+  return k ? { ...k, nama_kelas: k.nama_kelas || k.nama } : k;
 }
 
 /* ---------- penempatan kelas per tahun pelajaran ---------- */
@@ -2869,16 +3364,45 @@ function iuranGrupList(taId, opts = {}) {
   sql += ' ORDER BY nama';
   const rows = db.prepare(sql).all(...args);
   return rows.map(g => {
-    const nom = db.prepare('SELECT * FROM iuran_nominal WHERE grup_id=? ORDER BY COALESCE(bulan,0)').all(g.id);
+    const nom = db.prepare("SELECT * FROM iuran_nominal WHERE grup_id=? AND COALESCE(tingkat,'')='' ORDER BY COALESCE(bulan,0)").all(g.id);
     const total = nom.reduce((s, r) => s + Number(r.nominal || 0), 0);
     const siswa = db.prepare('SELECT COUNT(*) c FROM iuran_tagihan WHERE grup_id=?').get(g.id).c;
-    return { ...g, nominal: nom, total_nominal: total, jumlah_siswa: siswa };
+    const tingkatRows = db.prepare("SELECT tingkat, COUNT(*) n, COALESCE(SUM(nominal),0) total FROM iuran_nominal WHERE grup_id=? AND COALESCE(tingkat,'')<>'' GROUP BY tingkat").all(g.id);
+    return { ...g, nominal: nom, total_nominal: total, jumlah_siswa: siswa, tingkat_nominal: tingkatRows };
   });
 }
-function iuranNominalMap(grupId) {
-  const map = {};
-  for (const r of db.prepare('SELECT * FROM iuran_nominal WHERE grup_id=?').all(grupId)) map[r.bulan || 0] = Number(r.nominal || 0);
-  return map;
+/**
+ * Nominal iuran per bulan untuk satu grup.
+ * `tingkat` kosong → nominal DEFAULT (semua tingkat). Bila suatu bulan tidak
+ * punya nominal khusus tingkat tersebut, nilai default yang dipakai.
+ */
+function iuranNominalMap(grupId, tingkat) {
+  const t = String(tingkat || '').trim();
+  const def = {}, khusus = {};
+  for (const r of db.prepare('SELECT * FROM iuran_nominal WHERE grup_id=?').all(grupId)) {
+    const key = r.bulan || 0;
+    if (String(r.tingkat || '').trim() === '') def[key] = Number(r.nominal || 0);
+    else if (String(r.tingkat).trim().toUpperCase() === t.toUpperCase()) khusus[key] = Number(r.nominal || 0);
+  }
+  const out = {};
+  for (const k of Object.keys(def)) out[k] = def[k];
+  for (const k of Object.keys(khusus)) out[k] = khusus[k];
+  return out;
+}
+/** total tagihan satu grup untuk satu tingkat (fallback ke default) */
+function iuranTotalFor(grupId, tingkat) {
+  const map = iuranNominalMap(grupId, tingkat);
+  return Object.values(map).reduce((s, v) => s + Number(v || 0), 0);
+}
+/** tingkat kelas efektif seorang siswa pada tahun pelajaran tertentu */
+function siswaTingkat(siswaId, taId) {
+  try {
+    const r = db.prepare(`SELECT k.tingkat FROM siswa_penempatan sp JOIN kelas k ON k.id=sp.kelas_id
+      WHERE sp.siswa_id=? AND sp.tahun_ajaran_id=? LIMIT 1`).get(Number(siswaId), Number(taId));
+    if (r && r.tingkat) return String(r.tingkat);
+    const s = db.prepare('SELECT s.kelas_id, k.tingkat FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id WHERE s.id=?').get(Number(siswaId));
+    return (s && s.tingkat) ? String(s.tingkat) : '';
+  } catch (e) { return ''; }
 }
 /**
  * Rincian tagihan BULANAN satu tagihan/grup + alokasi pembayaran.
@@ -2950,6 +3474,10 @@ function iuranTagihanRows(opts = {}) {
     if (gs.length) { sql += ` AND t.grup_id IN (${gs.map(() => '?').join(',')})`; args.push(...gs); }
   }
   if (opts.siswaId) { sql += ' AND t.siswa_id=?'; args.push(opts.siswaId); }
+  if (opts.tingkat) {
+    const ts = [].concat(opts.tingkat).map(x => String(x || '').trim()).filter(Boolean);
+    if (ts.length) { sql += ` AND COALESCE(k.tingkat,'') IN (${ts.map(() => '?').join(',')})`; args.push(...ts); }
+  }
   if (opts.kelasId) {
     const ks = [].concat(opts.kelasId).map(Number).filter(Boolean);
     if (ks.length) { sql += ` AND k.id IN (${ks.map(() => '?').join(',')})`; args.push(...ks); }
@@ -2994,7 +3522,7 @@ function iuranRekapSiswa(rows) {
   return Array.from(map.values()).map(s => ({ ...s, sisa: Math.max(0, s.sisa) }));
 }
 function iuranBayarRows(opts = {}) {
-  let sql = `SELECT b.*, s.nama siswa_nama, s.nisn, k.nama kelas_nama, g.nama grup_nama, g.jenis grup_jenis,
+  let sql = `SELECT b.*, s.nama siswa_nama, s.nisn, k.nama kelas_nama, k.tingkat, g.nama grup_nama, g.jenis grup_jenis,
       g.id grup_id, g.tahun_ajaran_id grup_ta_id,
       t.nominal tagihan_nominal, bk.nama bku_nama, u.nama pencatat, t2.no_bukti
     FROM iuran_bayar b LEFT JOIN iuran_tagihan t ON t.id=b.tagihan_id
@@ -3523,7 +4051,7 @@ function beasiswaSyncAll() {
 
 module.exports = {
   db, mainDb, DB_PATH, SAAS_DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
-  rootDb, controlDb, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, createTenantDatabase, DATA_DIR, tableNamesOf,
+  rootDb, controlDb, runWithMeta, currentMeta, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, ensureTenantUniqueIndexes, createTenantDatabase, DATA_DIR, tableNamesOf,
   getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, autoBku,
   bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
@@ -3534,11 +4062,16 @@ module.exports = {
   piutangLainnyaRows, piutangLainnyaSisa, piutangLainnyaTotal, piutangLainnyaAset, piutangLainnyaAsetRows,
   piutangLainnyaRekap, piutangLainnyaSyncStatus,
   beasiswaTotal, beasiswaList,
-  pegawaiList, payrollCalc, payrollRows, payrollTotals, payrollPost, arusKasData, sertifikasiJam,
+  pegawaiList, payrollCalc, payrollRows, payrollTotals, payrollPost,
+  PAYROLL_DEFAULT_COLS, PAYROLL_LEGACY, seedPayrollColumns, payrollKolomList, payrollKolomById, payrollKolomByKode,
+  payrollKolomSave, payrollKolomDelete, payrollKolomReorder, payrollEval, payrollCompute, payrollNilaiMap,
+  payrollDynamic, payrollNilaiSet, arusKasData, sertifikasiJam,
   piutangSyncStatus, payrollUnlockByTrx, payrollDraft, payrollDraftSet, payrollPeriods, payrollCopyPrev,
   stripCarryText, isCarryText, piutangBuckets, piutangBucketsAll, piutangRingkasan, cleanupOrphanPiutang, honorPembantuJam, honorWaliJam,
   totalSaldoDana, MODULES, ACTIONS, ROLE_LABEL, ROLES, DEMO_BLOCKED, defaultAllowed, BKU_AUTO_NAMES, isAutoBkuNama,
   tahunById, taOf, taRange, taOptions, taIdOfDate, rolloverTa,
+  JENJANG, TINGKAT_MASTER, TINGKAT_ALIAS, tingkatUrut, tingkatNaik, tingkatLabel, jenjangPreset,
+  tingkatAktif, setTingkatAktif, applyJenjangPreset,
   NAMA_BULAN, periodeOf, periodeLabel, periodeStart, periodeEnd, prevPeriode, currentPeriode,
   periodeRow, periodeStatus, periodeLockError, periodeEditable, openingFor, monthTotals,
   periodePosisi, unclosedPeriods, closePeriode, periodeListOf,
@@ -3546,11 +4079,11 @@ module.exports = {
   taAutoFor, taAutoId, TRASH_DAYS, TRASH_LABEL, trashAdd, trashList, trashPurge, trashRestore,
   SISWA_STATUS, programList, kelasList, kelasById, siswaList,
   penempatanList, penempatanSet, siswaSyncCurrent, taSortKey,
-  BULAN_TA, iuranGrupList, iuranNominalMap, iuranMonthDetail, iuranPaysMap, iuranTagihanRows, iuranRekapSiswa, iuranBayarRows,
+  BULAN_TA, iuranGrupList, iuranNominalMap, iuranTotalFor, siswaTingkat, iuranMonthDetail, iuranPaysMap, iuranTagihanRows, iuranRekapSiswa, iuranBayarRows,
   ekskulRows, ekskulPending, dedupeAset,
   // ronde 9: analitik iuran, rekap sertifikasi, OTP portal, pesan orang tua, beasiswa siswa
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
-  portalSlugs, portalSlugIsCustom, portalRewrite, portalSlugError, normalizePortalSlug,
+  portalSlugs, portalSlugIsCustom, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,

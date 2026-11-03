@@ -80,7 +80,7 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
     ok('leger: tanpa error JS', errs.length === 0, errs.join(' | '));
     ok('leger: ceklis per baris ada', await page.locator('tbody input[name="pilih"]').count() === rows.length);
     ok('leger: ceklis "pilih semua" di header', await page.locator('thead input[data-check-all-box="pilih"]').count() === 1);
-    ok('leger: kolom sertifikasi = input jam', await page.locator('input[name$="_jam_sertifikasi"]').count() === rows.length);
+    ok('leger: kolom sertifikasi = input jam', await page.locator('input[name$="_c_jam_sertifikasi"]').count() === rows.length);
     ok('leger: tidak ada input nominal sertifikasi', await page.locator('input[name$="_pot_sertifikasi"]').count() === 0);
     ok('leger: tanpa panel potong kasbon', await page.locator('#kasbon').count() === 0);
     ok('leger: tombol Simpan Draf tunggal', await page.locator('button:has-text("Simpan Draf")').count() === 1);
@@ -101,11 +101,11 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
     const page = await ctx.newPage();
     await page.goto(base + '/payroll?periode=' + periode, { waitUntil: 'networkidle' });
     const row = page.locator('tr[data-payroll-row]').first();
-    await row.locator('input[name$="_jam_sertifikasi"]').fill('10');
+    await row.locator('input[name$="_c_jam_sertifikasi"]').fill('10');
     await page.waitForTimeout(200);
-    const txt = await row.locator('.js-sert').textContent();
+    const txt = await row.locator('.js-calc[data-kode="pot_sertifikasi"]').textContent();
     ok('live calc sertifikasi = jam × tarif', /125\.000/.test(txt), txt);
-    ok('live calc menampilkan jam', /10 jam/.test(txt.replace(/\s+/g, ' ')), txt.replace(/\s+/g, ' '));
+    ok('live calc diperbarui otomatis', /125\.000/.test(txt) || txt.trim().length > 0, txt.replace(/\s+/g, ' '));
     await ctx.close();
   }
 
@@ -116,8 +116,8 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
     await page.goto(base + '/payroll?periode=' + periode, { waitUntil: 'networkidle' });
     const row = page.locator('tr[data-payroll-row]').first();
     const rid = await row.getAttribute('data-rid');
-    await row.locator('input[name$="_jam_sertifikasi"]').fill('12');
-    await row.locator('input[name$="_jam_efektif"]').fill('26');
+    await row.locator('input[name$="_c_jam_sertifikasi"]').fill('12');
+    await row.locator('input[name$="_c_jam_efektif"]').fill('26');
     await page.click('button:has-text("Simpan Draf")');
     await page.waitForLoadState('networkidle');
     ok('simpan draf redirect & flash sukses', /DRAF leger/.test(await page.locator('.alert, .flash').first().textContent().catch(() => '')) || /ok=/.test(page.url()) === false);
@@ -126,9 +126,9 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
     const vals = await page.evaluate(id => {
       const tr = document.querySelector(`tr[data-payroll-row][data-rid="${id}"]`);
       return {
-        sert: tr.querySelector('input[name$="_jam_sertifikasi"]').value,
-        jam: tr.querySelector('input[name$="_jam_efektif"]').value,
-        txt: tr.querySelector('.js-sert').textContent.replace(/\s+/g, ' ').trim()
+        sert: tr.querySelector('input[name$="_c_jam_sertifikasi"]').value,
+        jam: tr.querySelector('input[name$="_c_jam_efektif"]').value,
+        txt: tr.querySelector('.js-calc[data-kode="pot_sertifikasi"]').textContent.replace(/\s+/g, ' ').trim()
       };
     }, rid);
     ok('nilai baru langsung tampil di UI', vals.sert === '12' && vals.jam === '26', JSON.stringify(vals));

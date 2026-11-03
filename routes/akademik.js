@@ -151,12 +151,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const taList = dbm.allTahun();
     const taSel = taId || c.taId;
 
+    // pilihan tingkat mengikuti PENGATURAN KELAS & TINGKAT sekolah (bukan daftar tetap X/XI/XII)
+    const tingkatOptsFor = row => {
+      const list = dbm.tingkatAktif().slice();
+      const cur = row && row.tingkat ? String(row.tingkat) : '';
+      if (cur && !list.includes(cur)) list.push(cur);
+      return list.map(t => `<option value="${esc(t)}" ${cur === t ? 'selected' : ''}>${esc(dbm.tingkatLabel(t))} (${esc(t)})</option>`).join('');
+    };
+
     const form = (k, fid) => `<form method="post" action="${c.base}/kelas/save" id="${fid}">
       <input type="hidden" name="id" value="${k ? k.id : ''}">
       <div class="row2">
-        <div class="field"><label>Nama Kelas</label><input name="nama" value="${esc(k ? k.nama : '')}" required placeholder="X AKL 1"></div>
+        <div class="field"><label>Nama Kelas</label><input name="nama" value="${esc(k ? (k.nama_kelas || k.nama) : '')}" required placeholder="X AKL 1 / 7 Al-Farabi"></div>
         <div class="field"><label>Tingkat Kelas</label>
-          <select name="tingkat">${['X', 'XI', 'XII'].map(t => `<option value="${t}" ${k && k.tingkat === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+          <select name="tingkat">${tingkatOptsFor(k)}</select>
+          <div class="hint">Ubah daftar tingkat di <a href="${c.base}/kelas/tingkat">Pengaturan Kelas &amp; Tingkat</a>.</div></div>
       </div>
       <div class="row2">
         <div class="field"><label>Wali Kelas</label><input name="wali_kelas" value="${esc(k ? k.wali_kelas : '')}" placeholder="Nama wali kelas"></div>
@@ -187,7 +196,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <th>Nama Kelas</th><th>Tingkat</th><th>Program Keahlian</th><th>Wali Kelas</th><th class="num">Siswa Aktif</th><th>Status</th><th class="right">Aksi</th>
       </tr></thead><tbody>
       ${rows.map(k => `<tr>
-        <td class="t-strong">${esc(k.nama)}</td><td>${esc(k.tingkat || '-')}</td>
+        <td class="t-strong">${esc(k.nama_kelas || k.nama)}</td><td>${esc(dbm.tingkatLabel(k.tingkat))}</td>
         <td>${esc(k.program_nama || '-')}</td><td>${esc(k.wali_kelas || '-')}</td>
         <td class="num">${k.jumlah_siswa}</td>
         <td>${k.aktif ? ui.badge('Aktif', 'green') : ui.badge('Tidak Aktif', 'gray')}</td>
@@ -217,10 +226,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!String(nama || '').trim()) return res.redirect(req.BASE + '/kelas?err=' + encodeURIComponent('Nama kelas wajib diisi.'));
     const taId = Number(tahun_ajaran_id || dbm.taAutoId());
     const aktif = req.body.aktif ? 1 : 0;
-    if (isEdit) db.prepare('UPDATE kelas SET nama=?,tingkat=?,wali_kelas=?,program_id=?,tahun_ajaran_id=?,aktif=? WHERE id=?')
-      .run(nama.trim(), tingkat || '', wali_kelas || '', program_id || null, taId, aktif, id);
-    else db.prepare('INSERT INTO kelas (nama,tingkat,wali_kelas,program_id,tahun_ajaran_id,aktif,urutan,created_at) VALUES (?,?,?,?,?,?,?,?)')
-      .run(nama.trim(), tingkat || '', wali_kelas || '', program_id || null, taId, aktif,
+    if (isEdit) db.prepare('UPDATE kelas SET nama=?,nama_kelas=?,tingkat=?,wali_kelas=?,program_id=?,tahun_ajaran_id=?,aktif=? WHERE id=?')
+      .run(nama.trim(), nama.trim(), tingkat || '', wali_kelas || '', program_id || null, taId, aktif, id);
+    else db.prepare('INSERT INTO kelas (nama,nama_kelas,tingkat,wali_kelas,program_id,tahun_ajaran_id,aktif,urutan,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(nama.trim(), nama.trim(), tingkat || '', wali_kelas || '', program_id || null, taId, aktif,
         db.prepare('SELECT COALESCE(MAX(urutan),0)+1 n FROM kelas').get().n, nowStamp());
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'kelas', `${isEdit ? 'Edit' : 'Tambah'} kelas ${nama}`);
     res.redirect(req.BASE + '/kelas?ok=' + encodeURIComponent('Data kelas disimpan.'));
