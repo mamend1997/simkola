@@ -3,16 +3,16 @@ const X = require('../xlsx-read');
 const fs = require('fs');
 const path = require('path');
 const envCfg = require('../env');
+const bd = require('../backupdata');
+const gdrive = require('../gdrive');
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMatrix, uploadMedia }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, nowStamp } = lib;
-  const TABLES = ['settings', 'users', 'permissions', 'tahun_ajaran', 'bku', 'bku_periode', 'coa', 'anggaran',
-    'transaksi', 'piutang', 'piutang_bayar', 'spp', 'aset', 'pinjaman_mutasi', 'rekon_saldo', 'koreksi',
-    'bku_import', 'audit', 'pegawai', 'payroll', 'payroll_post', 'payroll_draft', 'beasiswa', 'piutang_lain', 'piutang_lain_bayar',
-    'trash', 'program_keahlian', 'kelas', 'siswa', 'siswa_mutasi', 'siswa_penempatan', 'iuran_grup', 'iuran_nominal', 'iuran_tagihan',
-    'iuran_bayar', 'ekskul_honor', 'mutasi_kas', 'piutang_kategori', 'piutang_lainnya', 'piutang_lainnya_bayar',
-    'catatan_pegawai', 'portal_pesan', 'otp_code'];
+  // daftar tabel & pembentuk ZIP backup dipakai bersama dengan integrasi Google Drive
+  const TABLES = bd.TABLES;
+  const csvOf = rows => bd.csvOf(rows);
+  const dumpAll = () => bd.dumpAll(db);
 
   /* ------------------------------------------------------------------
      EXPORT DATABASE (.sql) — dump SQL portabel, bisa diimpor ke
@@ -113,23 +113,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     return files;
   }
 
-  function dumpAll() {
-    const dump = { app: 'simkeu-sekolah', version: 2, created_at: nowStamp(), tables: {} };
-    for (const t of TABLES) {
-      try { dump.tables[t] = db.prepare(`SELECT * FROM ${t}`).all(); } catch (e) { dump.tables[t] = []; }
-    }
-    return dump;
-  }
-  function csvOf(rows) {
-    if (!rows.length) return '';
-    const cols = Object.keys(rows[0]);
-    const cell = v => {
-      if (v === null || v === undefined) return '';
-      const s = String(v);
-      return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
-    return [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\r\n');
-  }
   function modalCollector() {
     const list = [];
     const put = (id, opts) => { list.push(ui.modal(id, opts)); return ''; };
@@ -503,8 +486,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     const backups = db.prepare("SELECT * FROM audit WHERE aksi IN ('BACKUP','RESTORE') ORDER BY id DESC LIMIT 6").all();
     const content = `<div class="split">
       <div class="card">
-        <div class="card-head"><div><h3>Backup Menyeluruh — Database &amp; Source Code</h3><div class="sub">Satu berkas ZIP berisi seluruh basis data website + rekap CSV</div></div></div>
+        <div class="card-head"><div><h3>Backup Menyeluruh — Database &amp; Source Code</h3><div class="sub">Satu berkas ZIP berisi seluruh basis data website + rekap CSV</div></div>
+          <div class="toolbar">
+            <a class="btn btn-sm btn-primary" href="${c.base}/pengaturan-backup">${ui.icon('cloud')}Pengaturan Backup (Google Drive)</a>
+          </div></div>
         <div class="alert info">${ui.icon('info')}<div>Berkas ZIP memuat <b>seluruh basis data</b>: akun &amp; hak akses, BKU umum/kegiatan, transaksi, aset &amp; pinjaman, payroll, piutang, SPP &amp; beasiswa, nota (tautan), serta log aktivitas. Nama berkas otomatis memakai tanggal ekspor.</div></div>
+        <div class="alert ${gdrive.isConfigured(dbm) ? 'ok' : 'warn'}">${ui.icon(gdrive.isConfigured(dbm) ? 'check' : 'alert')}<div><b>Auto-Backup Cloud:</b>
+          ${gdrive.isConfigured(dbm)
+        ? `terhubung ke Google Drive, jadwal <b>${esc(gdrive.scheduleTimes(dbm).join(' & '))}</b> setiap hari${dbm.getSetting('gdrive_auto', '1') === '1' ? '' : ' (jadwal otomatis sedang dinonaktifkan)'}.`
+        : 'belum dikonfigurasi. Isi kredensial Service Account &amp; Folder ID pada menu Pengaturan Backup.'}</div></div>
         <div class="table-wrap mb-2"><table><thead><tr><th>Tabel</th><th class="num">Jumlah baris</th></tr></thead><tbody>
           ${counts.map(x => `<tr><td class="mono">${esc(x.t)}</td><td class="num">${x.n}</td></tr>`).join('')}
         </tbody></table></div>

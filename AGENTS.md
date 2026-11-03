@@ -512,3 +512,35 @@ node dev-tests/ui-round19.js  # 17 cek Playwright: urutan baris kwitansi, TTD "C
 ### Gotcha ronde 19
 - **`ui.icon()` tidak punya width/height** → jangan menaruhnya di kontainer tanpa aturan ukuran (`.help`, `.hint`, `p`, `span` polos); SVG akan memenuhi lebar kontainer. Sudah dijaga lewat CSS `.help svg, .hint svg{width:13px}` — bila menambah kontainer teks baru, tambahkan kelas `.help`/`.hint` atau atur ukuran svg-nya.
 - Teks tempat cetak **hanya** dari `settings.print_tempat` (jangan pakai `sekolah_nama` sebagai tempat lagi).
+
+---
+
+## Ronde 20 — Manajemen Sistem: Auto-Backup Google Drive (ZIP, retensi 30 hari, jadwal 2× sehari)
+
+### Berkas & modul baru
+- `backupdata.js` — sumber tunggal isi ZIP backup: `TABLES` (termasuk `cloud_backup`), `dumpAll(db)`, `csvOf`, `buildDatabaseZip(db)` (database.json + data/*.csv + README.txt), `backupFileName(date)` → `Backup_SIMKEU_03Nov2026_0600.zip`, `BACKUP_NAME_RE`. Dipakai bersama `/backup/download-zip` (routes/sistem.js) → isi ZIP manual & cloud identik.
+- `gdrive.js` — klien Google Drive REST tanpa dependency: `parseCredentials/credSummary`, `accessToken` (JWT RS256 → OAuth2, cache), `folderInfo`, `listBackups`, `uploadBackup` (multipart ≤4,5 MB; **resumable** >4,5 MB), `deleteFile`, `cleanupOld`, `testConnection`, `cfgFromDb`, `isConfigured`, `scheduleTimes`, `nextRun`, `checkSchedule`, `startScheduler`, `runBackup`, `history`, `lastRun`.
+- `routes/backup_cloud.js` — `GET /pengaturan-backup` + `POST /pengaturan-backup/simpan|jalan|uji|bersihkan`.
+- Tabel `cloud_backup` (waktu, nama_berkas, ukuran, file_id, status, pesan, pemicu, user_nama, dihapus, durasi_ms) + index `idx_cloud_backup_waktu`; ikut `TABLES` backup/restore.
+- Settings baru: `gdrive_credentials` (JSON service account), `gdrive_folder_id`, `gdrive_auto` (default `1`), `gdrive_times` (default `06:00,15:00`), `gdrive_retensi_hari` (default `30`), `gdrive_done` (JSON slot yang sudah dijalankan), `gdrive_last_slot`. `RESERVED_SLUGS` ditambah `pengaturan-backup`.
+
+### Aturan
+- Halaman & semua POST hanya untuk administrator: `guard(req,res,'backup','create')` (default hanya `super_admin`; kepala sekolah/staff tidak punya `backup.create`). Menu sidebar "Pengaturan Backup" memakai `action:'create'` → tersembunyi untuk role lain.
+- Kredensial **tidak pernah dirender ulang** ke HTML (textarea kosong + info email tersimpan); isi kunci privat tidak ikut ke halaman.
+- Dua kolom input = sumber autentikasi & destinasi: `gdrive_credentials` → JWT, `gdrive_folder_id` → `parents` saat upload. Folder ID boleh ditempel sebagai URL Drive (ID diekstrak otomatis).
+- Validasi dilakukan **sebelum** menulis setting apa pun (JSON rusak / jam tidak valid → tidak ada penyimpanan separuh).
+- Nama berkas versioning: `Backup_SIMKEU_<DD><Mon><YYYY>_<HHMM>.zip` (bulan Inggris 3 huruf, mis. `03Nov2026`).
+- Retensi: setiap unggahan sukses memanggil `cleanupOld()` → hanya berkas yang **cocok pola `Backup_SIMKEU_*.zip`** dan `createdTime` lebih tua dari `gdrive_retensi_hari` (30) yang dihapus. Berkas lain di folder tidak pernah disentuh.
+- Penjadwalan: `startScheduler(dbm)` di `server.js` (interval internal 30 detik + cek 15 detik setelah start, `unref`). Slot yang sudah dijalankan dicatat di `gdrive_done` → restart tidak menghasilkan backup ganda; toleransi 45 menit mengejar jadwal yang terlewat.
+- **Tidak ada** pemanggilan backup dari route simpan transaksi/payroll/iuran (dijaga test).
+- `runBackup` memakai penjaga `running` (satu proses backup pada satu waktu) & selalu menulis baris `cloud_backup` (sukses/gagal) + audit `BACKUP CLOUD`.
+- Galat Drive diterjemahkan: `storageQuotaExceeded` → instruksi Shared Drive (akun layanan tidak punya kuota My Drive), 403/404 → cek share folder & Folder ID.
+
+### Test
+```bash
+node dev-tests/cloud.js     # 77 cek: nama berkas dinamis, parsing kredensial, JWT/token cache, multipart & resumable,
+                            # retensi 30 hari (hanya berkas backup), runBackup + log, scheduler sekali per slot,
+                            # RBAC 403 untuk staff, kredensial tidak bocor ke HTML
+node dev-tests/ui-cloud.js  # 20 cek Playwright: 4 kartu status, form kredensial/Folder ID, simpan via UI,
+                            # tombol manual nonaktif saat belum dikonfigurasi, mobile 390px, tanpa error JS
+```

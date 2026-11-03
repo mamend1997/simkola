@@ -333,6 +333,7 @@ require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, fla
 require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
 require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/backup_cloud')({ get, post, dbm, lib, ui, page, ctx, guard, flashUrl });
 
 /* ---------------- server ---------------- */
 const server = http.createServer(async (req, res) => {
@@ -417,3 +418,7 @@ server.listen(PORT, () => {
 /* kotak sampah: buang data kedaluwarsa (>30 hari) saat start & berkala */
 try { dbm.trashPurge(); } catch (e) { console.error('[trash]', e.message); }
 setInterval(() => { try { dbm.trashPurge(); } catch (e) { } }, 6 * 60 * 60 * 1000).unref();
+
+/* auto-backup Google Drive: penjadwalan internal 2× sehari (06:00 & 15:00).
+   Tidak pernah dipicu oleh aksi simpan transaksi harian. */
+try { require('./gdrive').startScheduler(dbm); } catch (e) { console.error('[gdrive]', e.message); }

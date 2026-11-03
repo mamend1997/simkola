@@ -36,6 +36,7 @@ const ICONS = {
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 8 5-5 5 5"/><path d="M12 3v12"/>',
+  cloud: '<path d="M17.5 19H7a4 4 0 0 1-.7-7.94A6 6 0 0 1 17.9 9.4 4.8 4.8 0 0 1 17.5 19Z"/><path d="m12 12 0 6"/><path d="m9.5 14.5 2.5-2.5 2.5 2.5"/>',
   printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
@@ -144,7 +145,8 @@ const NAV = [
       { href: '/audit', key: 'audit', label: 'Audit Log', icon: 'shield' },
       { href: '/audit-orphan', key: 'sekolah', activeKey: 'audit_orphan', label: 'Audit Data Tersembunyi', icon: 'search' },
       { href: '/reset-tahun', key: 'sekolah', activeKey: 'reset_tahun', label: 'Reset Data Tahun Ajaran', icon: 'refresh' },
-      { href: '/backup', key: 'backup', label: 'Backup & Restore', icon: 'database' }
+      { href: '/backup', key: 'backup', label: 'Backup & Restore', icon: 'database' },
+      { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Backup', icon: 'cloud' }
     ]
   }
 ];

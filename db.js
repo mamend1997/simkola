@@ -301,6 +301,15 @@ CREATE TABLE IF NOT EXISTS piutang_lainnya_bayar (
 CREATE INDEX IF NOT EXISTS idx_pln_bayar ON piutang_lainnya_bayar(piutang_id);
 CREATE INDEX IF NOT EXISTS idx_pln_nama ON piutang_lainnya(nama);
 CREATE INDEX IF NOT EXISTS idx_pln_ta ON piutang_lainnya(tahun_ajaran_id);
+/* ---------- auto-backup Google Drive: riwayat eksekusi ---------- */
+CREATE TABLE IF NOT EXISTS cloud_backup (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  waktu TEXT, nama_berkas TEXT, ukuran INTEGER, file_id TEXT,
+  status TEXT NOT NULL DEFAULT 'gagal', pesan TEXT,
+  pemicu TEXT NOT NULL DEFAULT 'manual', user_nama TEXT,
+  dihapus INTEGER NOT NULL DEFAULT 0, durasi_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_backup_waktu ON cloud_backup(waktu);
 `;
 
 const DEFAULT_PERMS = {
@@ -462,7 +471,16 @@ function bootstrap() {
       kw_trx_mb_mm: '6',
       kw_trx_ml_mm: '8',
       kw_trx_mr_mm: '8',
-      app_nama: 'SIMKEU Sekolah'
+      app_nama: 'SIMKEU Sekolah',
+      // ---- Auto-Backup Google Drive (menu Pengaturan Backup) ----
+      // kredensial Service Account (isi file JSON) & Folder ID tujuan
+      gdrive_credentials: '',
+      gdrive_folder_id: '',
+      gdrive_auto: '1',
+      gdrive_times: '06:00,15:00',
+      gdrive_retensi_hari: '30',
+      gdrive_done: '[]',
+      gdrive_last_slot: ''
     };
     for (const [k, v] of Object.entries(defaults)) setif.run(k, v);
 
@@ -832,7 +850,8 @@ const RESERVED_SLUGS = new Set(['login', 'logout', 'assets', 'favicon.ico', 'fav
   'coa', 'bku', 'import', 'audit', 'trash', 'approval', 'rekon', 'piutang', 'piutang-lain', 'piutang-lainnya',
   'beasiswa', 'ekskul', 'tahun-ajaran', 'anggaran', 'saldo-awal', 'mutasi-kas', 'mutasi-kelas', 'kelas',
   'program-keahlian', 'tutup-bulanan', 'desain-cetak', 'reset-tahun', 'audit-orphan', 'tampilan-menu',
-  'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip']);
+  'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip',
+  'pengaturan-backup']);
 function normalizePortalSlug(raw, fallback) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   if (s.length < 3 || s.length > 40) return fallback;
