@@ -226,7 +226,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   r = await req('GET', '/piutang');
   ok('piutang punya kolom cari', /name="q"/.test(r.text));
   r = await req('GET', '/beasiswa');
-  ok('beasiswa punya pencarian nama + filter kelas', /Pencarian Nama Siswa/.test(r.text) && /Filter Kelas/.test(r.text));
+  ok('beasiswa punya pencarian nama + filter kelas', /Cari Nama \/ NISN/.test(r.text) && /Filter Kelas/.test(r.text));
 
   /* ================= 13. portal pegawai: piutang lainnya ================= */
   db.prepare("INSERT INTO pegawai (nama,jabatan,tipe,aktif,whatsapp,tanggal_lahir) VALUES (?,?,?,1,?,?)")

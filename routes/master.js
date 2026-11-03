@@ -30,9 +30,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         <form method="post" action="${c.base}/tarif-honor">
           <div class="alert info">${ui.icon('info')}<div>Semua komponen di bawah dihitung <b>otomatis</b> dari jumlah jam yang diisi pada leger
             (kolom jam), lalu dikalikan tarif per jam di halaman ini. Perubahan tarif langsung dipakai pada perhitungan berikutnya.</div></div>
-          <div class="row3">
+          <div class="row2">
+            ${row('Tarif Standar Tugas Tambahan (Rp / Jam)', 'honor_tugas_jam', s.honor_tugas_jam || 50000,
+              'Tarif cadangan bila nominal Pembantu Kepsek / Wali Kelas dikosongkan.')}
             ${row('Sertifikasi (Rp / Jam)', 'sertifikasi_per_jam', s.sertifikasi_per_jam || 12500,
               `Total Sertifikasi = <b>Jumlah Jam Sertifikasi × ${rupiah(sert)}</b>`)}
+          </div>
+          <div class="row2">
             ${row('Pembantu Kepsek (Rp / Jam)', 'honor_pembantu_jam', s.honor_pembantu_jam || 50000,
               `Total Pembantu Kepsek = <b>Jumlah Jam × ${rupiah(pemb)}</b>`)}
             ${row('Wali Kelas (Rp / Jam)', 'honor_wali_jam', s.honor_wali_jam || 50000,
@@ -43,7 +47,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
           ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan</button></div>`}
         </form>
         <hr class="sep">
-        <div class="small muted">Halaman ini sejajar dengan pengaturan tarif pada <a href="${c.base}/sekolah">Identitas Sekolah</a>.
+        <div class="small muted">Seluruh tarif per jam (tugas tambahan, sertifikasi, pembantu kepsek &amp; wali kelas) hanya diatur di halaman ini
+          — tidak ada lagi kolom ganda pada Identitas Sekolah.
           Contoh: 84 jam sertifikasi × ${rupiah(sert)} = <b>${rupiah(84 * sert)}</b>.</div>
       </div>
       <div class="card">
@@ -76,11 +81,114 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     set('sertifikasi_per_jam', 12500);
     set('honor_pembantu_jam', 50000);
     set('honor_wali_jam', 50000);
-    // sinkronkan tarif tugas tambahan lama (dipakai fallback & cetakan lama)
-    dbm.setSetting('honor_tugas_jam', dbm.honorPembantuJam());
+    set('honor_tugas_jam', 50000);
     dbm.logAudit(req.user, 'EDIT', 'sekolah',
       `Nominal tunjangan & honor: sertifikasi ${rupiah(dbm.sertifikasiJam())}/jam, pembantu kepsek ${rupiah(dbm.honorPembantuJam())}/jam, wali kelas ${rupiah(dbm.honorWaliJam())}/jam`);
     res.redirect(req.BASE + '/tarif-honor?ok=' + encodeURIComponent('Pengaturan nominal tunjangan & honor disimpan.'));
+  });
+
+  /* ================= TEMA & BRANDING APLIKASI ================= */
+  const PALET_TEMA = [
+    ['#F97316', 'Oranye (bawaan)'], ['#4F46E5', 'Indigo'], ['#0EA5E9', 'Biru Langit'],
+    ['#10B981', 'Hijau Emerald'], ['#EF4444', 'Merah'], ['#8B5CF6', 'Violet'],
+    ['#D946EF', 'Magenta'], ['#0F766E', 'Teal'], ['#B45309', 'Cokelat Emas']
+  ];
+  get('/tema', (req, res) => {
+    guard(req, res, 'sekolah', 'view');
+    const c = ctx(req);
+    const ro = !c.can('sekolah', 'edit');
+    const tema = dbm.temaWarnaGlobal();
+    const appNama = dbm.appNamaGlobal();
+    const appLogo = dbm.appLogoGlobal();
+    const content = `<div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>Tema Warna Aplikasi</h3><div class="sub">Warna dasar tampilan (tombol, menu aktif, grafik &amp; aksen)</div></div>
+          ${ro ? ui.badge('Hanya Lihat', 'gray') : ui.badge('Berlaku seketika', 'green')}</div>
+        <form method="post" action="${c.base}/tema">
+          <div class="field"><label>Warna Dasar</label>
+            <div class="flex" style="gap:12px;flex-wrap:wrap">
+              <input type="color" name="tema_warna" value="${esc(tema)}" ${ro ? 'disabled' : ''} data-tema-pick style="width:64px;height:44px;padding:3px;border-radius:10px">
+              <input type="text" name="tema_hex" value="${esc(tema)}" maxlength="7" ${ro ? 'readonly' : ''} data-tema-hex style="width:140px;font-family:ui-monospace,monospace">
+              <span class="small muted">Pilih warna bebas atau pakai salah satu palet di bawah.</span>
+            </div></div>
+          <div class="field"><label>Palet Cepat</label>
+            <div class="toolbar" style="gap:8px;flex-wrap:wrap">
+              ${PALET_TEMA.map(([hex, nm]) => `<button type="button" class="btn btn-sm" data-tema-set="${hex}" title="${esc(nm)}" ${ro ? 'disabled' : ''}>
+                <span style="display:inline-block;width:14px;height:14px;border-radius:4px;background:${hex};margin-right:6px;vertical-align:-2px"></span>${esc(nm)}</button>`).join('')}
+            </div></div>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Nama Aplikasi</h3><div class="sub">Tampil pada bilah samping, judul tab browser &amp; halaman login</div></div></div>
+          <div class="field"><label>Nama Aplikasi</label>
+            <input name="app_nama" value="${esc(appNama)}" maxlength="60" ${ro ? 'readonly' : ''} placeholder="SIMKEU Sekolah">
+            <div class="hint">Nama sekolah pada kop surat tetap diatur pada menu <a href="${c.base}/sekolah">Identitas Sekolah</a>.</div></div>
+          <div class="preview-theme">
+            <div class="pt-card">
+              <div class="pt-title">Pratinjau Warna</div>
+              <div class="pt-row"><span class="btn btn-primary btn-sm">Tombol Utama</span><span class="btn btn-sm">Tombol</span>
+                <span class="badge orange">Lencana</span></div>
+              <div class="pt-bar"><i></i></div>
+            </div>
+          </div>
+          ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Tema &amp; Nama</button></div>`}
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h3>Logo Aplikasi</h3><div class="sub">Menggantikan ikon bawaan pada bilah samping &amp; halaman login</div></div></div>
+        <div class="center" style="padding:14px 0 18px">
+          ${appLogo ? `<img src="${esc(appLogo)}" alt="Logo aplikasi" style="max-width:150px;max-height:150px;object-fit:contain;background:#fff;border-radius:16px;padding:8px;border:1px solid var(--line)">`
+        : `<div class="brand-mark" style="margin:0 auto;width:64px;height:64px;border-radius:18px">${ui.icon('wallet')}</div>
+              <p class="help mt-2">Belum ada logo aplikasi khusus — ikon bawaan dipakai.</p>`}
+        </div>
+        ${ro ? '' : `<form method="post" action="${c.base}/tema/logo">
+          <input type="hidden" name="logo_b64" id="app_logo_b64">
+          <div class="field"><label>Pilih berkas logo</label>
+            <input type="file" accept="image/png,image/jpeg,image/svg+xml" data-b64="app_logo_b64" data-max="5">
+            <div class="hint" id="app_logo_b64-info">Rekomendasi <b>512 × 512 px</b> (PNG transparan) agar tajam di semua ukuran. Maks 5 MB.</div></div>
+          <button class="btn btn-primary btn-block">${ui.icon('upload')}Unggah Logo Aplikasi</button>
+        </form>
+        ${appLogo ? `<form method="post" action="${c.base}/tema/logo" data-confirm="Hapus logo aplikasi dan kembalikan ikon bawaan?"><input type="hidden" name="hapus" value="1">
+          <button class="btn btn-danger btn-block mt-1">${ui.icon('trash')}Hapus Logo Aplikasi</button></form>` : ''}`}
+        <hr class="sep">
+        <div class="small muted">Logo <b>sekolah</b> (untuk kop surat &amp; favicon) diatur terpisah pada menu Identitas Sekolah.
+          Menu dapat digeser &amp; diganti judulnya di <a href="${c.base}/tampilan-menu">Pengaturan Tampilan Menu</a>.</div>
+      </div>
+    </div>`;
+    page(req, res, { title: 'Tema & Branding Aplikasi', sub: 'Warna dasar, nama & logo aplikasi', active: 'tema', content });
+  });
+
+  post('/tema', (req, res) => {
+    if (!guard(req, res, 'sekolah', 'edit')) return;
+    const raw = String(req.body.tema_warna || req.body.tema_hex || '').trim();
+    const hex = /^#?[0-9a-fA-F]{6}$/.test(raw) ? ('#' + raw.replace('#', '')).toUpperCase() : null;
+    if (!hex) return res.redirect(req.BASE + '/tema?err=' + encodeURIComponent('Kode warna tidak valid. Gunakan format #RRGGBB.'));
+    dbm.setSetting('tema_warna', hex);
+    if (req.body.app_nama !== undefined) {
+      const nm = String(req.body.app_nama || '').trim().slice(0, 60);
+      dbm.setSetting('app_nama', nm || 'SIMKEU Sekolah');
+    }
+    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Tema aplikasi diperbarui: warna ${hex}, nama "${dbm.appNama()}"`);
+    res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Tema & nama aplikasi disimpan.'));
+  });
+
+  post('/tema/logo', async (req, res) => {
+    if (!guard(req, res, 'sekolah', 'edit')) return;
+    if (req.body.hapus) {
+      dbm.setSetting('app_logo', '');
+      dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Menghapus logo aplikasi kustom');
+      return res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Logo aplikasi dihapus.'));
+    }
+    if (!req.body.logo_b64) return res.redirect(req.BASE + '/tema?err=' + encodeURIComponent('Pilih berkas logo terlebih dahulu.'));
+    try {
+      const m = String(req.body.logo_b64).match(/^data:(image\/[^;]+);base64,/);
+      if (!m) throw new Error('Berkas bukan gambar yang valid.');
+      const ext = (m[1].split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+      const url = await uploadMedia(req.body.logo_b64, `logo-aplikasi-${Date.now()}.${ext}`);
+      dbm.setSetting('app_logo', url);
+      dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Mengunggah logo aplikasi kustom');
+      res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Logo aplikasi diperbarui.'));
+    } catch (e) {
+      res.redirect(req.BASE + '/tema?err=' + encodeURIComponent(e.message));
+    }
   });
 
   /* ================= IDENTITAS SEKOLAH ================= */
@@ -111,14 +219,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
             ${field('5. Nama Bendahara', 'sekolah_bendahara', s.sekolah_bendahara)}
             ${field('6. NIP / NUPTK Bendahara', 'sekolah_nip_bendahara', s.sekolah_nip_bendahara)}
           </div>
-          <div class="row2">
-            <div class="field"><label>Tarif Standar Tugas Tambahan (Rp per Jam)</label>
-              ${ui.moneyInput('honor_tugas_jam', s.honor_tugas_jam || 50000, ro ? 'readonly' : '')}
-              <div class="hint">Komponen <b>Pembantu Kepsek</b> &amp; <b>Wali Kelas</b> (default Rp 50.000/jam).</div></div>
-            <div class="field"><label>Sertifikasi (Rp per Jam)</label>
-              ${ui.moneyInput('sertifikasi_per_jam', s.sertifikasi_per_jam || 12500, ro ? 'readonly' : '')}
-              <div class="hint">Default potongan sertifikasi otomatis = jam efektif × tarif ini (Rp 12.500/jam).</div></div>
-          </div>
+          <div class="alert info">${ui.icon('info')}<div>Tarif <b>tugas tambahan (Pembantu Kepsek / Wali Kelas)</b> dan <b>sertifikasi per jam</b>
+            kini diatur pada menu <a href="${c.base}/tarif-honor"><b>Nominal Tunjangan &amp; Honor</b></a> agar tidak ganda.</div></div>
           <hr class="sep">
           <div class="card-head" style="padding:0 0 8px"><div><h3>Kop Surat Resmi</h3><div class="sub">Teks &amp; ukuran font kop pada semua cetakan</div></div></div>
           <div class="field"><label>Teks Kop Surat (satu baris = satu baris kop)</label>
@@ -133,7 +235,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
             <div class="field"><label>Tinggi (mm)</label><input type="number" step="0.5" min="30" name="kwitansi_h_mm" value="${esc(s.kwitansi_h_mm || 99)}" ${ro ? 'readonly' : ''}></div>
             <div class="field"><label>Margin (mm)</label><input type="number" step="0.5" min="0" name="kwitansi_margin_mm" value="${esc(s.kwitansi_margin_mm || 6)}" ${ro ? 'readonly' : ''}></div>
           </div>
-          <label class="check"><input type="checkbox" name="portal_aktif" value="1" ${s.portal_aktif === '1' ? 'checked' : ''} ${ro ? 'disabled' : ''}> Aktifkan <b>Portal Cek Tagihan Orang Tua</b> (publik, tanpa login)</label>
           <hr class="sep">
           <div class="card-head" style="padding:0 0 8px"><div><h3>Alamat (URL) Portal Publik</h3>
             <div class="sub">Ujung alamat ketiga portal dapat diubah sendiri, mis. <code>portal-slip</code> → <code>portal-slip-pegawai</code></div></div></div>
@@ -190,14 +291,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     }
     const keys = ['sekolah_nama', 'sekolah_alamat', 'sekolah_kepala', 'sekolah_nip_kepala', 'sekolah_bendahara', 'sekolah_nip_bendahara'];
     for (const k of keys) if (req.body[k] !== undefined) dbm.setSetting(k, String(req.body[k]).trim());
-    if (req.body.honor_tugas_jam !== undefined) {
-      const rate = lib.parseMoney(req.body.honor_tugas_jam);
-      dbm.setSetting('honor_tugas_jam', rate > 0 ? rate : 50000);
-    }
-    if (req.body.sertifikasi_per_jam !== undefined) {
-      const rate = lib.parseMoney(req.body.sertifikasi_per_jam);
-      dbm.setSetting('sertifikasi_per_jam', rate > 0 ? rate : 12500);
-    }
     if (req.body.kop_baris !== undefined) dbm.setSetting('kop_baris', String(req.body.kop_baris).replace(/\r/g, ''));
     for (const k of ['kop_font', 'kop_font_besar', 'kwitansi_w_mm', 'kwitansi_h_mm', 'kwitansi_margin_mm']) {
       if (req.body[k] !== undefined) {
@@ -205,7 +298,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         if (Number.isFinite(v) && v > 0) dbm.setSetting(k, v);
       }
     }
-    if (req.body.portal_aktif !== undefined) dbm.setSetting('portal_aktif', req.body.portal_aktif ? '1' : '0');
     for (const [settingKey, v] of Object.entries(slugBaru)) dbm.setSetting(settingKey, v);
     dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Memperbarui identitas sekolah / kop surat');
     res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Identitas sekolah berhasil disimpan.'));

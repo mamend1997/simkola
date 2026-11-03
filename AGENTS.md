@@ -544,3 +544,58 @@ node dev-tests/cloud.js     # 77 cek: nama berkas dinamis, parsing kredensial, J
 node dev-tests/ui-cloud.js  # 20 cek Playwright: 4 kartu status, form kredensial/Folder ID, simpan via UI,
                             # tombol manual nonaktif saat belum dikonfigurasi, mobile 390px, tanpa error JS
 ```
+
+---
+
+## Ronde 21 — grafik SPP tunggal, hapus masal, beasiswa multi-grup, tema/branding/menu, demo sandbox
+
+### 1. Grafik SPP & rekap per grup iuran
+- `dbm.sppSeries(taId)` **tidak lagi** membaca tabel `spp` lama. Sumbernya sekarang **data iuran riil**: grup bulanan bernama SPP (fallback: semua grup bulanan) → `iuranMonthDetail()` per tagihan lalu dijumlah per bulan. Dashboard & halaman `/spp` memakai deret yang sama sehingga selalu sinkron.
+- Dashboard hanya punya **satu** line chart SPP (kartu duplikat di bawah dihapus). Kartu `Grafik SPP per Bulan` di `/piutang` diganti kartu tautan ke `/spp` (chart batang lama tidak dipakai lagi).
+- `iuranAnalytics()` kini mengisi `g.sel[bulan]` untuk grup **non-bulanan** berdasarkan **bulan tanggal pembayaran** → tabel "Rincian Penerimaan per Grup Iuran" tidak lagi kosong selain SPP. Footer GRAND TOTAL per bulan dihitung dari jumlah baris grup (bukan `monthMap`).
+
+### 2. Hapus masal antrean posting & rekap transaksi
+- Helper `hapusBayarMassal(ids, user)` di `routes/iuran.js` (dipakai `POST /iuran/bayar/hapus-masal`, guard `iuran.delete`): menghapus `iuran_bayar` (riwayat transaksi siswa ikut hilang), menghapus transaksi BKU terkait (bila `posted` & periode tidak ditutup), mengembalikan pembayaran se-kwitansi ke `pending`, mencatat Kotak Sampah + audit. Baris void/beasiswa dilewati (dilaporkan pada flash `warn`).
+- UI: antrean (`Rincian Penerimaan Belum Terposting` & `Penerimaan Non-BKU`) punya ceklis `ids` + `data-check-all-box="ids"` + tombol **Hapus Terpilih** (`form="fHapusAntrean"`). Rekap transaksi memakai ceklis `fKwit` yang sudah ada + tombol `formaction="/iuran/bayar/hapus-masal" formmethod="post" formtarget="_self"`.
+- `data-check-count="ids"` (hook generik app.js) menampilkan jumlah baris tercentang.
+
+### 3. Beasiswa multi-grup & multi-siswa (`routes/beasiswa.js` ditulis ulang)
+- Tabel baru `beasiswa_grup(beasiswa_id,grup_id,bulan_mask)`; helper `beasiswaGrupList/GrupSet`.
+- `beasiswaSync()` iterasi penerima × grup (fallback `beasiswa.grup_id` bila tabel kosong), alokasi potongan FIFO per bulan; `beasiswa.nominal` = potongan per siswa × jumlah penerima.
+- Halaman `/beasiswa` = **satu form** `#fBeasiswa` berurutan: (1) Detail, (2) Penetapan Siswa, (3) Rekap Data. Ceklis siswa (`name="penerima"`) & rekap memakai atribut `form="fBeasiswa"`.
+- Bug "please fill out this field" berasal dari **dua elemen `id="fBeasiswa"`** (form tambah & form di modal edit) → `form="fBeasiswa"` menunjuk form pertama. Modal edit dihapus, edit memakai `?edit=<id>` pada form yang sama (hanya satu `#fBeasiswa`).
+- Filter kelas & pencarian siswa **client-side** (`data-bea-kelas`, `data-bea-search`, `tr[data-bea-row]`) → tidak ada reload, isian nama/grup tidak hilang. Kalkulator nominal↔persen & ringkasan (`data-bea-calc`, `data-bea-rekap`) di `public/app.js` blok beasiswa.
+
+### 4. Tema, branding & manajer menu
+- Setting baru: `tema_warna` (#RRGGBB), `app_nama` (sudah ada, kini dipakai), `app_logo`, `nav_ui` (JSON: `{groups,order,labels,icons}`).
+- `ui.themeCss(hex)` menurunkan seluruh `--o-*`, `--bg`, `--sh-1` + `body::before` dari satu warna (HSL) dan disuntik ke `layout`, `docPage`, `printPage`, dan halaman login. Halaman pengaturan: **`/tema`** (warna + palet cepat + nama aplikasi + logo aplikasi via media proxy).
+- `ui.navOrdered(cfg)` menerapkan urutan kelompok, urutan item, judul kustom, dan ikon PNG (`iconUrl` → `<img class="nav-ico-img">`). Pengaturan global dibaca dari **database utama** (`dbm.mainSetting/navUiGlobal/…`) agar sesi demo tidak mengubah menu sekolah.
+- `/tampilan-menu`: drag & drop baris (HTML5) + tombol ▲▼, geser kelompok, input judul per baris, unggah ikon PNG (rekomendasi 64×64 px), ceklis tampil/sembunyi, `#nav_order` & `#group_order` diisi JS saat submit. `POST /tampilan-menu` menerima `h_i`, `lbl_i`, `ico_i`, `ico_lama_i`, `rm_ico_i`; bila `h_*` tidak terkirim, urutan diambil dari `nav_order`.
+- **Struktur menu baru**: grup **Piutang** (Piutang Pegawai, Sertifikasi, Lainnya) terpisah dari grup **Grup Iuran**; menu **SPP** (`/spp`) ada di **paling bawah** grup Grup Iuran. Grup **Bantuan** (Petunjuk Pengguna) di urutan terakhir.
+
+### 5. Identitas sekolah & tarif honor
+- Kolom "Tarif Standar Tugas Tambahan" & "Sertifikasi per jam" **dihapus** dari `/sekolah` (sekarang hanya di `/tarif-honor`, termasuk `honor_tugas_jam` sebagai tarif cadangan). POST `/sekolah` tidak lagi menulis setting tarif.
+- Checkbox `portal_aktif` dihapus dari `/sekolah` (satu-satunya pengaturan ada di `/pengguna` → Pengaturan Sistem).
+
+### 6. Catatan Pegawai vs Catatan Orang Tua + Petunjuk Pengguna
+- `/catatan-pegawai` untuk pemegang `catatan.edit` = **rekap murni** (tanpa form kirim). Staff tetap melihat form kirim + catatan sendiri.
+- `/catatan-orangtua` (alamat lama `/pesan-orangtua` tetap dilayani, bukan redirect): rekap `portal_pesan` + filter sumber/status + **tombol hapus per baris** (`POST /catatan-orangtua/delete`, guard `dashboard.delete` atau `catatan.delete`). `portalPesanList({sumber})` mendukung filter.
+- Modul & tabel baru **Petunjuk Pengguna**: `panduan` (judul, kategori, ringkas, thumbnail, video_url, pdf_url, urutan, aktif). Halaman `/petunjuk` menampilkan kartu thumbnail + modal YouTube embed (`youtube.com/embed/<id>`) + tautan PDF. Thumbnail/PDF diunggah lewat media proxy. Modul RBAC `panduan` (view untuk semua role).
+
+### 7. Akun Demo (sandbox database dummy)
+- Peran baru `demo` (`ROLE_LABEL.demo`, `ROLES`, `DEMO_BLOCKED = pengguna, sekolah, backup, trash, audit, tahun_ajaran, saldo_awal`).
+- **Isolasi database**: `db` di `db.js` kini **Proxy** yang membaca `AsyncLocalStorage`. `dbm.runAsDemo(fn)` (dipanggil `server.js` untuk setiap request role demo) mengarahkan **semua** query ke `data/demo.sqlite` (`DEMO_DB_PATH`). `dbm.ensureDemoDb()` membuat skema + master awal saat pertama dibutuhkan; `dbm.resetDemoDb()` mengosongkan isi dummy.
+- Yang **selalu** memakai database utama (`dbm.mainDb`): `currentUser`, `setSession`, `can`, `permissionMatrix`, logout, `/ta/pilih`, serta setting tampilan global (`mainSetting`, `setMainSetting`, `navUiGlobal`, `temaWarnaGlobal`, `appNamaGlobal`, `appLogoGlobal`).
+- Tahun ajaran untuk sesi demo dipaksa ke TA database dummy (`req.TA`/`req.taId` ditimpa di server.js) karena id TA DB utama tidak berlaku di sandbox.
+- Kontrol akses demo = **Permission Matrix role "Akun Demo"** di `/pengguna` (+ ceklis tampil/sembunyi menu). Default: semua modul operasional boleh, modul sistem diblokir.
+- Password demo: `POST /akun` menolak perubahan sandi bila `users.role='demo'`; admin tetap bisa mengatur lewat form pengguna. Halaman `/akun` menampilkan pemberitahuan khusus.
+
+### Test ronde 21
+```bash
+node dev-tests/round21.js     # 76 cek: chart SPP tunggal & rekap semua grup, hapus masal (antrean + rekap,
+                              # cascade BKU), beasiswa multi-grup/multi-siswa & edit, tema/branding, manajer menu,
+                              # relokasi tarif honor, catatan ortu + petunjuk, isolasi & keamanan akun demo
+node dev-tests/ui-round21.js  # 23 cek Playwright: tema live preview, drag & drop menu + judul kustom,
+                              # state form beasiswa tidak reset saat filter kelas, embed video petunjuk, mobile 390px
+```
+- Tes lama yang disesuaikan karena perubahan perilaku **disengaja**: `round9.js` (judul kartu catatan orang tua, atribut form beasiswa), `round15.js` (label pencarian beasiswa), `round17.js` (judul "Rekap Catatan Pegawai").

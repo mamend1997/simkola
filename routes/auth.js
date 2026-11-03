@@ -4,22 +4,26 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
   const { db } = dbm;
 
   function authShell({ base, content, sideTitle, sideDesc }) {
+    const appName = dbm.appNamaGlobal();
+    const appLogo = dbm.appLogoGlobal();
+    const tema = dbm.temaWarnaGlobal();
     return `<!DOCTYPE html><html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SIMKEU Sekolah</title>
+<title>${lib.esc(appName)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}">
+${ui.themeCss(tema)}
 <link rel="icon" type="image/png" href="${base}/favicon.ico">
 <link rel="apple-touch-icon" href="${base}/favicon.ico">
-<meta name="theme-color" content="#F97316">
+<meta name="theme-color" content="${lib.esc(tema)}">
 </head><body>
 <div class="auth-wrap">
   <aside class="auth-aside">
     <div class="inner">
       <div class="flex" style="gap:12px">
-        <div style="width:46px;height:46px;border-radius:14px;background:rgba(255,255,255,.2);display:grid;place-items:center;border:1px solid rgba(255,255,255,.3)">${ui.icon('wallet')}</div>
+        <div style="width:46px;height:46px;border-radius:14px;overflow:hidden;background:rgba(255,255,255,.2);display:grid;place-items:center;border:1px solid rgba(255,255,255,.3)">${appLogo ? `<img src="${lib.esc(appLogo)}" alt="Logo" style="width:100%;height:100%;object-fit:contain">` : ui.icon('wallet')}</div>
         <div>
-          <div style="font-weight:800;font-size:17px;letter-spacing:-.02em">SIMKEU Sekolah</div>
+          <div style="font-weight:800;font-size:17px;letter-spacing:-.02em">${lib.esc(appName)}</div>
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:.16em;opacity:.8">Sistem Informasi Keuangan</div>
         </div>
       </div>
@@ -43,6 +47,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
     const q = req.query;
     const err = q.get('err'), ok = q.get('ok');
     const s = dbm.settingsAll();
+    const appName = dbm.appNamaGlobal();
     const sekolah = String(s.sekolah_nama || 'SMK PGRI Cikoneng').trim();
     const logo = s.sekolah_logo
       ? `<img src="${lib.esc(s.sekolah_logo)}" alt="Logo ${lib.esc(sekolah)}" class="auth-logo-img">`
@@ -54,7 +59,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
       content: `
       <div class="auth-login-head">
         ${logo}
-        <div class="auth-welcome">Selamat datang di SIMKEU Sekolah ${lib.esc(sekolah)}</div>
+        <div class="auth-welcome">Selamat datang di ${lib.esc(appName)} ${lib.esc(sekolah)}</div>
         <div class="small muted">Sistem Informasi Manajemen Keuangan Sekolah</div>
       </div>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${lib.esc(err)}</div></div>` : ''}
@@ -87,7 +92,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
   post('/logout', (req, res) => {
     const c = String(req.headers.cookie || '');
     const m = c.match(/simkeu_sid=([^;]+)/);
-    if (m) db.prepare('DELETE FROM sessions WHERE token=?').run(decodeURIComponent(m[1]));
+    if (m) dbm.mainDb.prepare('DELETE FROM sessions WHERE token=?').run(decodeURIComponent(m[1]));
     res.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
     res.redirect(req.BASE + '/login?ok=' + encodeURIComponent('Anda telah keluar dari aplikasi.'));
   });
@@ -95,7 +100,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
   /* profil sendiri */
   get('/akun', (req, res) => {
     const c = ctx(req);
-    const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    const u = dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    const isDemo = u.role === 'demo';
     page(req, res, {
       title: 'Akun Saya', sub: 'Kelola profil dan password Anda', active: 'akun',
       content: `<div class="split"><div class="card">
@@ -130,10 +136,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
             <div class="field"><label>Email</label><input type="email" name="email" value="${lib.esc(u.email)}" required></div>
           </div>
           <div class="field"><label>Role</label><input type="text" value="${lib.esc(roleLabel(u.role))}" readonly></div>
-          <div class="row2">
+          ${isDemo ? `<div class="alert info">${ui.icon('lock')}<div><b>Akun Demo tidak dapat mengubah kata sandinya sendiri.</b>
+            Kata sandi akun demo hanya dapat diatur &amp; diubah oleh Super Admin melalui menu <b>Pengguna &amp; Hak Akses</b>.
+            Akun ini juga memakai <b>database dummy</b> terpisah, sehingga semua perubahan tidak memengaruhi data sekolah.</div></div>`
+      : `<div class="row2">
             <div class="field"><label>Password Baru</label><input type="password" name="password" placeholder="Kosongkan jika tidak diubah" minlength="6"></div>
             <div class="field"><label>Ulangi Password Baru</label><input type="password" name="password2" placeholder="Ulangi password baru"></div>
-          </div>
+          </div>`}
           <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Perubahan</button></div>
         </form>
       </div>
@@ -147,15 +156,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
 
   post('/akun', (req, res) => {
     const { nama, email, password, password2 } = req.body;
+    const me = dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    if (me && me.role === 'demo' && password) {
+      return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Akun Demo tidak dapat mengubah kata sandi sendiri. Hubungi Super Admin.'));
+    }
     if (!nama || !email) return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Nama dan email wajib diisi.'));
-    const dup = db.prepare('SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?').get(String(email).trim(), req.user.id);
+    const dup = dbm.mainDb.prepare('SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?').get(String(email).trim(), req.user.id);
     if (dup) return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Email sudah dipakai akun lain.'));
     if (password) {
       if (String(password).length < 6) return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Password minimal 6 karakter.'));
       if (password !== password2) return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Konfirmasi password tidak sama.'));
-      db.prepare('UPDATE users SET nama=?,email=?,password=? WHERE id=?').run(String(nama).trim(), String(email).trim(), lib.hashPassword(password), req.user.id);
+      dbm.mainDb.prepare('UPDATE users SET nama=?,email=?,password=? WHERE id=?').run(String(nama).trim(), String(email).trim(), lib.hashPassword(password), req.user.id);
     } else {
-      db.prepare('UPDATE users SET nama=?,email=? WHERE id=?').run(String(nama).trim(), String(email).trim(), req.user.id);
+      dbm.mainDb.prepare('UPDATE users SET nama=?,email=? WHERE id=?').run(String(nama).trim(), String(email).trim(), req.user.id);
     }
     dbm.logAudit(req.user, 'EDIT', 'pengguna', `Memperbarui profil sendiri (${email})`);
     res.redirect(req.BASE + '/akun?ok=' + encodeURIComponent('Profil berhasil diperbarui.'));
@@ -163,7 +176,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
 
   post('/akun/foto', async (req, res) => {
     if (req.body.hapus) {
-      db.prepare('UPDATE users SET foto=NULL WHERE id=?').run(req.user.id);
+      dbm.mainDb.prepare('UPDATE users SET foto=NULL WHERE id=?').run(req.user.id);
       dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Menghapus foto profil');
       return res.redirect(req.BASE + '/akun?ok=' + encodeURIComponent('Foto profil dihapus.'));
     }
@@ -173,7 +186,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
       if (!m) throw new Error('Berkas bukan gambar yang valid.');
       const ext = (m[1].split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
       const url = await uploadMedia(req.body.foto_b64, `foto-${req.user.id}-${Date.now()}.${ext}`);
-      db.prepare('UPDATE users SET foto=? WHERE id=?').run(url, req.user.id);
+      dbm.mainDb.prepare('UPDATE users SET foto=? WHERE id=?').run(url, req.user.id);
       dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Memperbarui foto profil');
       res.redirect(req.BASE + '/akun?ok=' + encodeURIComponent('Foto profil diperbarui.'));
     } catch (e) {

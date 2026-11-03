@@ -141,7 +141,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
       <div class="row2">
         <div class="field"><label>Role</label><select name="role">
           ${Object.entries(dbm.ROLE_LABEL).map(([k, v]) => `<option value="${k}" ${u && u.role === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}
-        </select></div>
+        </select>
+        <div class="hint">Role <b>Akun Demo</b> memakai database dummy terpisah (sandbox) dan tidak dapat mengubah kata sandinya sendiri.</div></div>
         <div class="field"><label>Jabatan</label><input name="jabatan" value="${esc(u ? u.jabatan : '')}" placeholder="Bendahara / Staf TU"></div>
       </div>
       <div class="field"><label>Password ${u ? '(kosongkan jika tidak diubah)' : ''}</label><input type="password" name="password" minlength="6" ${u ? '' : 'required'} placeholder="Minimal 6 karakter"></div>
@@ -178,7 +179,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         rows += '</tr>';
       }
       return `<div class="card mb-3">
-        <div class="card-head"><div><h3>${esc(dbm.ROLE_LABEL[role])}</h3><div class="sub">Hak akses per modul · ${role === 'kepala_sekolah' ? 'read-only + approval + export laporan' : 'hanya input transaksi pada BKU aktif'}</div></div>
+        <div class="card-head"><div><h3>${esc(dbm.ROLE_LABEL[role])}</h3><div class="sub">Hak akses per modul · ${role === 'kepala_sekolah' ? 'read-only + approval + export laporan'
+        : role === 'demo' ? 'database dummy terpisah · pilih menu yang boleh dicoba akun demo'
+          : 'hanya input transaksi pada BKU aktif'}</div></div>
           <label class="check small">${c.can('pengguna', 'edit') ? `<input type="checkbox" data-toggle-col="${role}" ${'title="Centang / hapus semua untuk role ini"'}> Pilih semua` : ''}</label></div>
         <div class="table-wrap"><table class="matrix"><thead><tr><th>Modul</th>${dbm.ACTIONS.map(a => `<th class="center">${ACTION_LABEL[a]}</th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody></table></div></div>`;
@@ -188,7 +191,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     <div class="kpi-grid mb-3" style="grid-template-columns:repeat(3,minmax(0,1fr))">
       <div class="kpi ic-orange"><div class="ico">${ui.icon('users')}</div><div class="lbl">Total Pengguna</div><div class="val" style="font-size:20px">${users.length}</div></div>
       <div class="kpi ic-green"><div class="ico">${ui.icon('check')}</div><div class="lbl">Akun Aktif</div><div class="val" style="font-size:20px">${totalAktif}</div></div>
-      <div class="kpi ic-blue"><div class="ico">${ui.icon('shield')}</div><div class="lbl">Role Terdefinisi</div><div class="val" style="font-size:20px">3</div></div>
+      <div class="kpi ic-blue"><div class="ico">${ui.icon('shield')}</div><div class="lbl">Role Terdefinisi</div><div class="val" style="font-size:20px">${Object.keys(dbm.ROLE_LABEL).length}</div></div>
     </div>
 
     <div class="card mb-3">
@@ -227,6 +230,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     <form method="post" action="${c.base}/pengguna/permissions">
       ${matrixTable('kepala_sekolah')}
       ${matrixTable('staff')}
+      ${matrixTable('demo')}
+      <div class="alert info" style="margin:12px 0 0">${ui.icon('shield')}<div><b>Akun Demo (Sandbox).</b>
+        Pengguna dengan role <b>Akun Demo</b> masuk ke <b>database dummy terpisah</b> — semua transaksi, iuran, honor &amp; pengaturan yang mereka ubah
+        <b>tidak memengaruhi data sekolah</b>. Centang modul/menu yang boleh mereka akses pada tabel <b>Akun Demo</b> di atas
+        (modul sistem seperti Pengguna, Identitas Sekolah, Backup &amp; Audit diblokir secara bawaan).
+        Kata sandi akun demo hanya dapat diatur admin melalui tombol Edit pada daftar pengguna — akun demo tidak bisa mengubah sandinya sendiri.</div></div>
       ${c.can('pengguna', 'edit') ? `<div class="form-actions" style="border:0"><button class="btn btn-primary">${ui.icon('save')}Simpan Permission Matrix</button></div>` : ''}
     </form>
 
@@ -359,7 +368,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     if (!guard(req, res, 'pengguna', 'edit')) return;
     db.transaction(() => {
       const upd = db.prepare('INSERT INTO permissions (role,module,action,allowed) VALUES (?,?,?,?) ON CONFLICT(role,module,action) DO UPDATE SET allowed=excluded.allowed');
-      for (const role of ['kepala_sekolah', 'staff']) {
+      for (const role of ['kepala_sekolah', 'staff', 'demo']) {
         for (const m of dbm.MODULES) {
           for (const a of dbm.ACTIONS) {
             const val = req.body[`p_${role}_${m.key}_${a}`] ? 1 : 0;
@@ -368,7 +377,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         }
       }
     })();
-    dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Memperbarui permission matrix role Kepala Sekolah & Staff');
+    dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Memperbarui permission matrix role Kepala Sekolah, Staff & Akun Demo');
     res.redirect(req.BASE + '/pengguna?ok=' + encodeURIComponent('Permission matrix diperbarui.'));
   });
 
@@ -392,57 +401,143 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
   /* ================= PENGATURAN TAMPILAN MENU (SIDEBAR) ================= */
   get('/tampilan-menu', (req, res) => {
     guard(req, res, 'pengguna', 'view');
-    if (req.query.get('reset') === '1' && can(req.user, 'pengguna', 'edit')) {
-      dbm.setSetting('nav_hidden', '');
-      dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Pengaturan tampilan menu: semua menu ditampilkan kembali');
-      return res.redirect(req.BASE + '/tampilan-menu?ok=' + encodeURIComponent('Semua menu ditampilkan kembali.'));
-    }
     const c = ctx(req);
-    const hidden = ui.navVisibility(dbm.getSetting('nav_hidden', ''));
+    if (req.query.get('reset') === '1' && c.can('pengguna', 'edit')) {
+      dbm.setMainSetting('nav_hidden', '');
+      dbm.setNavUiGlobal({});
+      dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Pengaturan tampilan menu: semua menu ditampilkan & urutan dikembalikan ke bawaan');
+      return res.redirect(req.BASE + '/tampilan-menu?ok=' + encodeURIComponent('Semua menu ditampilkan kembali (urutan, judul & ikon kembali ke bawaan).'));
+    }
+    const hidden = ui.navVisibility(dbm.mainSetting('nav_hidden', ''));
+    const uiCfg = dbm.navUiGlobal();
     const canEdit = c.can('pengguna', 'edit');
-    const catalog = ui.navCatalog();
+    const catalog = ui.navOrdered(uiCfg);
     const totalItems = catalog.reduce((s, g) => s + g.items.length, 0);
-    const shown = totalItems - hidden.size;
+    const shown = totalItems - catalog.reduce((s, g) => s + g.items.filter(i => hidden.has(i.href)).length, 0);
+    let idx = 0;
+    const groupsHtml = catalog.map((g, gi) => {
+      const items = g.items.map(it => {
+        const i = idx++;
+        const orig = (ui.NAV.find(x => x.id === g.id) || { items: [] }).items.find(x => x.href === it.href) || {};
+        return `<tr class="drag-row" draggable="true" data-href="${esc(it.href)}" data-group="${esc(g.id)}">
+          <td class="drag-cell"><span class="drag-handle" title="Tarik untuk menggeser posisi">⋮⋮</span>
+            <span class="row-num" data-rownum>${i + 1}</span></td>
+          <td class="center"><input type="checkbox" name="show" value="${esc(it.href)}" data-check-group="nav" ${hidden.has(it.href) ? '' : 'checked'} ${canEdit ? '' : 'disabled'}></td>
+          <td class="menu-ico-cell">
+            <input type="hidden" name="h_${i}" value="${esc(it.href)}">
+            <input type="hidden" name="ico_${i}" id="ico_${i}" value="">
+            <input type="hidden" name="ico_lama_${i}" value="${esc(it.iconUrl || '')}">
+            <div class="menu-ico-preview" data-ico-preview="${i}">${it.iconUrl
+            ? `<img src="${esc(it.iconUrl)}" alt="" onerror="this.remove()">`
+            : ui.icon(orig.icon || it.icon || 'info')}</div>
+            ${canEdit ? `<div class="menu-ico-tools">
+              <input type="file" accept="image/png" data-b64="ico_${i}" data-max="2" data-ico-input="${i}" title="Unggah ikon PNG">
+              ${it.iconUrl ? `<label class="check xs"><input type="checkbox" name="rm_ico_${i}" value="1"> hapus</label>` : ''}
+            </div>` : ''}
+          </td>
+          <td><div class="t-strong">${esc(orig.label || it.label)}</div>
+            <div class="t-sub mono">${esc(it.href)}${orig.activeKey ? ` · kunci: ${esc(orig.activeKey)}` : ''}</div></td>
+          <td>${canEdit ? `<input name="lbl_${i}" value="${esc(it.label)}" maxlength="60" placeholder="${esc(orig.label || '')}" class="menu-label-input">` : esc(it.label)}</td>
+          <td class="right nowrap">${canEdit ? `<button type="button" class="btn btn-sm btn-icon" data-row-up title="Naikkan">▲</button>
+            <button type="button" class="btn btn-sm btn-icon" data-row-down title="Turunkan">▼</button>` : ''}</td>
+        </tr>`;
+      }).join('');
+      const shownInGroup = g.items.filter(i => !hidden.has(i.href)).length;
+      return `<div class="card mb-2 menu-group" draggable="${canEdit ? 'true' : 'false'}" data-groupid="${esc(g.id)}" data-goi="${gi}">
+        <div class="card-head">
+          <div class="flex" style="gap:10px">
+            ${canEdit ? `<span class="drag-handle group-handle" title="Tarik untuk menggeser kelompok menu">⋮⋮</span>` : ''}
+            <div><h3>${esc(g.group)}</h3><div class="sub">${g.items.length} menu · ${shownInGroup} ditampilkan</div></div>
+          </div>
+          ${canEdit ? `<div class="toolbar">
+            <button type="button" class="btn btn-sm btn-icon" data-group-up title="Naikkan kelompok">▲</button>
+            <button type="button" class="btn btn-sm btn-icon" data-group-down title="Turunkan kelompok">▼</button>
+            <button type="button" class="btn btn-sm" data-menu-all="1">${ui.icon('check')}Tampilkan</button>
+            <button type="button" class="btn btn-sm" data-menu-none="1">${ui.icon('x')}Sembunyikan</button>
+          </div>` : ''}
+        </div>
+        <div class="table-wrap"><table class="menu-tbl"><thead><tr>
+          <th style="width:74px">Urutan</th><th style="width:52px" class="center">Tampil</th>
+          <th style="width:190px">Ikon (PNG)</th><th>Menu Asli</th><th style="width:260px">Judul Tampilan</th><th class="right" style="width:110px">Geser</th>
+        </tr></thead><tbody>${items}</tbody></table></div>
+      </div>`;
+    }).join('');
 
-    const groupsHtml = catalog.map(g => `<div class="card mb-2">
-      <div class="card-head"><div><h3>${esc(g.group)}</h3><div class="sub">${g.items.length} menu · ${g.items.filter(i => !hidden.has(i.href)).length} ditampilkan</div></div>
-        ${canEdit ? `<div class="toolbar">
-          <button type="button" class="btn btn-sm" data-check-group-all="nav">${ui.icon('check')}Tampilkan</button>
-          <button type="button" class="btn btn-sm" data-check-group-none="nav">${ui.icon('x')}Sembunyikan</button>
-        </div>` : ''}</div>
-      <div class="navpick-grid">
-        ${g.items.map(i => `<label class="check navpick">
-          <input type="checkbox" name="show" value="${esc(i.href)}" data-check-group="nav" ${hidden.has(i.href) ? '' : 'checked'} ${canEdit ? '' : 'disabled'}>
-          <span><b>${esc(i.label)}</b> <span class="t-sub mono">${esc(i.href)}</span></span>
-        </label>`).join('')}
-      </div>
-    </div>`).join('');
-
-    const content = `<div class="between mb-2">
-      <div class="alert info" style="margin:0;flex:1">${ui.icon('info')}<div>Centang menu yang ingin <b>ditampilkan</b> pada bilah samping. Menu yang tidak dicentang disembunyikan untuk <b>semua pengguna</b> (hak akses role tetap berlaku).</div></div>
-    </div>
-    <form method="post" action="${c.base}/tampilan-menu">
+    const content = `<div class="alert info mb-2">${ui.icon('info')}<div><b>Kelola tampilan menu.</b>
+      Geser baris (drag &amp; drop) atau pakai tombol ▲▼ untuk mengubah <b>posisi menu</b>, ubah <b>judul tampilan</b> di kolom kanan,
+      dan unggah <b>ikon PNG</b> pengganti. Centang <b>Tampil</b> untuk menampilkan menu. Perubahan berlaku untuk semua pengguna
+      (hak akses per role tetap berlaku).</div></div>
+    <form method="post" action="${c.base}/tampilan-menu" id="fMenu">
+      <input type="hidden" name="nav_order" id="nav_order" value="">
+      <input type="hidden" name="group_order" id="group_order" value="">
       <div class="card mb-3">
         <div class="card-head"><div><h3>Ringkasan Tampilan Menu</h3><div class="sub">${shown} dari ${totalItems} menu ditampilkan</div></div>
           ${canEdit ? `<div class="toolbar">
             <label class="check small"><input type="checkbox" data-check-group-box="nav" ${hidden.size === 0 ? 'checked' : ''}> Pilih semua menu</label>
+            <a class="btn btn-sm" href="${c.base}/tampilan-menu?reset=1">${ui.icon('refresh')}Reset ke Bawaan</a>
           </div>` : ''}</div>
-        <div class="help">Menu mengikuti struktur akordeon: klik judul grup (mis. <b>Transaksi</b>) pada bilah samping untuk membuka sub-menunya. Grup yang seluruh sub-menunya disembunyikan otomatis tidak tampil.</div>
+        <div class="help">Rekomendasi ikon: berkas <b>PNG persegi 64 × 64 px</b> (maksimal 2 MB, latar transparan) agar tajam di layar Retina.
+          Ikon SVG bawaan tetap dipakai bila tidak ada ikon PNG.</div>
+        ${canEdit ? `<div class="form-actions" style="margin-top:8px"><button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan Tampilan</button></div>` : ''}
       </div>
       ${groupsHtml}
-      ${canEdit ? `<div class="form-actions"><a class="btn" href="${c.base}/tampilan-menu?reset=1">${ui.icon('refresh')}Tampilkan Semua</a><button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan Tampilan</button></div>` : ''}
+      ${canEdit ? `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan Tampilan</button></div>` : ''}
     </form>`;
-    page(req, res, { title: 'Pengaturan Tampilan Menu', sub: 'Atur menu & sub-menu yang tampil pada bilah samping', active: 'tampilan_menu', content });
+    page(req, res, { title: 'Pengaturan Tampilan Menu', sub: 'Geser posisi, ubah judul & ikon PNG setiap menu', active: 'tampilan_menu', content });
   });
 
-  post('/tampilan-menu', (req, res) => {
-    guard(req, res, 'pengguna', 'edit');
-    const shown = new Set([].concat(req.body.show || []).map(String));
+  post('/tampilan-menu', async (req, res) => {
+    if (!guard(req, res, 'pengguna', 'edit')) return;
+    const catalog = ui.navOrdered(dbm.navUiGlobal());
     const all = ui.navCatalog().flatMap(g => g.items.map(i => i.href));
+    const shown = new Set([].concat(req.body.show || []).map(String));
     const hidden = all.filter(h => !shown.has(h));
-    dbm.setSetting('nav_hidden', hidden.join(','));
-    dbm.logAudit(req.user, 'EDIT', 'pengguna', `Pengaturan tampilan menu: ${all.length - hidden.length}/${all.length} menu ditampilkan (${hidden.length} disembunyikan)`);
-    res.redirect(req.BASE + '/tampilan-menu?ok=' + encodeURIComponent('Pengaturan tampilan menu disimpan.'));
+
+    // urutan & judul: field berindeks (h_0..h_n, lbl_0..) mengikuti urutan DOM
+    const rows = [];
+    for (let i = 0; req.body['h_' + i] !== undefined; i++) {
+      const href = String(req.body['h_' + i] || '');
+      if (!href) continue;
+      rows.push({ href, label: String(req.body['lbl_' + i] || '').trim().slice(0, 60), idx: i });
+    }
+    const orderHrefs = String(req.body.nav_order || '').split(',').map(s => s.trim()).filter(Boolean);
+    const orderFinal = orderHrefs.length ? orderHrefs : rows.map(r => r.href);
+    // bila field h_ tidak ikut terkirim (mis. pengiriman programatik), pakai urutan nav_order
+    if (!rows.length) {
+      orderFinal.forEach((href, i) => rows.push({ href, label: String(req.body['lbl_' + i] || '').trim().slice(0, 60), idx: i }));
+    }
+
+    const order = {};
+    orderFinal.forEach((href, i) => { if (all.includes(href)) order[href] = i + 1; });
+
+    const groupOrderRaw = String(req.body.group_order || '').split(',').map(s => s.trim()).filter(Boolean);
+    const groups = {};
+    (groupOrderRaw.length ? groupOrderRaw : ui.navCatalog().map(g => g.id)).forEach((gid, i) => { groups[gid] = i + 1; });
+
+    const orig = new Map(ui.navCatalog().flatMap(g => g.items.map(it => [it.href, it])));
+    const labels = {};
+    const icons = {};
+    let gagal = '';
+    for (const r of rows) {
+      const o = orig.get(r.href);
+      if (o && r.label && r.label !== o.label) labels[r.href] = r.label;
+      const lama = String(req.body['ico_lama_' + r.idx] || '');
+      let url = req.body['rm_ico_' + r.idx] ? '' : lama;
+      const b64 = String(req.body['ico_' + r.idx] || '');
+      if (b64 && !gagal) {
+        try {
+          if (!/^data:image\/png;base64,/i.test(b64)) throw new Error('Ikon harus berkas PNG.');
+          url = await uploadMedia(b64, `ikon-menu-${r.href.replace(/[^\w]/g, '') || 'x'}-${Date.now()}.png`);
+        } catch (e) { gagal = e.message; }
+      }
+      if (url) icons[r.href] = url;
+    }
+    dbm.setNavUiGlobal({ order, groups, labels, icons });
+    dbm.setMainSetting('nav_hidden', hidden.join(','));
+    dbm.logAudit(req.user, 'EDIT', 'pengguna',
+      `Pengaturan tampilan menu: ${all.length - hidden.length}/${all.length} menu ditampilkan, ${Object.keys(labels).length} judul diubah, ${Object.keys(icons).length} ikon kustom`);
+    const msg = `Pengaturan tampilan menu disimpan.${gagal ? ' Sebagian ikon gagal diunggah: ' + gagal : ''}`;
+    res.redirect(req.BASE + '/tampilan-menu?' + (gagal ? 'warn=' : 'ok=') + encodeURIComponent(msg));
   });
 
   /* ================= AUDIT LOG ================= */

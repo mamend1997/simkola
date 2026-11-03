@@ -92,14 +92,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.click('.modal.show [data-close]');
   await page.waitForTimeout(150);
 
-  /* ---------- catatan pegawai ---------- */
+  /* ---------- catatan pegawai (rekap murni untuk bendahara) ---------- */
+  await api('POST', '/catatan-pegawai/kirim', { pesan: 'Nominal potongan BPJS pada slip saya keliru, mohon diperiksa.', terkait: 'payroll' });
   await page.goto(base + '/catatan-pegawai');
-  ok('form catatan: nama otomatis (tanpa input teks nama)', await page.locator('input[name=nama]').count() === 0
-    && /Bendahara Utama/.test(await page.locator('.catatan-locked-nama').innerText()));
-  await page.fill('textarea[name=pesan]', 'Nominal potongan BPJS pada slip saya keliru, mohon diperiksa.');
-  await Promise.all([page.waitForNavigation(), page.click('form#fCatatan button.btn-primary')]);
-  ok('catatan terkirim & muncul di daftar', /Nominal potongan BPJS/.test(await page.locator('#tblCatatan').innerText()));
-  ok('catatan tersimpan dengan nama sesi', /Bendahara Utama/.test(await page.locator('#tblCatatan').innerText()));
+  ok('catatan pegawai = rekap (tanpa form kirim)', (await page.locator('form#fCatatan').count()) === 0
+    && /Rekap Catatan Pegawai/.test(await page.locator('.card-head').first().innerText()));
+  ok('catatan masuk tampil di rekap', /Nominal potongan BPJS/.test(await page.locator('#tblCatatan').innerText()));
+  ok('nama pengirim tercatat dari sesi', /Bendahara Utama/.test(await page.locator('#tblCatatan').innerText()));
 
   /* ---------- backup menyeluruh ---------- */
   await page.goto(base + '/backup');

@@ -117,15 +117,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       </div>`;
     };
 
-    const content = `${form}
+    const content = `${pengelola ? '' : form}
       <div class="card">
-        <div class="card-head"><div><h3>${pengelola ? 'Catatan Masuk dari Pegawai' : 'Catatan Saya'}</h3>
-          <div class="sub">${list.length} catatan${pengelola && belum ? ` · ${belum} belum selesai` : ''}</div></div>
+        <div class="card-head"><div><h3>${pengelola ? 'Rekap Catatan Pegawai' : 'Catatan Saya'}</h3>
+          <div class="sub">${pengelola
+        ? `${list.length} catatan dari pegawai yang mengisi form · identitas pengirim tercatat otomatis dari sesi login`
+        : `${list.length} catatan yang Anda kirim ke bendahara`}${pengelola && belum ? ` · ${belum} belum selesai` : ''}</div></div>
           ${pengelola && belum ? `<div class="toolbar"><span class="badge amber">${belum} perlu ditindaklanjuti</span></div>` : ''}</div>
         ${filterBar}
-        <div id="tblCatatan">${list.length ? list.map(item).join('') : ui.emptyState('Belum ada catatan', pengelola ? 'Catatan dari pegawai akan muncul di sini.' : 'Kirim catatan pertama Anda melalui formulir di atas.')}</div>
+        <div id="tblCatatan">${list.length ? list.map(item).join('') : ui.emptyState('Belum ada catatan', pengelola ? 'Catatan dari pegawai akan muncul di sini otomatis setelah form dikirim.' : 'Kirim catatan pertama Anda melalui formulir di atas.')}</div>
       </div>`;
-    page(req, res, { title: 'Catatan Pegawai', sub: 'Pelaporan kekeliruan data pegawai kepada bendahara', active: 'catatan', content });
+    page(req, res, {
+      title: 'Catatan Pegawai',
+      sub: pengelola ? 'Rekap catatan yang dikirim pegawai melalui form (bukan formulir input)' : 'Kirim & pantau catatan Anda kepada bendahara',
+      active: 'catatan', content
+    });
   });
 
   post('/catatan-pegawai/kirim', (req, res) => {

@@ -894,130 +894,136 @@ function terbilang(n) {
     });
   }());
 
-  /* ===== beasiswa: kalkulator nominal ↔ persentase, bulan, pratinjau ===== */
+  /* ===== beasiswa: multi grup iuran, filter kelas tanpa reload, kalkulator & rekap ===== */
   const beaForm = document.querySelector('[data-bea-form]');
   if (beaForm) {
-    const grupSel = beaForm.querySelector('[data-bea-grup]');
-    const wrapBulan = beaForm.querySelector('[data-bea-bulan-wrap]');
+    const digits = v => Number(String(v || '').replace(/[^\d]/g, '')) || 0;
+    const fmt = n => 'Rp ' + (Number(n) || 0).toLocaleString('id-ID');
     const nominalIn = beaForm.querySelector('[data-bea-nominal]');
     const persenIn = beaForm.querySelector('[data-bea-persen]');
-    const digits = v => Number(String(v || '').replace(/[^\d]/g, '')) || 0;
-    const fmt = n => (Number(n) || 0).toLocaleString('id-ID');
-    const baseTagihan = () => {
-      const opt = grupSel && grupSel.selectedOptions[0];
-      if (!opt) return 0;
-      const isBulanan = opt.dataset.jenis === 'bulanan';
-      if (!isBulanan) return Number(opt.dataset.nominal || 0);
-      return Array.from(beaForm.querySelectorAll('[data-bea-bulan]:checked'))
-        .reduce((a, c) => a + Number(c.dataset.bulanNominal || 0), 0);
-    };
-    // nominal per bulan mengikuti grup yang dipilih
+    const wrapBulan = document.querySelector('[data-bea-bulan-wrap]');
+    const grupChecks = Array.from(document.querySelectorAll('[data-bea-group]'));
+    const bulanChecks = Array.from(document.querySelectorAll('[data-bea-bulan]'));
     let nominalMap = {};
     try {
-      const mapEl = beaForm.querySelector('[data-bea-nominal-map]');
+      const mapEl = document.querySelector('[data-bea-nominal-map]');
       nominalMap = mapEl ? JSON.parse(mapEl.textContent || '{}') : {};
     } catch (e) { nominalMap = {}; }
-    function syncNominalBulan() {
-      const gid = grupSel ? grupSel.value : '';
-      const list = nominalMap[gid] || [];
-      const byMonth = {};
-      list.forEach(x => { byMonth[String(x.b)] = Number(x.n || 0); });
-      beaForm.querySelectorAll('[data-bea-bulan]').forEach(chk => {
-        const val = byMonth[String(chk.value)] || 0;
-        chk.dataset.bulanNominal = String(val);
-        const lbl = chk.closest('label') ? chk.closest('label').querySelector('[data-bea-bulan-nom]') : null;
-        if (lbl) lbl.textContent = val ? 'Rp ' + val.toLocaleString('id-ID') : '-';
-      });
-    }
-    function syncJenis() {
-      const opt = grupSel && grupSel.selectedOptions[0];
-      const isBulanan = opt && opt.dataset.jenis === 'bulanan';
-      if (wrapBulan) wrapBulan.style.display = isBulanan ? '' : 'none';
-      syncNominalBulan();
-    }
-    // kalkulator dua arah: sumber perubahan menentukan arah perhitungan
-    function fromNominal() {
-      const base = baseTagihan();
-      if (!(base > 0)) return;
-      const nom = digits(nominalIn.value);
-      persenIn.value = nom ? String(Math.round((nom / base) * 1000) / 10).replace('.', ',') : '';
-    }
-    function fromPersen() {
-      const base = baseTagihan();
-      const pct = Number(String(persenIn.value || '').replace(',', '.')) || 0;
-      nominalIn.value = (base > 0 && pct > 0) ? fmt(Math.round(base * pct / 100)) : '';
-    }
-    if (grupSel) grupSel.addEventListener('change', () => { syncJenis(); fromNominal(); });
-    if (nominalIn) { nominalIn.addEventListener('input', fromNominal); nominalIn.addEventListener('change', fromNominal); }
-    if (persenIn) { persenIn.addEventListener('input', fromPersen); persenIn.addEventListener('change', fromPersen); }
-    $$('[data-bea-bulan]', beaForm).forEach(chk => chk.addEventListener('change', fromNominal));
-    $$('[data-bea-bulan-all]', beaForm).forEach(b => b.addEventListener('click', () => {
-      $$('[data-bea-bulan]', beaForm).forEach(c => { c.checked = true; }); fromNominal();
-    }));
-    $$('[data-bea-bulan-none]', beaForm).forEach(b => b.addEventListener('click', () => {
-      $$('[data-bea-bulan]', beaForm).forEach(c => { c.checked = false; }); fromNominal();
-    }));
-    syncJenis();
 
-    /* ----- pratinjau + simpan final ----- */
-    const finalForm = document.getElementById('fBeaFinal');
-    const previewBtn = document.querySelector('[data-bea-preview]');
-    const saveBtn = document.querySelector('[data-bea-save]');
-    if (finalForm && previewBtn) {
-      previewBtn.addEventListener('click', () => {
-        const nama = (beaForm.querySelector('input[name=nama]') || {}).value || '';
-        const grupId = grupSel ? grupSel.value : '';
-        const opt = grupSel && grupSel.selectedOptions[0];
-        if (!nama.trim()) { alert('Isi nama beasiswa terlebih dahulu.'); return; }
-        if (!grupId) { alert('Pilih grup iuran yang mendapat beasiswa.'); return; }
-        const bulan = Array.from(beaForm.querySelectorAll('[data-bea-bulan]:checked')).map(c => c.value);
-        if (opt.dataset.jenis === 'bulanan' && !bulan.length) { alert('Centang minimal satu bulan beasiswa.'); return; }
-        const base = baseTagihan();
-        const nom = digits(nominalIn.value);
-        const pct = Number(String(persenIn.value || '').replace(',', '.')) || 0;
-        if (!(nom > 0) && !(pct > 0)) { alert('Isi nominal potongan atau persentase beasiswa.'); return; }
-        const per = nom > 0 ? nom : Math.round(base * pct / 100);
-        const checked = Array.from(finalForm.querySelectorAll('input[name=penerima]:checked'));
-        if (!checked.length) { alert('Centang minimal satu siswa penerima beasiswa.'); return; }
-        const rows = checked.map(c => {
-          const tr = c.closest('tr');
-          const tds = tr ? tr.querySelectorAll('td') : [];
-          const nm = tds[2] ? tds[2].textContent.trim() : '';
-          const kl = tds[3] ? tds[3].textContent.trim() : '';
-          return `<tr><td>${nm}</td><td>${kl}</td><td class="num">Rp ${fmt(base)}</td>
-            <td class="num" style="color:var(--green)">Rp ${fmt(per)}</td>
-            <td class="num">Rp ${fmt(Math.max(0, base - per))}</td></tr>`;
-        }).join('');
-        const total = per * checked.length;
-        const host = document.querySelector('[data-bea-preview-body]');
-        if (host) {
-          host.innerHTML = `<div class="review-grid">
-              <div class="rv"><div class="lbl">Nama Beasiswa</div><div class="val" style="font-size:14px">${nama.replace(/[<>]/g, '')}</div></div>
-              <div class="rv"><div class="lbl">Grup Iuran</div><div class="val" style="font-size:14px">${(opt.textContent || '').split('(')[0].replace(/[<>]/g, '')}</div></div>
-              <div class="rv"><div class="lbl">Bulan</div><div class="val" style="font-size:14px">${opt.dataset.jenis === 'bulanan' ? bulan.length + ' bulan' : 'Non-bulanan'}</div></div>
-              <div class="rv"><div class="lbl">Potongan / Siswa</div><div class="val">Rp ${fmt(per)}</div></div>
-              <div class="rv"><div class="lbl">Jumlah Penerima</div><div class="val">${checked.length} siswa</div></div>
-              <div class="rv"><div class="lbl">Total Potongan</div><div class="val" style="color:var(--green)">Rp ${fmt(total)}</div></div>
-            </div>
-            <div class="table-scroll short"><table><thead><tr><th>Nama Siswa</th><th>Kelas</th><th class="num">Tagihan</th><th class="num">Potongan</th><th class="num">Sisa Setelah Beasiswa</th></tr></thead><tbody>${rows}</tbody>
-            <tfoot><tr><td colspan="3">TOTAL</td><td class="num">Rp ${fmt(total)}</td><td class="num">Rp ${fmt(Math.max(0, base * checked.length - total))}</td></tr></tfoot></table></div>`;
+    const selectedGroups = () => grupChecks.filter(c => c.checked).map(c => ({
+      id: c.value, jenis: c.dataset.jenis || '', nama: (c.closest('label') ? (c.closest('label').querySelector('b') || {}).textContent : '') || ''
+    }));
+    const selectedBulan = () => bulanChecks.filter(c => c.checked).map(c => Number(c.value));
+    const hasBulanan = () => selectedGroups().some(g => g.jenis === 'bulanan');
+
+    function tagihanTotal() {
+      const bulan = selectedBulan();
+      let total = 0;
+      for (const g of selectedGroups()) {
+        const map = nominalMap[g.id] || {};
+        if (g.jenis === 'bulanan') {
+          const use = bulan.length ? bulan : Object.keys(map).filter(k => k !== 'all').map(Number);
+          total += use.reduce((a, b) => a + Number(map[String(b)] || 0), 0);
+        } else {
+          total += Number(map.all || 0);
         }
-        finalForm.querySelector('[data-bea-payload]').value = JSON.stringify({
-          nama: nama.trim(),
-          deskripsi: (beaForm.querySelector('input[name=deskripsi]') || {}).value || '',
-          tahun_ajaran_id: (beaForm.querySelector('input[name=tahun_ajaran_id]') || {}).value || '',
-          grup_id: grupId, bulan_mask: bulan.join(','), nominal_per_siswa: per, persen: pct,
-          aktif: !!(beaForm.querySelector('input[name=aktif]') || {}).checked,
-          siswa: checked.map(c => c.value)
-        });
-        window.__openModal('mBeaPreview');
+      }
+      return total;
+    }
+    function perSiswa() {
+      const nom = digits(nominalIn ? nominalIn.value : '');
+      if (nom > 0) return nom;
+      const pct = Number(String(persenIn ? persenIn.value : '').replace(',', '.')) || 0;
+      const base = tagihanTotal();
+      return base > 0 && pct > 0 ? Math.round(base * pct / 100) : 0;
+    }
+    const jumlahSiswa = () => Array.from(document.querySelectorAll('input[name="penerima"]:checked')).length;
+
+    function syncBulanWrap() {
+      if (wrapBulan) wrapBulan.style.display = hasBulanan() ? '' : 'none';
+    }
+    function updateRekap() {
+      const base = tagihanTotal();
+      const per = perSiswa();
+      const n = jumlahSiswa();
+      const set = (sel, txt) => document.querySelectorAll(sel).forEach(el => { el.textContent = txt; });
+      set('[data-bea-tagihan]', fmt(base));
+      set('[data-bea-per-siswa]', fmt(per));
+      set('[data-bea-jumlah]', String(n));
+      set('[data-bea-total]', fmt(per * n));
+      set('[data-bea-r-per]', fmt(per));
+      set('[data-bea-r-siswa]', String(n));
+      set('[data-bea-r-total]', fmt(per * n));
+      const nm = beaForm.querySelector('input[name=nama]');
+      set('[data-bea-r-nama]', (nm && nm.value.trim()) || '(belum diisi)');
+      const gs = selectedGroups().map(g => g.nama.trim()).filter(Boolean);
+      set('[data-bea-r-grup]', gs.length ? gs.join(', ') : '-');
+      const bl = selectedBulan();
+      set('[data-bea-r-bulan]', bl.length ? bl.map(b => ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'][b - 1] || b).join(', ') : 'Semua bulan yang ditagihkan');
+    }
+    // kalkulator dua arah
+    let lastEdit = 'nominal';
+    if (nominalIn) {
+      ['input', 'change'].forEach(ev => nominalIn.addEventListener(ev, () => { lastEdit = 'nominal'; if (persenIn) { const base = tagihanTotal(); const nom = digits(nominalIn.value); persenIn.value = (base > 0 && nom) ? String(Math.round(nom / base * 1000) / 10).replace('.', ',') : ''; } updateRekap(); }));
+    }
+    if (persenIn) {
+      ['input', 'change'].forEach(ev => persenIn.addEventListener(ev, () => {
+        lastEdit = 'persen';
+        const base = tagihanTotal();
+        const pct = Number(String(persenIn.value || '').replace(',', '.')) || 0;
+        if (nominalIn) nominalIn.value = (base > 0 && pct > 0) ? Math.round(base * pct / 100).toLocaleString('id-ID') : '';
+        updateRekap();
+      }));
+    }
+    grupChecks.forEach(c => c.addEventListener('change', () => { syncBulanWrap(); if (lastEdit === 'persen' && persenIn) persenIn.dispatchEvent(new Event('input')); updateRekap(); }));
+    bulanChecks.forEach(c => c.addEventListener('change', () => { if (lastEdit === 'persen' && persenIn) persenIn.dispatchEvent(new Event('input')); updateRekap(); }));
+    document.querySelectorAll('[data-bea-bulan-all]').forEach(b => b.addEventListener('click', () => { bulanChecks.forEach(c => { c.checked = true; }); updateRekap(); }));
+    document.querySelectorAll('[data-bea-bulan-none]').forEach(b => b.addEventListener('click', () => { bulanChecks.forEach(c => { c.checked = false; }); updateRekap(); }));
+
+    /* ----- filter kelas & pencarian siswa (tanpa reload halaman) ----- */
+    const kelasSel = document.querySelector('[data-bea-kelas]');
+    const srcIn = document.querySelector('[data-bea-search]');
+    function applyFilter() {
+      const k = kelasSel ? kelasSel.value : '';
+      const q = srcIn ? srcIn.value.trim().toLowerCase() : '';
+      document.querySelectorAll('tr[data-bea-row]').forEach(tr => {
+        const okKelas = !k || tr.dataset.kelas === k;
+        const okQ = !q || String(tr.dataset.cari || '').includes(q);
+        tr.style.display = okKelas && okQ ? '' : 'none';
       });
-      if (saveBtn) saveBtn.addEventListener('click', () => {
-        const payload = finalForm.querySelector('[data-bea-payload]').value;
-        if (!payload) { alert('Buka pratinjau terlebih dahulu.'); return; }
-        finalForm.submit();
+      updateRekap();
+    }
+    if (kelasSel) kelasSel.addEventListener('change', applyFilter);
+    if (srcIn) srcIn.addEventListener('input', applyFilter);
+    document.querySelectorAll('[data-bea-pick-visible]').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('tr[data-bea-row]').forEach(tr => {
+        if (tr.style.display === 'none') return;
+        const c = tr.querySelector('input[name="penerima"]');
+        if (c) c.checked = true;
+      });
+      updateRekap();
+    }));
+    document.querySelectorAll('[data-bea-unpick]').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('input[name="penerima"]').forEach(c => { c.checked = false; });
+      updateRekap();
+    }));
+    document.addEventListener('change', e => { if (e.target && e.target.name === 'penerima') updateRekap(); });
+    if (beaForm) {
+      const nmIn = beaForm.querySelector('input[name=nama]');
+      if (nmIn) nmIn.addEventListener('input', updateRekap);
+      beaForm.addEventListener('submit', e => {
+        if (!selectedGroups().length) { e.preventDefault(); alert('Centang minimal satu grup iuran yang mendapat beasiswa.'); return; }
+        if (!jumlahSiswa()) { e.preventDefault(); alert('Centang minimal satu siswa penerima beasiswa.'); return; }
+        if (!perSiswa()) { e.preventDefault(); alert('Isi nominal potongan atau persentase beasiswa.'); return; }
       });
     }
+    // selaraskan nominal/persentase saat halaman dibuka
+    if (nominalIn && digits(nominalIn.value) > 0 && persenIn && !String(persenIn.value || '').trim()) {
+      const base = tagihanTotal();
+      if (base > 0) persenIn.value = String(Math.round(digits(nominalIn.value) / base * 1000) / 10).replace('.', ',');
+    }
+    syncBulanWrap();
+    updateRekap();
   }
 
   /* ===== dashboard iuran: filter metode (tunai / transfer) realtime ===== */
@@ -1162,4 +1168,161 @@ function terbilang(n) {
     rows.forEach(r => { r.style.display = hide ? 'none' : ''; });
     btn.textContent = hide ? 'Tampilkan rincian bulan' : 'Sembunyikan rincian bulan';
   }));
+
+  /* ===== tema & branding: pratinjau warna + unggah ikon menu ===== */
+  (function () {
+    const pick = document.querySelector('[data-tema-pick]');
+    const hex = document.querySelector('[data-tema-hex]');
+    const root = document.documentElement;
+    function hsl(hexv) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(String(hexv || '').trim());
+      if (!m) return null;
+      const n = parseInt(m[1], 16);
+      const r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+      let h = 0; const l = (max + min) / 2;
+      const s = d ? (l > 0.5 ? d / (2 - max - min) : d / (max + min)) : 0;
+      if (d) {
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+      }
+      return { h: Math.round(h), s: Math.round(s * 100), l: Math.round(l * 100) };
+    }
+    function apply(hexv) {
+      const c = hsl(hexv);
+      if (!c) return;
+      const sat = Math.max(35, Math.min(100, c.s));
+      const base = `hsl(${c.h} ${sat}% ${c.l}%)`;
+      const v = [['--o-500', base], ['--o-600', `hsl(${c.h} ${sat}% ${Math.max(20, c.l - 6)}%)`],
+        ['--o-700', `hsl(${c.h} ${sat}% ${Math.max(16, c.l - 13)}%)`], ['--o-300', `hsl(${c.h} ${sat}% ${Math.min(88, c.l + 22)}%)`],
+        ['--o-100', `hsl(${c.h} ${Math.max(45, sat - 10)}% 94%)`], ['--o-50', `hsl(${c.h} ${Math.max(45, sat - 15)}% 97%)`]];
+      v.forEach(([k, val]) => root.style.setProperty(k, val));
+    }
+    if (pick && hex) {
+      const sync = src => {
+        if (src === 'pick' && pick.value) hex.value = String(pick.value).toUpperCase();
+        if (src === 'hex' && /^#?[0-9a-fA-F]{6}$/.test(hex.value.trim())) {
+          const val = '#' + hex.value.trim().replace('#', '');
+          pick.value = val; apply(val); return;
+        }
+        apply(pick.value);
+      };
+      pick.addEventListener('input', () => sync('pick'));
+      hex.addEventListener('input', () => sync('hex'));
+    }
+    $$('[data-tema-set]').forEach(b => b.addEventListener('click', () => {
+      const val = b.dataset.temaSet;
+      if (pick) pick.value = val;
+      if (hex) hex.value = val;
+      apply(val);
+    }));
+    /* pratinjau ikon menu saat berkas dipilih */
+    $$('[data-ico-input]').forEach(inp => {
+      inp.addEventListener('change', () => {
+        const f = inp.files && inp.files[0];
+        if (!f) return;
+        const box = document.querySelector('[data-ico-preview="' + inp.dataset.icoInput + '"]');
+        if (!box) return;
+        if (!/png$/i.test(f.type) && !/\.png$/i.test(f.name)) { alert('Ikon menu harus berkas PNG.'); inp.value = ''; return; }
+        const url = URL.createObjectURL(f);
+        box.innerHTML = '<img src="' + url + '" alt="">';
+      });
+    });
+  }());
+
+  /* ===== manajer tampilan menu: drag & drop baris + kelompok ===== */
+  (function () {
+    const form = document.getElementById('fMenu');
+    if (!form) return;
+    const rowsOf = () => $$('.menu-tbl tbody');
+    function renumber() {
+      rowsOf().forEach(tb => Array.from(tb.querySelectorAll('tr.drag-row')).forEach((tr, i) => {
+        const n = tr.querySelector('[data-rownum]');
+        if (n) n.textContent = String(i + 1);
+      }));
+    }
+    /* geser baris dengan tombol ▲▼ */
+    $$('[data-row-up]').forEach(b => b.addEventListener('click', () => {
+      const tr = b.closest('tr');
+      if (tr && tr.previousElementSibling) { tr.parentNode.insertBefore(tr, tr.previousElementSibling); renumber(); }
+    }));
+    $$('[data-row-down]').forEach(b => b.addEventListener('click', () => {
+      const tr = b.closest('tr');
+      if (tr && tr.nextElementSibling) { tr.parentNode.insertBefore(tr.nextElementSibling, tr); renumber(); }
+    }));
+    /* drag & drop baris */
+    let dragRow = null;
+    $$('tr.drag-row').forEach(tr => {
+      tr.addEventListener('dragstart', e => {
+        dragRow = tr; tr.classList.add('dragging');
+        try { e.dataTransfer.setData('text/plain', tr.dataset.href || ''); } catch (err) { }
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      tr.addEventListener('dragend', () => { tr.classList.remove('dragging'); $$('tr.drag-row').forEach(x => x.classList.remove('drop-before', 'drop-after')); dragRow = null; });
+      tr.addEventListener('dragover', e => {
+        if (!dragRow || dragRow === tr || dragRow.parentNode !== tr.parentNode) return;
+        e.preventDefault();
+        const r = tr.getBoundingClientRect();
+        const before = (e.clientY - r.top) < r.height / 2;
+        tr.classList.toggle('drop-before', before);
+        tr.classList.toggle('drop-after', !before);
+      });
+      tr.addEventListener('dragleave', () => tr.classList.remove('drop-before', 'drop-after'));
+      tr.addEventListener('drop', e => {
+        if (!dragRow || dragRow === tr || dragRow.parentNode !== tr.parentNode) return;
+        e.preventDefault();
+        const before = tr.classList.contains('drop-before');
+        tr.parentNode.insertBefore(dragRow, before ? tr : tr.nextSibling);
+        tr.classList.remove('drop-before', 'drop-after');
+        renumber();
+      });
+    });
+    /* geser kelompok menu */
+    const moveGroup = (card, dir) => {
+      const parent = card.parentNode;
+      const sib = dir < 0 ? card.previousElementSibling : card.nextElementSibling;
+      if (sib && sib.classList.contains('menu-group')) {
+        parent.insertBefore(dir < 0 ? card : sib, dir < 0 ? sib : card);
+      }
+    };
+    $$('[data-group-up]').forEach(b => b.addEventListener('click', () => moveGroup(b.closest('.menu-group'), -1)));
+    $$('[data-group-down]').forEach(b => b.addEventListener('click', () => moveGroup(b.closest('.menu-group'), 1)));
+    let dragGroup = null;
+    $$('.menu-group').forEach(card => {
+      card.addEventListener('dragstart', e => {
+        if (e.target.closest('tr')) { e.stopPropagation(); return; }
+        dragGroup = card; card.classList.add('dragging');
+        try { e.dataTransfer.setData('text/plain', card.dataset.groupid || ''); } catch (err) { }
+      });
+      card.addEventListener('dragend', () => { card.classList.remove('dragging'); dragGroup = null; });
+      card.addEventListener('dragover', e => { if (dragGroup && dragGroup !== card) { e.preventDefault(); } });
+      card.addEventListener('drop', e => {
+        if (!dragGroup || dragGroup === card) return;
+        e.preventDefault();
+        const r = card.getBoundingClientRect();
+        const before = e.clientY < r.top + r.height / 2;
+        card.parentNode.insertBefore(dragGroup, before ? card : card.nextSibling);
+      });
+    });
+    /* tombol per kelompok: tampilkan / sembunyikan */
+    $$('[data-menu-all]').forEach(b => b.addEventListener('click', () => {
+      const card = b.closest('.menu-group');
+      card.querySelectorAll('input[name="show"]').forEach(c => { if (!c.disabled) c.checked = true; });
+    }));
+    $$('[data-menu-none]').forEach(b => b.addEventListener('click', () => {
+      const card = b.closest('.menu-group');
+      card.querySelectorAll('input[name="show"]').forEach(c => { if (!c.disabled) c.checked = false; });
+    }));
+    /* saat submit: kirim urutan baris & kelompok */
+    form.addEventListener('submit', () => {
+      const order = [];
+      $$('.menu-group').forEach(card => card.querySelectorAll('tr.drag-row').forEach(tr => order.push(tr.dataset.href)));
+      const go = $$('.menu-group').map(c => c.dataset.groupid);
+      const o = document.getElementById('nav_order'); if (o) o.value = order.join(',');
+      const g = document.getElementById('group_order'); if (g) g.value = go.join(',');
+    });
+    renumber();
+  }());
 })();

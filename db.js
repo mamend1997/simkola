@@ -4,15 +4,50 @@ const fs = require('fs');
 // muat konfigurasi .env sebelum apa pun membaca process.env (DB_PATH, dsb.)
 require('./env');
 const Database = require('better-sqlite3');
+const { AsyncLocalStorage } = require('async_hooks');
 const { hashPassword, nowStamp, todayISO, parseMoney } = require('./lib');
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'keuangan.sqlite');
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+/* ==================================================================
+   KONEKSI DATABASE: UTAMA + SANDBOX AKUN DEMO
+   ------------------------------------------------------------------
+   Akun berperan "demo" membaca & menulis DATABASE DUMMY yang terpisah
+   (data/demo.sqlite). Semua kode tetap memakai `db.prepare(...)` seperti
+   biasa; proxy di bawah mengarahkan setiap query ke koneksi yang sedang
+   aktif pada request tersebut (AsyncLocalStorage). Di luar request demo,
+   seluruh query memakai database utama — tidak ada perubahan perilaku.
+   ================================================================== */
+const mainDb = new Database(DB_PATH);
+mainDb.pragma('journal_mode = WAL');
+mainDb.pragma('foreign_keys = ON');
+
+const DEMO_DB_PATH = process.env.DEMO_DB_PATH || path.join(DATA_DIR, 'demo.sqlite');
+const dbStore = new AsyncLocalStorage();
+let demoConn = null;
+
+const db = new Proxy({}, {
+  get(_target, prop) {
+    const conn = dbStore.getStore() || mainDb;
+    const v = conn[prop];
+    return typeof v === 'function' ? v.bind(conn) : v;
+  },
+  has() { return true; }
+});
+/** jalankan fn dengan koneksi sandbox demo */
+function runAsDemo(fn) { return dbStore.run(demoHandle(), fn); }
+function demoHandle() {
+  if (!demoConn) {
+    const conn = new Database(DEMO_DB_PATH);
+    conn.pragma('journal_mode = WAL');
+    conn.pragma('foreign_keys = ON');
+    demoConn = conn;
+  }
+  return demoConn;
+}
+function isDemoContext() { return !!dbStore.getStore(); }
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT);
@@ -310,6 +345,29 @@ CREATE TABLE IF NOT EXISTS cloud_backup (
   dihapus INTEGER NOT NULL DEFAULT 0, durasi_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_backup_waktu ON cloud_backup(waktu);
+/* ---------- Beasiswa multi-grup iuran ---------- */
+CREATE TABLE IF NOT EXISTS beasiswa_grup (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  beasiswa_id INTEGER NOT NULL,
+  grup_id INTEGER NOT NULL,
+  bulan_mask TEXT,
+  UNIQUE(beasiswa_id, grup_id)
+);
+/* ---------- Petunjuk Pengguna: panduan bergambar + video/PDF ---------- */
+CREATE TABLE IF NOT EXISTS panduan (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  judul TEXT NOT NULL,
+  kategori TEXT,
+  ringkas TEXT,
+  thumbnail TEXT,
+  video_url TEXT,
+  pdf_url TEXT,
+  urutan INTEGER NOT NULL DEFAULT 0,
+  aktif INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
 `;
 
 const DEFAULT_PERMS = {
@@ -346,24 +404,38 @@ const MODULES = [
   { key: 'catatan', label: 'Catatan Pegawai' },
   { key: 'laporan', label: 'Laporan & Export' },
   { key: 'audit', label: 'Audit Log' },
-  { key: 'backup', label: 'Backup & Restore' }
+  { key: 'backup', label: 'Backup & Restore' },
+  { key: 'panduan', label: 'Petunjuk Pengguna' }
 ];
 const ACTIONS = ['view', 'create', 'edit', 'delete', 'approve', 'export'];
 
-const ROLE_LABEL = { super_admin: 'Super Admin / Bendahara Utama', kepala_sekolah: 'Kepala Sekolah', staff: 'Staff / Staf Inputer' };
+const ROLE_LABEL = {
+  super_admin: 'Super Admin / Bendahara Utama',
+  kepala_sekolah: 'Kepala Sekolah',
+  staff: 'Staff / Staf Inputer',
+  demo: 'Akun Demo (Sandbox / Data Dummy)'
+};
+const ROLES = ['super_admin', 'kepala_sekolah', 'staff', 'demo'];
+/** modul yang TIDAK boleh dibuka akun demo secara bawaan (bisa diubah admin lewat Permission Matrix) */
+const DEMO_BLOCKED = ['pengguna', 'sekolah', 'backup', 'trash', 'audit', 'tahun_ajaran', 'saldo_awal'];
 
 function defaultAllowed(role, module, action) {
   if (role === 'super_admin') return 1;
+  if (role === 'demo') {
+    if (DEMO_BLOCKED.includes(module)) return 0;
+    // sandbox: semua modul operasional boleh dicoba (tanpa menu sistem)
+    return 1;
+  }
   const AKADEMIK = ['siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran', 'ekskul'];
   if (role === 'kepala_sekolah') {
-    if (action === 'view') return ['dashboard', 'transaksi', 'laporan', 'bku', 'anggaran', 'piutang', 'piutang_lain', 'piutang_lainnya', 'sekolah', 'audit', 'tutup_bulanan', 'import', 'pegawai', 'payroll', 'beasiswa', 'mutasi_kas', 'catatan', ...AKADEMIK].includes(module) ? 1 : 0;
+    if (action === 'view') return ['dashboard', 'transaksi', 'laporan', 'bku', 'anggaran', 'piutang', 'piutang_lain', 'piutang_lainnya', 'sekolah', 'audit', 'tutup_bulanan', 'import', 'pegawai', 'payroll', 'beasiswa', 'mutasi_kas', 'catatan', 'panduan', ...AKADEMIK].includes(module) ? 1 : 0;
     if (action === 'approve' && module === 'transaksi') return 1;
     if (action === 'edit' && module === 'catatan') return 1;
     if (action === 'export' && ['laporan', 'payroll', 'iuran'].includes(module)) return 1;
     return 0;
   }
   if (role === 'staff') {
-    if (action === 'view') return ['dashboard', 'transaksi', 'bku', 'piutang', 'piutang_lain', 'piutang_lainnya', 'saldo_awal', 'coa', 'aset', 'pegawai', 'beasiswa', 'mutasi_kas', 'catatan', ...AKADEMIK].includes(module) ? 1 : 0;
+    if (action === 'view') return ['dashboard', 'transaksi', 'bku', 'piutang', 'piutang_lain', 'piutang_lainnya', 'saldo_awal', 'coa', 'aset', 'pegawai', 'beasiswa', 'mutasi_kas', 'catatan', 'panduan', ...AKADEMIK].includes(module) ? 1 : 0;
     if (action === 'create') return ['transaksi', 'piutang', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa', 'ekskul', 'catatan'].includes(module) ? 1 : 0;
     if (action === 'edit') return ['transaksi', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa'].includes(module) ? 1 : 0;
     return 0;
@@ -472,6 +544,13 @@ function bootstrap() {
       kw_trx_ml_mm: '8',
       kw_trx_mr_mm: '8',
       app_nama: 'SIMKEU Sekolah',
+      app_logo: '',
+      // ---- tampilan: warna dasar aplikasi + penataan menu (drag & drop, label, ikon PNG) ----
+      tema_warna: '#F97316',
+      nav_ui: '{}',
+      // ---- akun demo (sandbox): keterangan & penanda reset ----
+      demo_catatan: 'Akun ini memakai database DUMMY terpisah. Semua perubahan tidak memengaruhi data sekolah.',
+      demo_seed_ver: '1',
       // ---- Auto-Backup Google Drive (menu Pengaturan Backup) ----
       // kredensial Service Account (isi file JSON) & Folder ID tujuan
       gdrive_credentials: '',
@@ -496,7 +575,7 @@ function bootstrap() {
     // permissions — INSERT OR IGNORE agar modul baru otomatis terisi tanpa menimpa kustomisasi
     {
       const ins = db.prepare('INSERT OR IGNORE INTO permissions (role,module,action,allowed) VALUES (?,?,?,?)');
-      for (const role of ['super_admin', 'kepala_sekolah', 'staff']) {
+      for (const role of ['super_admin', 'kepala_sekolah', 'staff', 'demo']) {
         for (const m of MODULES) {
           for (const a of ACTIONS) {
             ins.run(role, m.key, a, defaultAllowed(role, m.key, a));
@@ -835,6 +914,124 @@ function settingsAll() {
 }
 
 /* ==================================================================
+   TAMPILAN: WARNA TEMA, BRANDING & PENATAAN MENU
+   ================================================================== */
+const TEMA_DEFAULT = '#F97316';
+/** setting tema disimpan sebagai hex; nilai rusak dikembalikan ke bawaan */
+function temaWarna() {
+  const v = String(getSetting('tema_warna', TEMA_DEFAULT) || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toUpperCase() : TEMA_DEFAULT;
+}
+function appNama() { return String(getSetting('app_nama', 'SIMKEU Sekolah') || 'SIMKEU Sekolah').trim() || 'SIMKEU Sekolah'; }
+function appLogo() { return String(getSetting('app_logo', '') || '').trim(); }
+
+/** struktur penataan menu: { groups:{gid:urutan}, order:{href:urutan}, labels:{href:teks}, icons:{href:url} } */
+function navUi() {
+  let raw = {};
+  try { raw = JSON.parse(getSetting('nav_ui', '{}') || '{}') || {}; } catch (e) { raw = {}; }
+  const out = { groups: {}, order: {}, labels: {}, icons: {} };
+  for (const key of ['groups', 'order', 'labels', 'icons']) {
+    const src = raw[key];
+    if (!src || typeof src !== 'object') continue;
+    for (const [k, v] of Object.entries(src)) {
+      if (key === 'labels' || key === 'icons') {
+        const s = String(v == null ? '' : v).trim();
+        if (s) out[key][k] = s.slice(0, key === 'icons' ? 500 : 80);
+      } else {
+        const n = Number(v);
+        if (Number.isFinite(n)) out[key][k] = n;
+      }
+    }
+  }
+  return out;
+}
+function setNavUi(obj) { setSetting('nav_ui', JSON.stringify(obj || {})); }
+
+/* ---------- setting GLOBAL (selalu database utama, termasuk saat sesi demo) ---------- */
+function mainSetting(k, d = '') {
+  const r = mainDb.prepare('SELECT v FROM settings WHERE k=?').get(k);
+  return r ? r.v : d;
+}
+function temaWarnaGlobal() {
+  const v = String(mainSetting('tema_warna', TEMA_DEFAULT) || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toUpperCase() : TEMA_DEFAULT;
+}
+function appNamaGlobal() {
+  const v = String(mainSetting('app_nama', 'SIMKEU Sekolah') || '').trim();
+  return v || 'SIMKEU Sekolah';
+}
+function appLogoGlobal() { return String(mainSetting('app_logo', '') || '').trim(); }
+/** tulis setting GLOBAL (selalu database utama) — dipakai pengaturan tampilan menu */
+function setMainSetting(k, v) {
+  mainDb.prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(String(k), String(v ?? ''));
+  portalSlugCache = null;
+}
+function setNavUiGlobal(obj) { setMainSetting('nav_ui', JSON.stringify(obj || {})); }
+function navUiGlobal() {
+  let raw = {};
+  try { raw = JSON.parse(mainSetting('nav_ui', '{}') || '{}') || {}; } catch (e) { raw = {}; }
+  const out = { groups: {}, order: {}, labels: {}, icons: {} };
+  for (const key of ['groups', 'order', 'labels', 'icons']) {
+    const src = raw[key];
+    if (!src || typeof src !== 'object') continue;
+    for (const [k, v] of Object.entries(src)) {
+      if (key === 'labels' || key === 'icons') {
+        const s = String(v == null ? '' : v).trim();
+        if (s) out[key][k] = s.slice(0, key === 'icons' ? 500 : 80);
+      } else {
+        const n = Number(v);
+        if (Number.isFinite(n)) out[key][k] = n;
+      }
+    }
+  }
+  return out;
+}
+
+/* ---------- Petunjuk Pengguna ---------- */
+function panduanList(opts = {}) {
+  let sql = 'SELECT * FROM panduan';
+  const args = [];
+  if (opts.aktifOnly) sql += ' WHERE aktif=1';
+  sql += ' ORDER BY urutan, id';
+  const rows = db.prepare(sql).all(...args);
+  return opts.kategori ? rows.filter(r => String(r.kategori || '') === String(opts.kategori)) : rows;
+}
+function panduanById(id) { return id ? db.prepare('SELECT * FROM panduan WHERE id=?').get(Number(id)) : null; }
+function panduanSave(data) {
+  const id = Number(data.id || 0);
+  const f = {
+    judul: String(data.judul || '').trim().slice(0, 160),
+    kategori: String(data.kategori || '').trim().slice(0, 60),
+    ringkas: String(data.ringkas || '').trim().slice(0, 600),
+    thumbnail: String(data.thumbnail || '').trim().slice(0, 500),
+    video_url: String(data.video_url || '').trim().slice(0, 500),
+    pdf_url: String(data.pdf_url || '').trim().slice(0, 500),
+    urutan: Number(data.urutan || 0) || 0,
+    aktif: data.aktif ? 1 : 0
+  };
+  if (!f.judul) return null;
+  if (id) {
+    db.prepare(`UPDATE panduan SET judul=?,kategori=?,ringkas=?,thumbnail=?,video_url=?,pdf_url=?,urutan=?,aktif=?,updated_at=? WHERE id=?`)
+      .run(f.judul, f.kategori, f.ringkas, f.thumbnail, f.video_url, f.pdf_url, f.urutan, f.aktif, nowStamp(), id);
+    return panduanById(id);
+  }
+  const info = db.prepare(`INSERT INTO panduan (judul,kategori,ringkas,thumbnail,video_url,pdf_url,urutan,aktif,created_by,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(f.judul, f.kategori, f.ringkas, f.thumbnail, f.video_url, f.pdf_url, f.urutan, f.aktif,
+      String(data.oleh || ''), nowStamp(), nowStamp());
+  return panduanById(Number(info.lastInsertRowid));
+}
+function panduanDelete(id) {
+  const row = panduanById(id);
+  if (row) db.prepare('DELETE FROM panduan WHERE id=?').run(row.id);
+  return row;
+}
+function panduanUrutkan(ids) {
+  const upd = db.prepare('UPDATE panduan SET urutan=? WHERE id=?');
+  (ids || []).map(Number).filter(Boolean).forEach((id, i) => upd.run(i + 1, id));
+}
+
+/* ==================================================================
    ALAMAT (SLUG) PORTAL PUBLIK — dapat diubah dari menu Identitas Sekolah
    ------------------------------------------------------------------
    Tiga portal publik punya ujung alamat yang bisa diatur sendiri:
@@ -850,8 +1047,8 @@ const RESERVED_SLUGS = new Set(['login', 'logout', 'assets', 'favicon.ico', 'fav
   'coa', 'bku', 'import', 'audit', 'trash', 'approval', 'rekon', 'piutang', 'piutang-lain', 'piutang-lainnya',
   'beasiswa', 'ekskul', 'tahun-ajaran', 'anggaran', 'saldo-awal', 'mutasi-kas', 'mutasi-kelas', 'kelas',
   'program-keahlian', 'tutup-bulanan', 'desain-cetak', 'reset-tahun', 'audit-orphan', 'tampilan-menu',
-  'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip',
-  'pengaturan-backup']);
+  'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'catatan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip',
+  'pengaturan-backup', 'tema', 'spp', 'petunjuk']);
 function normalizePortalSlug(raw, fallback) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   if (s.length < 3 || s.length > 40) return fallback;
@@ -1162,22 +1359,29 @@ function sppTerimaMap(taId) {
 }
 /** deret 12 bulan penerimaan SPP (untuk line chart dashboard) */
 function sppSeries(taId) {
-  const ta = taId ? db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(taId) : null;
-  const paid = sppTerimaMap(taId);
-  const tagih = {};
-  if (taId) for (const r of db.prepare('SELECT bulan, total_ditagihkan FROM spp WHERE tahun_ajaran_id=?').all(taId)) tagih[r.bulan] = Number(r.total_ditagihkan || 0);
-  const out = [];
-  for (let i = 0; i < 12; i++) {
-    const b = BULAN_TA[i];
-    const m = ta ? Number(String(sppPeriode(ta, b) || '').slice(5, 7)) : b;
-    out.push({
-      bulan: b,
-      label: `${String(NAMA_BULAN[(m || b) - 1] || '').slice(0, 3)}`,
-      diterima: Number(paid[b] || 0),
-      ditagihkan: Number(tagih[b] || 0)
-    });
+  const months = BULAN_TA.map(b => ({ bulan: b, label: `${String(NAMA_BULAN[b - 1] || '').slice(0, 3)}`, diterima: 0, ditagihkan: 0 }));
+  if (!taId) return months;
+  // sumber angka = DATA IURAN RIIL (grup bulanan bernama SPP; bila tidak ada, seluruh grup bulanan)
+  const groups = iuranGrupList(taId, {}).filter(g => g.jenis === 'bulanan');
+  const sppOnly = groups.filter(g => /\bspp\b/i.test(String(g.nama || '').trim()));
+  const use = sppOnly.length ? sppOnly : groups;
+  if (!use.length) return months;
+  const ids = new Set(use.map(g => g.id));
+  const tags = iuranTagihanRows({ taId, aktifOnly: true }).filter(t => ids.has(t.grup_id));
+  const pays = iuranPaysMap(tags.map(t => t.id));
+  const acc = new Map();
+  for (const t of tags) {
+    for (const m of iuranMonthDetail(t.grup_id, pays.get(t.id) || [])) {
+      const cur = acc.get(m.bulan) || { tagihan: 0, dibayar: 0 };
+      cur.tagihan += Number(m.tagihan || 0);
+      cur.dibayar += Number(m.dibayar || 0);
+      acc.set(m.bulan, cur);
+    }
   }
-  return out;
+  return months.map(m => {
+    const a = acc.get(m.bulan) || { tagihan: 0, dibayar: 0 };
+    return { ...m, diterima: a.dibayar, ditagihkan: a.tagihan };
+  });
 }
 function sppTunggakan(tahunId) {
   const list = tahunId
@@ -2148,6 +2352,39 @@ function cleanupOrphanPiutang(user) {
 bootstrap();
 
 /* ==================================================================
+   SANDBOX AKUN DEMO — database dummy terpisah
+   Dibuat sekali saat pertama dibutuhkan: skema + master data awal
+   (CoA, BKU, tahun ajaran, aset) tanpa data transaksi sekolah asli.
+   ================================================================== */
+function ensureDemoDb() {
+  if (demoConn) return demoConn;
+  const conn = demoHandle();
+  dbStore.run(conn, () => {
+    const has = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
+    if (!has) bootstrap();
+    setSetting('demo_catatan', getSetting('demo_catatan', 'Akun ini memakai database DUMMY terpisah. Semua perubahan tidak memengaruhi data sekolah.'));
+  });
+  return conn;
+}
+/* reset isi database demo ke kondisi awal (master saja) */
+function resetDemoDb() {
+  const conn = demoHandle();
+  const tables = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+  dbStore.run(conn, () => {
+    db.transaction(() => {
+      for (const t of tables) {
+        if (['settings', 'permissions'].includes(t.name)) continue;
+        db.prepare(`DELETE FROM ${t.name}`).run();
+      }
+      // bersihkan master yang dibuat bootstrap agar ikut dibuat ulang
+      setSetting('demo_reset_at', nowStamp());
+    })();
+    bootstrap();
+  });
+  return true;
+}
+
+/* ==================================================================
    PEMBERSIHAN DATA HANTU (ORPHAN / PHANTOM) — HARD DELETE
    ------------------------------------------------------------------
    Menyapu baris yang TIDAK MUNGKIN lagi tampil di UI mana pun karena
@@ -2784,8 +3021,15 @@ function iuranAnalytics(taId) {
         nonBulanan.tagihan += Number(t.nominal || 0);
         for (const p of list) {
           const metode = p.metode === 'transfer' ? 'transfer' : 'tunai';
-          nonBulanan.dibayar += Number(p.jumlah || 0);
-          if (g) { g.total[metode] += Number(p.jumlah || 0); }
+          const nominal = Number(p.jumlah || 0);
+          nonBulanan.dibayar += nominal;
+          if (g) {
+            g.total[metode] += nominal;
+            // iuran non-bulanan dibukukan pada BULAN TANGGAL PEMBAYARAN agar kolom
+            // Juli–Juni pada tabel "Rincian Penerimaan per Grup" ikut terisi
+            const pm = Number(String(p.tanggal || '').slice(5, 7)) || 0;
+            if (pm >= 1 && pm <= 12 && g.sel[pm]) g.sel[pm][metode] += nominal;
+          }
         }
       }
     }
@@ -2864,6 +3108,8 @@ function portalPesanList(opts = {}) {
   let sql = 'SELECT * FROM portal_pesan WHERE 1=1';
   const args = [];
   if (opts.status) { sql += ' AND status=?'; args.push(opts.status); }
+  if (opts.sumber === 'siswa') sql += " AND COALESCE(NULLIF(sumber,''),'siswa')='siswa'";
+  else if (opts.sumber) { sql += ' AND sumber=?'; args.push(opts.sumber); }
   sql += ' ORDER BY (status=\'selesai\'), id DESC LIMIT ' + (Number(opts.limit) || 100);
   return db.prepare(sql).all(...args);
 }
@@ -3043,6 +3289,23 @@ function resetTaData(taId, user, opts = {}) {
    - tagihan ditandai beasiswa_locked=1 → tidak bisa diedit/dihapus dari
      halaman Data Iuran; perubahan hanya lewat Modul Beasiswa.
    ================================================================== */
+/** daftar grup iuran yang mendapat potongan satu beasiswa (fallback ke kolom lama) */
+function beasiswaGrupList(beasiswaId) {
+  const rows = db.prepare('SELECT * FROM beasiswa_grup WHERE beasiswa_id=? ORDER BY id').all(Number(beasiswaId) || 0);
+  if (rows.length) return rows;
+  const b = db.prepare('SELECT * FROM beasiswa WHERE id=?').get(Number(beasiswaId) || 0);
+  return b && b.grup_id ? [{ grup_id: b.grup_id, bulan_mask: b.bulan_mask || '' }] : [];
+}
+function beasiswaGrupSet(beasiswaId, list) {
+  const id = Number(beasiswaId) || 0;
+  if (!id) return;
+  db.prepare('DELETE FROM beasiswa_grup WHERE beasiswa_id=?').run(id);
+  const ins = db.prepare('INSERT OR IGNORE INTO beasiswa_grup (beasiswa_id,grup_id,bulan_mask) VALUES (?,?,?)');
+  for (const g of list || []) {
+    const gid = Number(g.grup_id || g.id || 0);
+    if (gid) ins.run(id, gid, String(g.bulan_mask || ''));
+  }
+}
 function beasiswaShare(beasiswaRow, recips) {
   const b = beasiswaRow || {};
   const n = Math.max(1, (recips || []).length);
@@ -3059,51 +3322,52 @@ function beasiswaSync(beasiswaId) {
     // bersihkan jejak sebelumnya (idempoten)
     db.prepare("DELETE FROM iuran_bayar WHERE sumber='beasiswa' AND beasiswa_id=?").run(id);
     db.prepare('UPDATE iuran_tagihan SET beasiswa_locked=0, beasiswa_id=NULL WHERE beasiswa_id=?').run(id);
-    if (!b || !Number(b.aktif) || !b.grup_id) return;
-    const g = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(b.grup_id);
-    if (!g) return;
-    const nom = iuranNominalMap(g.id);
-    const allMonths = BULAN_TA.filter(m => Number(nom[m] || 0) > 0);
-    const mask = String(b.bulan_mask || '').split(',').map(Number).filter(Boolean);
-    const months = g.jenis === 'bulanan'
-      ? (mask.length ? allMonths.filter(m => mask.includes(m)) : allMonths)
-      : [null];
-    if (!months.length) return;
-    const total = g.jenis === 'bulanan'
-      ? months.reduce((a2, m) => a2 + Number(nom[m] || 0), 0)
-      : Object.values(nom).reduce((a2, v) => a2 + Number(v || 0), 0);
-    if (!(total > 0)) return;
+    if (!b || !Number(b.aktif)) return;
+    const glist = beasiswaGrupList(id);
+    if (!glist.length) return;
     const recips = db.prepare('SELECT * FROM beasiswa_siswa WHERE beasiswa_id=?').all(id);
     if (!recips.length) return;
-    const perSiswa = recips.length === Number(b.n_siswa) || recips.length === 1
-      ? (Number(recips[0].nominal) || beasiswaShare(b, recips))
-      : beasiswaShare(b, recips);
-    const share = perSiswa > 0 ? perSiswa : beasiswaShare(b, recips);
+    // nominal tersimpan = potongan untuk SEMUA penerima → bagi rata per siswa
+    const perSiswa = Math.max(0, Math.round(Number(b.nominal || 0) / recips.length)) || Number(b.nominal || 0);
     const ins = db.prepare(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,keterangan,bku_id,transaksi_id,status,bulan,sumber,beasiswa_id,created_at)
       VALUES (?,?,?,?,?,?,'beasiswa',?,NULL,NULL,'beasiswa',?,'beasiswa',?,?)`);
     const tgl = todayISO();
     for (const r of recips) {
-      let t = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?').get(g.id, r.siswa_id);
-      if (!t) {
-        const info = db.prepare(`INSERT INTO iuran_tagihan (grup_id,siswa_id,tahun_ajaran_id,nominal,potongan,keterangan,created_at)
-          VALUES (?,?,?,?,0,?,?)`).run(g.id, r.siswa_id, g.tahun_ajaran_id, total, 'Dibuat otomatis oleh beasiswa', nowStamp());
-        t = { id: Number(info.lastInsertRowid), nominal: total };
-      } else if (Number(t.nominal || 0) !== total) {
-        db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(total, t.id);
-      }
-      db.prepare('UPDATE iuran_tagihan SET beasiswa_locked=1, beasiswa_id=? WHERE id=?').run(id, t.id);
+      let sisaShare = perSiswa;
       students++;
-      // alokasi beasiswa per bulan; bulan tanpa alokasi tetap LUNAS dengan potongan penuh
-      let sisaShare = share;
-      for (const m of months) {
-        const tagih = g.jenis === 'bulanan' ? Number(nom[m] || 0) : total;
-        if (!(tagih > 0)) continue;
-        const pakai = Math.max(0, Math.min(tagih, sisaShare));
-        sisaShare -= pakai;
-        const pot = Math.max(0, tagih - pakai);
-        ins.run(t.id, r.siswa_id, tgl, tagih, pot, pakai,
-          `Beasiswa ${b.nama}${m ? ' — ' + (NAMA_BULAN[m - 1] || '') : ''}`, m, id, nowStamp());
-        rows++;
+      for (const gg of glist) {
+        const g = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(gg.grup_id);
+        if (!g) continue;
+        const nom = iuranNominalMap(g.id);
+        const allMonths = BULAN_TA.filter(m => Number(nom[m] || 0) > 0);
+        const mask = String(gg.bulan_mask || b.bulan_mask || '').split(',').map(Number).filter(Boolean);
+        const months = g.jenis === 'bulanan'
+          ? (mask.length ? allMonths.filter(m => mask.includes(m)) : allMonths)
+          : [null];
+        if (!months.length) continue;
+        const total = g.jenis === 'bulanan'
+          ? months.reduce((a2, m) => a2 + Number(nom[m] || 0), 0)
+          : Object.values(nom).reduce((a2, v) => a2 + Number(v || 0), 0);
+        if (!(total > 0)) continue;
+        let t = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?').get(g.id, r.siswa_id);
+        if (!t) {
+          const info = db.prepare(`INSERT INTO iuran_tagihan (grup_id,siswa_id,tahun_ajaran_id,nominal,potongan,keterangan,created_at)
+            VALUES (?,?,?,?,0,?,?)`).run(g.id, r.siswa_id, g.tahun_ajaran_id, total, 'Dibuat otomatis oleh beasiswa', nowStamp());
+          t = { id: Number(info.lastInsertRowid), nominal: total };
+        } else if (Number(t.nominal || 0) !== total) {
+          db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(total, t.id);
+        }
+        db.prepare('UPDATE iuran_tagihan SET beasiswa_locked=1, beasiswa_id=? WHERE id=?').run(id, t.id);
+        for (const m of months) {
+          const tagih = g.jenis === 'bulanan' ? Number(nom[m] || 0) : total;
+          if (!(tagih > 0)) continue;
+          const pakai = Math.max(0, Math.min(tagih, sisaShare));
+          sisaShare -= pakai;
+          const pot = Math.max(0, tagih - pakai);
+          ins.run(t.id, r.siswa_id, tgl, tagih, pot, pakai,
+            `Beasiswa ${b.nama}${m ? ' — ' + (NAMA_BULAN[m - 1] || '') : ''}`, m, id, nowStamp());
+          rows++;
+        }
       }
     }
   })();
@@ -3130,7 +3394,8 @@ function beasiswaSyncAll() {
 }
 
 module.exports = {
-  db, DB_PATH, getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, autoBku,
+  db, mainDb, DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
+  getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, autoBku,
   bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
   piutangPegawaiTotal, piutangSisa, sppTunggakan, sppPeriode, sppTerimaMap, sppTampil, sppSeries,
@@ -3143,7 +3408,7 @@ module.exports = {
   pegawaiList, payrollCalc, payrollRows, payrollTotals, payrollPost, arusKasData, sertifikasiJam,
   piutangSyncStatus, payrollUnlockByTrx, payrollDraft, payrollDraftSet, payrollPeriods, payrollCopyPrev,
   stripCarryText, isCarryText, piutangBuckets, piutangBucketsAll, piutangRingkasan, cleanupOrphanPiutang, honorPembantuJam, honorWaliJam,
-  totalSaldoDana, MODULES, ACTIONS, ROLE_LABEL, defaultAllowed, BKU_AUTO_NAMES, isAutoBkuNama,
+  totalSaldoDana, MODULES, ACTIONS, ROLE_LABEL, ROLES, DEMO_BLOCKED, defaultAllowed, BKU_AUTO_NAMES, isAutoBkuNama,
   tahunById, taOf, taRange, taOptions, taIdOfDate, rolloverTa,
   NAMA_BULAN, periodeOf, periodeLabel, periodeStart, periodeEnd, prevPeriode, currentPeriode,
   periodeRow, periodeStatus, periodeLockError, periodeEditable, openingFor, monthTotals,
@@ -3158,7 +3423,11 @@ module.exports = {
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
   portalSlugs, portalSlugIsCustom, portalRewrite, portalSlugError, normalizePortalSlug,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
-  portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList,
+  portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,
-  beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData
+  beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData,
+  // tampilan (tema, branding, penataan menu) + petunjuk pengguna
+  temaWarna, appNama, appLogo, navUi, setNavUi, TEMA_DEFAULT,
+  mainSetting, setMainSetting, temaWarnaGlobal, appNamaGlobal, appLogoGlobal, navUiGlobal, setNavUiGlobal,
+  panduanList, panduanById, panduanSave, panduanDelete, panduanUrutkan
 };

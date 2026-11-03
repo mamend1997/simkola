@@ -170,7 +170,7 @@ const periode = today.slice(0, 7);
   const pesan = db.prepare('SELECT * FROM portal_pesan ORDER BY id DESC LIMIT 1').get();
   ok('catatan tersimpan status baru', pesan && pesan.status === 'baru' && pesan.siswa_id === s1.id);
   r = await req('GET', '/');
-  ok('dashboard menampilkan kartu pesan orang tua', /Pesan \/ Catatan Orang Tua/.test(r.text) && /Pembayaran SPP Juli/.test(r.text));
+  ok('dashboard menampilkan kartu pesan orang tua', /Catatan Orang Tua/.test(r.text) && /Pembayaran SPP Juli/.test(r.text));
   r = await req('GET', '/pesan-orangtua');
   ok('halaman pesan orang tua', r.status === 200 && /Tandai Selesai/.test(r.text));
   r = await req('POST', '/pesan-orangtua/selesai', { id: pesan.id, back: '/pesan-orangtua' });
@@ -241,8 +241,8 @@ const periode = today.slice(0, 7);
 
   /* ===== 10. beasiswa baru: grup + bulan + persen + penerima ===== */
   r = await req('GET', '/beasiswa');
-  ok('form beasiswa baru', r.status === 200 && /data-bea-grup/.test(r.text) && /data-bea-bulan/.test(r.text) && /data-bea-nominal/.test(r.text) && /data-bea-persen/.test(r.text));
-  ok('panel penerima + pratinjau ada', /data-bea-preview/.test(r.text) && /data-check-all-box="penerima"/.test(r.text) && /mBeaPreview/.test(r.text));
+  ok('form beasiswa baru', r.status === 200 && /data-bea-group=/.test(r.text) && /data-bea-bulan/.test(r.text) && /data-bea-nominal/.test(r.text) && /data-bea-persen/.test(r.text));
+  ok('panel penerima + rekap ada', /data-check-all-box="penerima"/.test(r.text) && /data-bea-step="3"/.test(r.text) && /data-bea-kelas/.test(r.text));
   const payload = JSON.stringify({
     nama: 'Beasiswa Prestasi', deskripsi: 'Dana yayasan', tahun_ajaran_id: String(ta.id),
     grup_id: String(gSpp.id), bulan_mask: '7,8', nominal_per_siswa: 50000, persen: 50, aktif: true, siswa: [s1.id]
@@ -303,9 +303,9 @@ const periode = today.slice(0, 7);
   const eh = X.readXlsx(Buffer.from(r.text))[0].rows.map(row => row.map(c => X.cellText(c)));
   ok('export ekskul dipisah per jenis', eh.some(x => /PRAMUKA/.test(x.join('|'))) && eh.some(x => /PASKIBRA/.test(x.join('|'))) && eh.some(x => /SUBTOTAL/.test(x.join('|'))));
 
-  /* ===== 14. grafik SPP Juli dulu ===== */
-  r = await req('GET', `/piutang?ta=${ta.id}`);
-  const labels = [...r.text.matchAll(/<text x="[\d.]+" y="[\d.]+" text-anchor="middle" font-size="11" font-weight="600" fill="#5B4A40">([A-Za-z]{3})<\/text>/g)].map(m => m[1]);
+  /* ===== 14. grafik SPP Juli dulu (halaman /spp) ===== */
+  r = await req('GET', `/spp?ta=${ta.id}`);
+  const labels = [...r.text.matchAll(/<text x="[\d.]+" y="[\d.]+" text-anchor="middle" font-size="10.5" fill="#5B4A40">([A-Za-z]{3})<\/text>/g)].map(m => m[1]);
   ok('chart SPP diawali Juli', labels[0] === 'Jul', labels.join(','));
   ok('chart SPP diakhiri Juni', labels[labels.length - 1] === 'Jun', labels.join(','));
 

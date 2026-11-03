@@ -188,6 +188,40 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   /* =========================================================
      GRUP IURAN
      ========================================================= */
+  /** hapus banyak pembayaran iuran sekaligus — riwayat transaksi siswa & (bila ada) BKU ikut dibersihkan */
+  function hapusBayarMassal(ids, user) {
+    const out = { deleted: 0, trxDihapus: 0, kembaliAntrean: 0, ditolak: [] };
+    const uniq = Array.from(new Set((ids || []).map(Number).filter(Boolean)));
+    for (const id of uniq) {
+      const b = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(id);
+      if (!b) { out.ditolak.push(`#${id} tidak ditemukan`); continue; }
+      if (b.status === 'void') { out.ditolak.push(`${b.kwitansi_no}: sudah void`); continue; }
+      if (b.sumber === 'beasiswa' || b.status === 'beasiswa') {
+        out.ditolak.push(`${b.kwitansi_no}: dibayar otomatis oleh beasiswa (kelola lewat menu Beasiswa)`);
+        continue;
+      }
+      if (b.transaksi_id) {
+        const t = db.prepare('SELECT * FROM transaksi WHERE id=?').get(b.transaksi_id);
+        if (t && t.status !== 'void') {
+          const lockErr = dbm.periodeLockError(t.bku_id, t.tanggal, 'edit');
+          if (lockErr) { out.ditolak.push(`${b.kwitansi_no}: ${lockErr}`); continue; }
+          db.transaction(() => {
+            for (const sib of db.prepare('SELECT * FROM iuran_bayar WHERE transaksi_id=? AND id<>?').all(t.id, b.id)) {
+              if (sib.status === 'posted') out.kembaliAntrean++;
+            }
+            db.prepare("UPDATE iuran_bayar SET status='pending', transaksi_id=NULL, posted_at=NULL, bku_id=NULL WHERE transaksi_id=? AND id<>? AND status='posted'").run(t.id, b.id);
+            db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+            out.trxDihapus++;
+          })();
+        }
+      }
+      try { dbm.trashAdd('iuran_bayar', b, { user, label: `Pembayaran iuran ${b.kwitansi_no}` }); } catch (e) { }
+      db.prepare('DELETE FROM iuran_bayar WHERE id=?').run(b.id);
+      out.deleted++;
+    }
+    return out;
+  }
+
   get('/iuran', (req, res) => {
     guard(req, res, 'iuran', 'view');
     const c = ctx(req);
@@ -1258,6 +1292,29 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     res.redirect(req.BASE + backPath + '?ok=' + encodeURIComponent(msg));
   });
 
+  /* ================= HAPUS MASAL PEMBAYARAN IURAN ================= */
+  post('/iuran/bayar/hapus-masal', (req, res) => {
+    guard(req, res, 'iuran', 'delete');
+    const backRaw = String(req.body.back || '/iuran/transaksi');
+    const backPath = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/iuran/transaksi';
+    const ids = [].concat(req.body.ids || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return res.redirect(req.BASE + backPath + '?err=' + encodeURIComponent('Tidak ada data yang dipilih. Centang minimal satu baris.'));
+    const out = hapusBayarMassal(ids, req.user);
+    dbm.logAudit(req.user, 'HAPUS', 'iuran',
+      `Hapus masal ${out.deleted} pembayaran iuran (${ids.length} dipilih)` +
+      `${out.trxDihapus ? ` · ${out.trxDihapus} transaksi BKU dihapus` : ''}` +
+      `${out.kembaliAntrean ? ` · ${out.kembaliAntrean} pembayaran lain kembali ke antrean` : ''}` +
+      `${out.ditolak.length ? ` · ${out.ditolak.length} ditolak` : ''}`);
+    if (!out.deleted) {
+      return res.redirect(req.BASE + backPath + '?err=' + encodeURIComponent('Tidak ada data yang bisa dihapus. ' + out.ditolak.slice(0, 4).join('; ')));
+    }
+    const msg = `${out.deleted} data pembayaran dihapus & hilang dari riwayat transaksi siswa.` +
+      `${out.trxDihapus ? ` ${out.trxDihapus} transaksi BKU terkait ikut dihapus.` : ''}` +
+      `${out.kembaliAntrean ? ` ${out.kembaliAntrean} pembayaran lain pada kwitansi yang sama dikembalikan ke antrean.` : ''}` +
+      `${out.ditolak.length ? ` ${out.ditolak.length} baris dilewati: ${out.ditolak.slice(0, 3).join('; ')}.` : ''}`;
+    res.redirect(req.BASE + backPath + (out.ditolak.length ? '?warn=' : '?ok=') + encodeURIComponent(msg));
+  });
+
   /* =========================================================
      KWITANSI IURAN (ukuran kertas custom + label replika)
      ========================================================= */
@@ -1606,13 +1663,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="field"><label>Sampai</label><input type="date" name="sampai" value="${esc(f.sampai)}"></div>
         <button class="btn">${ui.icon('filter')}Terapkan</button>
       </form>
-      <form id="fKwit" method="get" action="${c.base}/iuran/kwitansi" target="_blank"></form>
+      <form id="fKwit" method="get" action="${c.base}/iuran/kwitansi" target="_blank">
+        <input type="hidden" name="back" value="/iuran/transaksi?${qs}">
+      </form>
       ${rows.length ? `<div class="between mb-1">
         <div class="small muted">Centang beberapa transaksi lalu cetak kwitansinya sekaligus.</div>
         <div class="toolbar">
           <button type="button" class="btn btn-sm" data-check-all="ids">${ui.icon('check')}Pilih Semua</button>
           <button type="button" class="btn btn-sm" data-check-none="ids">${ui.icon('x')}Hapus Ceklis</button>
           <button class="btn btn-sm btn-primary" form="fKwit" type="submit">${ui.icon('printer')}Print Kwitansi Terpilih</button>
+          ${c.can('iuran', 'delete') ? `<button class="btn btn-sm btn-danger" form="fKwit" type="submit"
+            formaction="${c.base}/iuran/bayar/hapus-masal" formmethod="post" formtarget="_self"
+            data-confirm-click="Hapus semua transaksi iuran yang dicentang? Riwayat pembayaran siswa dihapus, tagihan kembali terutang, dan transaksi BKU terkait ikut dihapus.">
+            ${ui.icon('trash')}Hapus Terpilih (<b data-check-count="ids">0</b>)</button>` : ''}
         </div></div>
       <div class="table-scroll tall" id="tblTrxIuran"><table><thead><tr>
         <th style="width:34px"><input type="checkbox" data-check-all-box="ids"></th>
@@ -1706,6 +1769,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const def = coaIuran();
     const sel = selected || (def ? def.id : null);
     return coaPenerimaanList().map(x => `<option value="${x.id}" ${String(x.id) === String(sel) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('');
+  }
+
+  /** toolbar hapus masal (ceklis + pilih semua + tombol hapus) */
+  function deleteToolbar(n, c) {
+    if (!c.can('iuran', 'delete') || !n) return '';
+    return `<div class="toolbar">
+      <span class="small muted">Centang baris untuk hapus masal.</span>
+      <button type="button" class="btn btn-sm" data-check-all="ids">${ui.icon('check')}Pilih Semua</button>
+      <button type="button" class="btn btn-sm" data-check-none="ids">${ui.icon('x')}Hapus Ceklis</button>
+      <button class="btn btn-sm btn-danger" type="submit" form="fHapusAntrean" data-confirm-click="Hapus semua data pembayaran yang dicentang? Data akan hilang dari riwayat transaksi siswa dan (bila sudah terposting) transaksi BKU-nya juga dihapus.">${ui.icon('trash')}Hapus Terpilih (<b data-check-count="ids">0</b>)</button>
+    </div>`;
   }
 
   get('/iuran/antrean', (req, res) => {
@@ -1805,10 +1879,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       })}`).join('')}
       </tbody></table></div>` : ui.emptyState('Antrean kosong', 'Semua penerimaan iuran sudah diposting ke BKU atau disimpan sebagai data non-BKU.')}
     </div>
+    <form id="fHapusAntrean" method="post" action="${c.base}/iuran/bayar/hapus-masal">
+      <input type="hidden" name="back" value="/iuran/antrean">
+    </form>
     <div class="card">
-      <div class="card-head"><div><h3>Rincian Penerimaan Belum Terposting</h3><div class="sub">${pendingRows.length} pembayaran · dapat diedit atau diubah menjadi Non-BKU</div></div></div>
-      ${pendingRows.length ? `<div class="table-scroll short"><table><thead><tr><th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Jumlah</th><th class="num">Potongan</th><th class="num">Dibayar</th><th></th></tr></thead><tbody>
-        ${pendingRows.map(b => `<tr><td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
+      <div class="card-head"><div><h3>Rincian Penerimaan Belum Terposting</h3><div class="sub">${pendingRows.length} pembayaran · dapat diedit, dijadikan Non-BKU, atau dihapus masal</div></div>
+        ${deleteToolbar(pendingRows.length, c)}</div>
+      ${pendingRows.length ? `<div class="table-scroll short"><table id="tblAntreanPending"><thead><tr>
+        <th style="width:36px"><input type="checkbox" data-check-all-box="ids" title="Pilih semua"></th>
+        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Jumlah</th><th class="num">Potongan</th><th class="num">Dibayar</th><th></th></tr></thead><tbody>
+        ${pendingRows.map(b => `<tr><td><input type="checkbox" form="fHapusAntrean" name="ids" value="${b.id}"></td>
+          <td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
           <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
           <td class="num">${rupiah(b.jumlah)}</td><td class="num">${rupiah(b.potongan)}</td><td class="num t-strong">${rupiah(b.dibayar)}</td>
           <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}" title="Edit / jadikan Non-BKU">${ui.icon('edit')}</button>` : ''}</td></tr>
@@ -1817,14 +1898,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </div>
     <div class="card mt-3">
       <div class="card-head"><div><h3>Penerimaan Non-BKU (Data Saja)</h3>
-        <div class="sub">${nonBkuRows.length} penerimaan terakhir · tidak masuk BKU, hanya mengurangi tagihan siswa</div></div></div>
-      ${nonBkuRows.length ? `<div class="table-scroll short"><table><thead><tr><th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Dibayar</th><th>Status</th><th></th></tr></thead><tbody>
-        ${nonBkuRows.map(b => `<tr><td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
+        <div class="sub">${nonBkuRows.length} penerimaan terakhir · tidak masuk BKU, hanya mengurangi tagihan siswa</div></div>
+        ${deleteToolbar(nonBkuRows.length, c)}</div>
+      ${nonBkuRows.length ? `<div class="table-scroll short"><table id="tblAntreanNonBku"><thead><tr>
+        <th style="width:36px"><input type="checkbox" data-check-all-box="ids" title="Pilih semua"></th>
+        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Dibayar</th><th>Status</th><th></th></tr></thead><tbody>
+        ${nonBkuRows.map(b => `<tr><td><input type="checkbox" form="fHapusAntrean" name="ids" value="${b.id}"></td>
+          <td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
           <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
           <td class="num t-strong">${rupiah(b.dibayar)}</td><td>${bayarStatusBadge(b.status, b.sumber)}</td>
           <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}" title="Edit / kembalikan ke antrean BKU">${ui.icon('edit')}</button>` : ''}</td></tr>
           ${late('mE' + b.id, editModal(b))}`).join('')}
-      </tbody></table></div>` : `<div class="help">Belum ada penerimaan yang disimpan sebagai Non-BKU. Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> pada antrean di atas, atau centang Non-BKU saat mencatat pembayaran.</div>`}
+      </tbody></table></div>` : `<div class="help">Belum ada penerimaan yang disimpan sebagai Non-BKU. Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> pada antrean di atas.</div>`}
     </div>
     ${late.html()}`;
     page(req, res, { title: 'Antrean Posting BKU', sub: 'Penerimaan iuran yang belum masuk BKU', active: 'iuran_queue', content });

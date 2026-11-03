@@ -112,9 +112,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const pesanBaru = dbm.portalPesanCount();
     const pesanList = dbm.portalPesanList({ limit: 6 });
     const pesanCard = `<div class="card mb-3" id="pesanOrangTua" style="${pesanBaru ? 'border-color:#F7DFB5;background:#FFFDF7' : ''}">
-      <div class="card-head"><div><h3>Pesan / Catatan Orang Tua &amp; Pegawai ${pesanBaru ? `<span class="badge amber plain">${pesanBaru} baru</span>` : ''}</h3>
+      <div class="card-head"><div><h3>Catatan Orang Tua ${pesanBaru ? `<span class="badge amber plain">${pesanBaru} baru</span>` : ''}</h3>
         <div class="sub">Catatan dari portal publik: tagihan siswa, piutang pegawai &amp; slip gaji pegawai</div></div>
-        <div class="toolbar"><a class="btn btn-sm" href="${c.base}/pesan-orangtua">${ui.icon('inbox')}Semua Pesan</a></div></div>
+        <div class="toolbar"><a class="btn btn-sm" href="${c.base}/catatan-orangtua">${ui.icon('inbox')}Rekap Catatan Orang Tua</a></div></div>
       ${pesanList.length ? `<div class="table-wrap"><table><thead><tr><th>Waktu</th><th>Siswa</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${pesanList.map(x => `<tr>
           <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
@@ -152,7 +152,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const iur = ta ? dbm.iuranAnalytics(ta.id) : { summary: { tagihan: 0, terbayar: 0, potongan: 0, sisa: 0, siswa: 0 }, monthly: [], metode: [], grup: [], nonBulanan: { tagihan: 0, dibayar: 0 } };
     const iurSummary = iur.summary;
     const iurAda = iurSummary.tagihan > 0;
-    const chartRows = iur.monthly.map(m => ({ label: m.label, diterima: m.dibayar, ditagihkan: m.tagihan }));
+    // grafik tunggal: penerimaan SPP per bulan yang dihitung dari DATA IURAN RIIL (dbm.sppSeries)
     const fmtShort = v => {
       const n = Number(v) || 0;
       if (Math.abs(n) >= 1e9) return 'Rp ' + (n / 1e9).toFixed(1).replace('.', ',') + ' M';
@@ -174,10 +174,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       `${iurSummary.tagihan > 0 ? Math.round((iurSummary.terbayar / iurSummary.tagihan) * 100) : 0}% tertagih`)}
       </div>
 
-      <div class="t-strong mb-1">Tren Penerimaan Iuran per Bulan (Juli – Juni)</div>
-      ${iurAda && iur.monthly.some(m => m.tagihan || m.dibayar)
-        ? ui.chartLineSPP(chartRows, { id: 'iur' + (ta ? ta.id : 0) })
-        : ui.emptyState('Belum ada tagihan iuran', 'Tetapkan grup iuran ke siswa untuk menampilkan grafik.')}
+      <div class="t-strong mb-1">Tren Penerimaan SPP per Bulan (Juli – Juni)</div>
+      <div class="help mb-1">Sumber angka: pembayaran iuran yang benar-benar tercatat pada grup <b>SPP</b> — bukan tabel SPP terpisah,
+        sehingga grafik selalu sinkron dengan Data Iuran.</div>
+      ${sppTrendAda
+        ? ui.chartLineSPP(sppTrend, { id: 'spp' + (ta ? ta.id : 0) })
+        : ui.emptyState('Belum ada penerimaan SPP', 'Grafik terbentuk otomatis setelah pembayaran iuran grup SPP dicatat.')}
 
       <div class="t-strong mb-1 mt-3">Rekapitulasi Bulanan (Juli – Juni)</div>
       <div class="table-scroll short"><table class="matrix-tbl"><thead><tr>
@@ -234,7 +236,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           <td class="num t-strong" data-total-tunai="${g.total.tunai}" data-total-transfer="${g.total.transfer}">${rupiah(g.total.tunai + g.total.transfer)}</td></tr>`).join('')
         : '<tr><td colspan="14" class="center muted">Belum ada grup iuran pada tahun pelajaran ini.</td></tr>'}
       </tbody><tfoot><tr><td class="col-name">GRAND TOTAL</td>
-        ${iur.monthly.map(m => `<td class="num" data-foot-bulan="${m.bulan}">${rupiah(m.tunai + m.transfer)}</td>`).join('')}
+        ${iur.monthly.map(m => {
+          const sum = iur.grup.reduce((a, g) => { const c = g.sel[m.bulan] || { tunai: 0, transfer: 0 }; return a + c.tunai + c.transfer; }, 0);
+          return `<td class="num" data-foot-bulan="${m.bulan}">${sum ? rupiah(sum) : '—'}</td>`;
+        }).join('')}
         <td class="num" data-foot-total>${rupiah(iur.grup.reduce((a, g) => a + g.total.tunai + g.total.transfer, 0))}</td></tr></tfoot></table></div>
     </div>`;
 
@@ -293,16 +298,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       <div id="finChart" class="fin-chart">
         ${finBku.length ? '' : ui.emptyState('Belum ada data BKU', 'Grafik akan tampil setelah ada BKU dan transaksi pada tahun ajaran aktif.')}
       </div>
-    </div>
-
-    <div class="card mb-3">
-      <div class="card-head">
-        <div><h3>Tren Penerimaan SPP per Bulan</h3><div class="sub">Line chart penerimaan SPP tahun pelajaran ${esc(ta ? ta.nama : '-')} · total ${rupiah(sppTrendTotal)}</div></div>
-        <a class="btn btn-sm" href="${c.base}/piutang">${ui.icon('card')}Buka Piutang &amp; SPP</a>
-      </div>
-      ${sppTrendAda
-        ? ui.chartLineSPP(sppTrend, { id: 'dash' + (ta ? ta.id : 0) })
-        : ui.emptyState('Belum ada data penerimaan SPP', 'Grafik terbentuk otomatis dari transaksi kode rekening 4.1.01 (Penerimaan SPP) per bulan.')}
     </div>
 
     ${belumTutup.length ? `<div class="card mb-3" style="border-color:#F6CFD0;background:#FFF8F8">
@@ -435,32 +430,48 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     }
   });
 
-  /* ================= PESAN / CATATAN ORANG TUA ================= */
-  get('/pesan-orangtua', (req, res) => {
+  /* ================= CATATAN ORANG TUA (rekap terpisah) ================= */
+  function catatanOrtuPage(req, res) {
     guard(req, res, 'dashboard', 'view');
     const c = ctx(req);
     const st = ['baru', 'selesai'].includes(req.query.get('status') || '') ? req.query.get('status') : '';
-    const rows = dbm.portalPesanList({ status: st || undefined, limit: 300 });
+    const sumber = ['siswa', 'piutang-pegawai', 'slip-pegawai', 'semua'].includes(req.query.get('sumber') || '')
+      ? req.query.get('sumber') : 'semua';
+    const rows = dbm.portalPesanList({ status: st || undefined, sumber: sumber === 'semua' ? undefined : sumber, limit: 400 });
     const baru = rows.filter(x => x.status === 'baru').length;
+    const qs = (extra = '') => {
+      const p = new URLSearchParams();
+      if (st) p.set('status', st);
+      if (sumber !== 'semua') p.set('sumber', sumber);
+      const base = '/catatan-orangtua' + (p.toString() ? '?' + p.toString() : '');
+      if (!extra) return base;
+      return base + (p.toString() ? '&' : '?') + extra;
+    };
     const content = `<div class="card">
-      <div class="card-head"><div><h3>Pesan / Catatan Orang Tua &amp; Pegawai</h3>
-        <div class="sub">${rows.length} catatan · ${baru} belum ditindaklanjuti · dari portal publik (tagihan siswa, piutang &amp; slip pegawai)</div></div>
-        <form method="get" action="${c.base}/pesan-orangtua" class="toolbar">
-          <select name="status" data-autosubmit>
+      <div class="card-head"><div><h3>Rekap Catatan Orang Tua</h3>
+        <div class="sub">${rows.length} catatan · ${baru} belum ditindaklanjuti · dikirim orang tua/wali melalui portal publik</div></div>
+        <form method="get" action="${c.base}/catatan-orangtua" class="toolbar">
+          <select name="sumber" data-autosubmit aria-label="Sumber catatan">
+            <option value="siswa" ${sumber === 'siswa' ? 'selected' : ''}>Tagihan Siswa (orang tua)</option>
+            <option value="piutang-pegawai" ${sumber === 'piutang-pegawai' ? 'selected' : ''}>Piutang Pegawai</option>
+            <option value="slip-pegawai" ${sumber === 'slip-pegawai' ? 'selected' : ''}>Slip Pegawai</option>
+            <option value="semua" ${sumber === 'semua' ? 'selected' : ''}>Semua sumber</option>
+          </select>
+          <select name="status" data-autosubmit aria-label="Status catatan">
             <option value="">Semua Status</option>
             <option value="baru" ${st === 'baru' ? 'selected' : ''}>Baru</option>
             <option value="selesai" ${st === 'selesai' ? 'selected' : ''}>Selesai Ditindaklanjuti</option>
           </select>
         </form></div>
-      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Sumber</th><th>Nama</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Sumber</th><th>Nama Pengirim</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(x => {
-        const sumber = String(x.sumber || 'siswa');
-        const sumberBadge = sumber === 'slip-pegawai' ? ui.badge('Slip Pegawai', 'blue')
-          : sumber === 'piutang-pegawai' ? ui.badge('Piutang Pegawai', 'orange') : ui.badge('Tagihan Siswa', 'gray');
-        const tautan = sumber === 'siswa'
-          ? `<a href="${c.base}/iuran/data/${Number(x.siswa_id) || 0}">buka data iuran</a>`
-          : `<a href="${c.base}/pegawai">data pegawai</a>`;
-        return `<tr>
+      const sm = String(x.sumber || 'siswa');
+      const sumberBadge = sm === 'slip-pegawai' ? ui.badge('Slip Pegawai', 'blue')
+        : sm === 'piutang-pegawai' ? ui.badge('Piutang Pegawai', 'orange') : ui.badge('Tagihan Siswa', 'gray');
+      const tautan = sm === 'siswa'
+        ? `<a href="${c.base}/iuran/data/${Number(x.siswa_id) || 0}">buka data iuran</a>`
+        : `<a href="${c.base}/pegawai">data pegawai</a>`;
+      return `<tr>
           <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
           <td>${sumberBadge}</td>
           <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${tautan}</div></td>
@@ -468,29 +479,51 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           <td class="t-sub">${esc(x.kontak || '-')}</td>
           <td>${x.status === 'selesai' ? ui.badge('Selesai Ditindaklanjuti', 'green') : ui.badge('Baru', 'amber')}
             ${x.status === 'selesai' ? `<div class="t-sub">${esc(String(x.selesai_at || '').slice(0, 16))} · ${esc(x.selesai_by || '')}</div>` : ''}</td>
-          <td class="right nowrap">${x.status === 'selesai' ? '—'
-          : `<form method="post" action="${c.base}/pesan-orangtua/selesai" style="display:inline"><input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="/pesan-orangtua${st ? '?status=' + st : ''}"><button class="btn btn-sm btn-green">${ui.icon('check')}Tandai Selesai</button></form>`}</td>
+          <td class="right nowrap">
+            ${x.status === 'selesai' ? '' : `<form method="post" action="${c.base}/pesan-orangtua/selesai" style="display:inline"><input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="${esc(qs())}"><button class="btn btn-sm btn-green">${ui.icon('check')}Tandai Selesai</button></form>`}
+            ${c.can('dashboard', 'delete') || c.can('catatan', 'delete') ? `<form method="post" action="${c.base}/catatan-orangtua/delete" style="display:inline" data-confirm="Hapus catatan dari ${esc(x.nama || 'pengirim')} ini? Catatan akan hilang permanen.">
+              <input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="${esc(qs())}">
+              <button class="btn btn-sm btn-danger btn-icon" title="Hapus catatan">${ui.icon('trash')}</button></form>` : ''}
+          </td>
         </tr>`;
-      }).join('')}
-      </tbody></table></div>` : ui.emptyState('Belum ada catatan', 'Catatan orang tua/wali & pegawai dari portal publik akan tampil di sini.')}
+    }).join('')}
+      </tbody></table></div>` : ui.emptyState('Belum ada catatan orang tua', 'Catatan orang tua/wali dari portal publik akan tampil di sini.')}
       <p class="help mt-2">Portal publik (alamat dapat diubah di menu <a href="${c.base}/sekolah">Identitas Sekolah</a>):
         <a href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank">tagihan siswa</a> ·
         <a href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank">piutang pegawai</a> ·
         <a href="${c.base}/${dbm.portalSlugs().slip}" target="_blank">slip gaji pegawai</a>
-        — semua catatan otomatis masuk ke sini &amp; dashboard.</p>
+        — catatan orang tua otomatis terkumpul di sini.</p>
     </div>`;
-    page(req, res, { title: 'Pesan / Catatan Orang Tua', sub: 'Umpan balik orang tua/wali dari portal publik', active: 'pesan_orangtua', content });
+    page(req, res, { title: 'Catatan Orang Tua', sub: 'Rekap umpan balik orang tua/wali dari portal publik', active: 'pesan_orangtua', content });
+  }
+  get('/catatan-orangtua', catatanOrtuPage);
+  // alamat lama tetap dilayani (bukan redirect) agar tautan & bookmark lama tetap berfungsi
+  get('/pesan-orangtua', catatanOrtuPage);
+
+  post('/catatan-orangtua/delete', (req, res) => {
+    if (!can(req.user, 'dashboard', 'delete') && !can(req.user, 'catatan', 'delete')) {
+      return res.redirect(req.BASE + '/catatan-orangtua?err=' + encodeURIComponent('Role Anda tidak berhak menghapus catatan orang tua.'));
+    }
+    const id = Number(req.body.id || 0);
+    const backRaw = String(req.body.back || '/catatan-orangtua');
+    const back = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/catatan-orangtua';
+    const row = id ? dbm.db.prepare('SELECT * FROM portal_pesan WHERE id=?').get(id) : null;
+    if (!row) return res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'err=' + encodeURIComponent('Catatan tidak ditemukan.'));
+    dbm.db.prepare('DELETE FROM portal_pesan WHERE id=?').run(id);
+    dbm.logAudit(req.user, 'HAPUS', 'portal', `Menghapus catatan orang tua dari ${row.nama || '-'}: ${String(row.pesan || '').slice(0, 100)}`);
+    res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'ok=' + encodeURIComponent('Catatan orang tua dihapus.'));
   });
 
   post('/pesan-orangtua/selesai', (req, res) => {
     guard(req, res, 'dashboard', 'view');
     const id = Number(req.body.id || 0);
-    const backRaw = String(req.body.back || '/pesan-orangtua');
-    const back = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/pesan-orangtua';
+    const backRaw = String(req.body.back || '/catatan-orangtua');
+    const back = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/catatan-orangtua';
     const row = id ? dbm.db.prepare('SELECT * FROM portal_pesan WHERE id=?').get(id) : null;
     if (!row) return res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'err=' + encodeURIComponent('Catatan tidak ditemukan.'));
     dbm.db.prepare("UPDATE portal_pesan SET status='selesai', selesai_at=?, selesai_by=? WHERE id=?").run(lib.nowStamp(), req.user.nama, id);
     dbm.logAudit(req.user, 'TINDAKLANJUT', 'portal', `Catatan orang tua ${row.nama || ''} ditandai selesai`);
     res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'ok=' + encodeURIComponent('Catatan ditandai: Selesai Ditindaklanjuti.'));
   });
+
 };

@@ -202,7 +202,7 @@ const today = new Date().toISOString().slice(0, 10);
   // bendahara melihat & membalas
   cookie = adminCookie;
   r = await req('GET', '/catatan-pegawai');
-  ok('bendahara melihat catatan masuk', r.status === 200 && /Catatan Masuk dari Pegawai/.test(r.text) && /Rina Wulandari/.test(r.text));
+  ok('bendahara melihat catatan masuk', r.status === 200 && /Rekap Catatan Pegawai/.test(r.text) && /Rina Wulandari/.test(r.text));
   r = await req('GET', '/');
   ok('dashboard bendahara menampilkan kartu catatan pegawai', /id="catatanPegawai"/.test(r.text));
   r = await req('POST', '/catatan-pegawai/balas', { id: cat.id, balasan: 'Sudah diperbaiki pada leger: honor menjadi Rp 540.000.', status_after: 'diproses' });

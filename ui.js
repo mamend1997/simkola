@@ -82,10 +82,14 @@ const NAV = [
       { href: '/approval', key: 'transaksi', action: 'approve', activeKey: 'approval', label: 'Persetujuan Pengeluaran', icon: 'check' },
       { href: '/mutasi-kas', key: 'mutasi_kas', label: 'Mutasi Bank & Cash', icon: 'swap', activeKey: 'mutasi_kas' },
       { href: '/tutup-bulanan', key: 'tutup_bulanan', label: 'Tutup BKU Bulanan', icon: 'lock' },
-      { href: '/piutang', key: 'piutang', label: 'Piutang & SPP', icon: 'card' },
-      { href: '/piutang-lain', key: 'piutang_lain', label: 'Piutang Sertifikasi', icon: 'shield' },
-      { href: '/piutang-lainnya', key: 'piutang_lainnya', label: 'Piutang Lainnya', icon: 'layers' },
       { href: '/rekon', key: 'rekon', label: 'Rekonsiliasi Bank', icon: 'refresh' }
+    ]
+  },
+  {
+    id: 'piutang', group: 'Piutang', icon: 'card', items: [
+      { href: '/piutang', key: 'piutang', label: 'Piutang Pegawai', icon: 'card' },
+      { href: '/piutang-lain', key: 'piutang_lain', label: 'Piutang Sertifikasi', icon: 'shield' },
+      { href: '/piutang-lainnya', key: 'piutang_lainnya', label: 'Piutang Lainnya', icon: 'layers' }
     ]
   },
   {
@@ -98,18 +102,20 @@ const NAV = [
     ]
   },
   {
-    id: 'iuran', group: 'Iuran Siswa', icon: 'coins', items: [
+    id: 'iuran', group: 'Grup Iuran', icon: 'coins', items: [
       { href: '/iuran', key: 'iuran', label: 'Grup Iuran', icon: 'coins' },
       { href: '/iuran/data', key: 'iuran', activeKey: 'iuran_data', label: 'Data Iuran', icon: 'card' },
       { href: '/iuran/bulanan', key: 'iuran', activeKey: 'iuran_bulanan', label: 'Rincian Iuran Bulanan', icon: 'calendar' },
       { href: '/iuran/transaksi', key: 'iuran', activeKey: 'iuran_trx', label: 'Transaksi Iuran', icon: 'receipt' },
-      { href: '/iuran/antrean', key: 'iuran', activeKey: 'iuran_queue', label: 'Antrean Posting Iuran', icon: 'clock' }
+      { href: '/iuran/antrean', key: 'iuran', activeKey: 'iuran_queue', label: 'Antrean Posting Iuran', icon: 'clock' },
+      // SPP dipisahkan dari menu Piutang dan diletakkan paling bawah pada kelompok Grup Iuran
+      { href: '/spp', key: 'piutang', activeKey: 'spp', label: 'SPP', icon: 'target' }
     ]
   },
   {
     id: 'komunikasi', group: 'Komunikasi Internal', icon: 'inbox', items: [
       { href: '/catatan-pegawai', key: 'catatan', activeKey: 'catatan', label: 'Catatan Pegawai', icon: 'inbox' },
-      { href: '/pesan-orangtua', key: 'dashboard', activeKey: 'pesan_orangtua', label: 'Pesan Orang Tua', icon: 'inbox' }
+      { href: '/catatan-orangtua', key: 'dashboard', activeKey: 'pesan_orangtua', label: 'Catatan Orang Tua', icon: 'users' }
     ]
   },
   {
@@ -136,7 +142,8 @@ const NAV = [
   {
     id: 'sistem', group: 'Laporan & Sistem', icon: 'settings', items: [
       { href: '/laporan', key: 'laporan', label: 'Laporan & Export', icon: 'file' },
-      { href: '/sekolah', key: 'sekolah', label: 'Identitas Sekolah', icon: 'school' },
+      { href: '/sekolah', key: 'sekolah', label: 'Identitas & Tampilan', icon: 'school' },
+      { href: '/tema', key: 'sekolah', activeKey: 'tema', label: 'Tema & Branding Aplikasi', icon: 'chart' },
       { href: '/tarif-honor', key: 'tarif_honor', label: 'Nominal Tunjangan & Honor', icon: 'wallet' },
       { href: '/pengguna', key: 'pengguna', label: 'Pengguna & Hak Akses', icon: 'users' },
       { href: '/tampilan-menu', key: 'pengguna', activeKey: 'tampilan_menu', label: 'Pengaturan Tampilan Menu', icon: 'menu' },
@@ -148,8 +155,57 @@ const NAV = [
       { href: '/backup', key: 'backup', label: 'Backup & Restore', icon: 'database' },
       { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Backup', icon: 'cloud' }
     ]
+  },
+  {
+    id: 'bantuan', group: 'Bantuan', icon: 'info', items: [
+      { href: '/petunjuk', key: 'panduan', label: 'Petunjuk Pengguna', icon: 'book' }
+    ]
   }
 ];
+
+/* ---------- tema warna: turunkan palet dari satu warna dasar ---------- */
+function hexToHsl(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!m) return { h: 25, s: 90, l: 52 };
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const d = max - min;
+  const l = (max + min) / 2;
+  if (d) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  return { h: Math.round(h), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+function themeCss(hex) {
+  const { h, s, l } = hexToHsl(hex || '#F97316');
+  const sat = Math.max(35, Math.min(100, s));
+  const cl = v => Math.max(4, Math.min(98, v));
+  const hsl = (ll, ss = sat) => `hsl(${h} ${ss}% ${cl(ll)}%)`;
+  const base = hsl(l);
+  return `<style data-theme>
+:root{
+  --o-50:${hsl(97, Math.max(50, sat - 20))}; --o-100:${hsl(94, Math.max(50, sat - 15))};
+  --o-200:${hsl(87)}; --o-300:${hsl(Math.min(88, l + 22))}; --o-400:${hsl(Math.min(78, l + 10))};
+  --o-500:${base}; --o-600:${hsl(l - 6)}; --o-700:${hsl(Math.max(20, l - 13))};
+  --bg:${hsl(98.5, 55)};
+  --sh-1:0 1px 2px rgba(42,26,18,.05), 0 8px 24px -12px ${hsl(l, Math.min(90, sat))}33;
+}
+body::before{
+  background:
+    radial-gradient(760px 480px at 8% -8%, ${hsl(94, 80)} 0%, rgba(255,255,255,0) 62%),
+    radial-gradient(680px 420px at 96% 4%, ${hsl(95, 85)} 0%, rgba(255,255,255,0) 60%),
+    radial-gradient(700px 500px at 60% 105%, ${hsl(97, 75)} 0%, rgba(255,255,255,0) 65%),
+    var(--bg);
+}
+.nav a img.nav-ico-img{width:17px;height:17px;flex:0 0 17px;object-fit:contain;border-radius:3px}
+</style>`;
+}
 
 function avatar(user, cls = 'avatar', style = '') {
   const initials = String((user && user.nama) || '?').split(' ').filter(Boolean).map(s => s[0]).slice(0, 2).join('').toUpperCase();
@@ -172,17 +228,45 @@ function navVisibility(str) {
 function navCatalog() {
   return NAV.map(g => ({ ...g, items: g.items.slice() }));
 }
+/** terapkan penataan menu kustom (urutan, judul, ikon PNG) pada salinan NAV */
+function navOrdered(cfg) {
+  const uiCfg = cfg || { groups: {}, order: {}, labels: {}, icons: {} };
+  const groups = NAV.map((g, i) => ({ ...g, _i: i, items: g.items.slice() }))
+    .sort((a, b) => {
+      const oa = uiCfg.groups && uiCfg.groups[a.id] !== undefined ? Number(uiCfg.groups[a.id]) : a._i;
+      const ob = uiCfg.groups && uiCfg.groups[b.id] !== undefined ? Number(uiCfg.groups[b.id]) : b._i;
+      return oa - ob || a._i - b._i;
+    });
+  for (const g of groups) {
+    g.items = g.items.map((it, i) => ({ ...it, _i: i }))
+      .sort((a, b) => {
+        const oa = uiCfg.order && uiCfg.order[a.href] !== undefined ? Number(uiCfg.order[a.href]) : 1000 + a._i;
+        const ob = uiCfg.order && uiCfg.order[b.href] !== undefined ? Number(uiCfg.order[b.href]) : 1000 + b._i;
+        return oa - ob || a._i - b._i;
+      })
+      .map(it => ({
+        ...it,
+        label: (uiCfg.labels && uiCfg.labels[it.href]) || it.label,
+        iconUrl: (uiCfg.icons && uiCfg.icons[it.href]) || ''
+      }));
+  }
+  return groups;
+}
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '' }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', demoMode = false }) {
   const initials = (user?.nama || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
   const hidden = navVisibility(navHidden);
   const linkOf = (i) => {
     const showPill = (i.key === 'transaksi' || i.activeKey === 'approval') && pendingCount;
     const pill = showPill ? `<span class="pill">${pendingCount}</span>` : '';
-    return `<a href="${base}${i.href}" class="${active === (i.activeKey || i.key) ? 'active' : ''}">${icon(i.icon)}<span>${esc(i.label)}</span>${pill}</a>`;
+    const ico = i.iconUrl
+      ? `<img src="${esc(i.iconUrl)}" alt="" class="nav-ico-img" onerror="this.remove()">`
+      : icon(i.icon);
+    return `<a href="${base}${i.href}" class="${active === (i.activeKey || i.key) ? 'active' : ''}" data-nav-href="${esc(i.href)}">${ico}<span>${esc(i.label)}</span>${pill}</a>`;
   };
+  const groups = navOrdered(navCfg);
   let nav = '';
-  for (const g of NAV) {
+  for (const g of groups) {
     const items = g.items.filter(i => !hidden.has(i.href) && (!can || (i.action ? can(i.key, i.action) : can(i.key))));
     if (!items.length) continue;
     const isOpen = items.some(i => active === (i.activeKey || i.key));
@@ -199,25 +283,30 @@ function layout({ title, sub = '', user, active, base = '', content, query, role
     </div>`;
   }
   if (!nav) nav = '<div class="nav-empty">Semua menu sedang disembunyikan. Buka <b>Pengaturan Tampilan Menu</b> untuk menampilkannya kembali.</div>';
+  const brandMark = appLogo
+    ? `<img src="${esc(appLogo)}" alt="Logo" style="width:40px;height:40px;border-radius:12px;object-fit:contain;background:#fff;padding:3px;flex:0 0 40px" onerror="this.remove()">`
+    : `<div class="brand-mark">${icon('wallet')}</div>`;
   return `<!DOCTYPE html>
 <html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · SIMKEU Sekolah</title>
+<title>${esc(title)} · ${esc(appName)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ASSET_V}">
+${themeCss(tema)}
 <link rel="icon" type="image/png" href="${base}/favicon.ico?v=${encodeURIComponent((logoStamp||'').slice(-24))}">
 <link rel="apple-touch-icon" href="${base}/favicon.ico">
-<meta name="theme-color" content="#F97316">
+<meta name="theme-color" content="${esc(/^#[0-9a-fA-F]{6}$/.test(tema) ? tema : '#F97316')}">
 </head><body>
 <div class="shell">
   <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <div class="brand-mark">${icon('wallet')}</div>
-      <div><div class="brand-name">SIMKEU Sekolah</div><div class="brand-sub">Sistem Keuangan</div></div>
+      ${brandMark}
+      <div><div class="brand-name">${esc(appName)}</div><div class="brand-sub">Sistem Keuangan</div></div>
     </div>
+    ${demoMode ? `<div class="demo-chip" title="Akun demo memakai database dummy terpisah">${icon('info', 'i-sm')} Mode Demo · data dummy</div>` : ''}
     <nav class="nav">${nav}</nav>
-    <div class="side-foot">v1.0 · ${new Date().getFullYear()} © SIMKEU</div>
+    <div class="side-foot">v1.0 · ${new Date().getFullYear()} © ${esc(appName.slice(0, 18))}</div>
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="main">
@@ -496,6 +585,7 @@ function docPage({ settings, base, title, no = '', body, backHref = '/laporan', 
 <title>${esc(title)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ASSET_V}">
+${themeCss(settings && settings.tema_warna)}
 <style>@page{size:A4 ${o};margin:12mm 12mm}</style>
 ${css ? `<style>${css}</style>` : ''}
 </head><body style="background:#FAF4EE" data-orient="${o}">
@@ -523,6 +613,7 @@ function printPage({ settings, base, title, body, backHref = '/', pageCss = '', 
 <title>${esc(title)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ASSET_V}">
+${themeCss(settings && settings.tema_warna)}
 <style>${pageCss}</style>
 </head><body class="${bodyClass}" data-orient="${esc(orient)}">
 <div class="doc-actions no-print">
@@ -624,4 +715,4 @@ function importErrorModal(errors, opts = {}) {
   }).replace(`class="modal" id="${id}"`, `class="modal show" id="${id}"`);
 }
 
-module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, flashBlock, kwitansiSize, kwitansiPage };
+module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage };

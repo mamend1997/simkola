@@ -128,13 +128,13 @@ function readBody(req) {
 function can(user, module, action) {
   if (!user) return false;
   if (user.role === 'super_admin') return true;
-  const r = dbm.db.prepare('SELECT allowed FROM permissions WHERE role=? AND module=? AND action=?').get(user.role, module, action);
+  const r = dbm.mainDb.prepare('SELECT allowed FROM permissions WHERE role=? AND module=? AND action=?').get(user.role, module, action);
   return !!(r && r.allowed);
 }
 function roleLabel(role) { return dbm.ROLE_LABEL[role] || role; }
 
 function permissionMatrix() {
-  const rows = dbm.db.prepare('SELECT * FROM permissions').all();
+  const rows = dbm.mainDb.prepare('SELECT * FROM permissions').all();
   const map = {};
   for (const r of rows) map[`${r.role}|${r.module}|${r.action}`] = r.allowed;
   return map;
@@ -143,28 +143,28 @@ function permissionMatrix() {
 function setSession(userId) {
   const t = lib.token(24);
   const exp = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14).toISOString().replace('T', ' ').slice(0, 19);
-  const prev = dbm.db.prepare('SELECT last_login FROM users WHERE id=?').get(userId);
+  const prev = dbm.mainDb.prepare('SELECT last_login FROM users WHERE id=?').get(userId);
   const since = prev && prev.last_login ? prev.last_login : '';
   const pending = since
-    ? dbm.db.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending' AND COALESCE(created_at,'') >= ?").get(since).c
-    : dbm.db.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending'").get().c;
+    ? dbm.mainDb.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending' AND COALESCE(created_at,'') >= ?").get(since).c
+    : dbm.mainDb.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending'").get().c;
   // tahun ajaran otomatis mengikuti bulan kalender berjalan (mis. login Oktober 2026 → 2026/2027)
   const taId = dbm.taAutoId();
-  dbm.db.prepare('INSERT INTO sessions (token,user_id,expires_at,alert_pending,ta_id) VALUES (?,?,?,?,?)').run(t, userId, exp, pending, taId);
-  dbm.db.prepare('UPDATE users SET last_login=? WHERE id=?').run(lib.nowStamp(), userId);
+  dbm.mainDb.prepare('INSERT INTO sessions (token,user_id,expires_at,alert_pending,ta_id) VALUES (?,?,?,?,?)').run(t, userId, exp, pending, taId);
+  dbm.mainDb.prepare('UPDATE users SET last_login=? WHERE id=?').run(lib.nowStamp(), userId);
   return t;
 }
 function currentUser(req) {
   const c = parseCookies(req.headers.cookie);
   const t = c[COOKIE];
   if (!t) return null;
-  const s = dbm.db.prepare('SELECT * FROM sessions WHERE token=?').get(t);
+  const s = dbm.mainDb.prepare('SELECT * FROM sessions WHERE token=?').get(t);
   if (!s) return null;
   if (new Date(s.expires_at.replace(' ', 'T')) < new Date()) {
-    dbm.db.prepare('DELETE FROM sessions WHERE token=?').run(t);
+    dbm.mainDb.prepare('DELETE FROM sessions WHERE token=?').run(t);
     return null;
   }
-  const u = dbm.db.prepare('SELECT id,nama,email,role,aktif,jabatan,foto FROM users WHERE id=?').get(s.user_id);
+  const u = dbm.mainDb.prepare('SELECT id,nama,email,role,aktif,jabatan,foto FROM users WHERE id=?').get(s.user_id);
   if (!u || !u.aktif) return null;
   req.sessionRow = s;   // untuk notifikasi draf pengeluaran saat login
   // tahun ajaran aktif untuk sesi ini (dropdown di header)
@@ -172,12 +172,12 @@ function currentUser(req) {
   const qta = Number((req.query && req.query.get) ? (req.query.get('ta') || 0) : 0);
   if (qta && dbm.tahunById(qta)) {
     taId = qta;
-    try { dbm.db.prepare('UPDATE sessions SET ta_id=? WHERE token=?').run(qta, s.token); } catch (e) { }
+    try { dbm.mainDb.prepare('UPDATE sessions SET ta_id=? WHERE token=?').run(qta, s.token); } catch (e) { }
   }
   if (!taId) {
     // sesi lama tanpa TA → pilih otomatis sesuai bulan berjalan
     taId = dbm.taAutoId();
-    if (taId) { try { dbm.db.prepare('UPDATE sessions SET ta_id=? WHERE token=?').run(taId, s.token); } catch (e) { } }
+    if (taId) { try { dbm.mainDb.prepare('UPDATE sessions SET ta_id=? WHERE token=?').run(taId, s.token); } catch (e) { } }
   }
   req.taId = taId;
   req.TA = dbm.tahunById(taId) || dbm.activeTahun();
@@ -232,7 +232,13 @@ function page(req, res, { title, sub = '', active, content }) {
     can: (m, a) => can(req.user, m, a || 'view'),
     logoStamp: c.settings.sekolah_logo || '',
     taList: c.taList, taId: c.taId, path: req.url,
-    navHidden: c.settings.nav_hidden || ''
+    // tampilan global (tema, nama & logo aplikasi, penataan menu) selalu dari database UTAMA
+    navHidden: dbm.mainSetting('nav_hidden', ''),
+    navCfg: dbm.navUiGlobal(),
+    tema: dbm.temaWarnaGlobal(),
+    appName: dbm.appNamaGlobal(),
+    appLogo: dbm.appLogoGlobal(),
+    demoMode: !!(req.user && req.user.role === 'demo')
   }));
 }
 
@@ -296,8 +302,9 @@ post('/ta/pilih', (req, res) => {
   if (!req.user) return res.redirect(req.BASE + '/login');
   const id = Number(req.body.ta || 0);
   const ta = id ? dbm.tahunById(id) : null;
-  if (req.sessionRow) {
-    try { dbm.db.prepare('UPDATE sessions SET ta_id=? WHERE token=?').run(ta ? ta.id : null, req.sessionRow.token); } catch (e) { }
+  const backDemo = req.user && req.user.role === 'demo';
+  if (req.sessionRow && !backDemo) {
+    try { dbm.mainDb.prepare('UPDATE sessions SET ta_id=? WHERE token=?').run(ta ? ta.id : null, req.sessionRow.token); } catch (e) { }
   }
   const backRaw = String(req.body.back || '');
   const back = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/';
@@ -333,6 +340,7 @@ require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, fla
 require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
 require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/panduan')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl });
 require('./routes/backup_cloud')({ get, post, dbm, lib, ui, page, ctx, guard, flashUrl });
 
 /* ---------------- server ---------------- */
@@ -376,24 +384,39 @@ const server = http.createServer(async (req, res) => {
   try {
     req.user = currentUser(req);
     req.body = {};
-    if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-      req.body = await readBody(req);
-    }
+    // akun demo → SELURUH query data dialihkan ke database dummy yang terpisah
+    const demoMode = !!(req.user && req.user.role === 'demo');
+    if (demoMode) dbm.ensureDemoDb();
 
-    // public pages
-    if (!req.user) {
-      const isPublic = ['/login', '/logout', '/portal', '/portal-pegawai', '/portal-slip'].includes(pathname)
-        || pathname.startsWith('/portal/') || pathname.startsWith('/portal-pegawai/') || pathname.startsWith('/portal-slip/');
-      if (!isPublic) {
-        if (req.method === 'POST') return R.redirect(base + '/login?err=' + encodeURIComponent('Sesi Anda berakhir. Silakan masuk kembali.'));
-        return R.redirect(base + '/login');
+    const run = async () => {
+      if (demoMode) {
+        // tahun ajaran mengikuti database dummy (id TA di DB utama tidak berlaku di sandbox)
+        const taDemo = dbm.activeTahun();
+        req.TA = taDemo || null;
+        req.taId = taDemo ? taDemo.id : null;
       }
-    }
+      if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+        req.body = await readBody(req);
+      }
 
-    const m = match(req.method === 'POST' ? 'POST' : 'GET', pathname);
-    if (!m) return R.notFound();
-    req.params = m.params;
-    await m.handler(req, R);
+      // public pages
+      if (!req.user) {
+        const isPublic = ['/login', '/logout', '/portal', '/portal-pegawai', '/portal-slip'].includes(pathname)
+          || pathname.startsWith('/portal/') || pathname.startsWith('/portal-pegawai/') || pathname.startsWith('/portal-slip/');
+        if (!isPublic) {
+          if (req.method === 'POST') return R.redirect(base + '/login?err=' + encodeURIComponent('Sesi Anda berakhir. Silakan masuk kembali.'));
+          return R.redirect(base + '/login');
+        }
+      }
+
+      const m = match(req.method === 'POST' ? 'POST' : 'GET', pathname);
+      if (!m) return R.notFound();
+      req.params = m.params;
+      await m.handler(req, R);
+    };
+
+    if (demoMode) await dbm.runAsDemo(run);
+    else await run();
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 302) return R.redirect(base + '/login?err=' + encodeURIComponent('Silakan masuk terlebih dahulu.'));

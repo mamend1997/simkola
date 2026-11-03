@@ -353,20 +353,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </div>
 
     <div class="card mb-3">
-      <div class="card-head">
-        <div><h3>Grafik SPP per Bulan</h3><div class="sub">Perbandingan total ditagihkan vs diterima — Tahun Ajaran ${esc(ta ? ta.nama : '-')}</div></div>
-        <form method="get" action="${c.base}/piutang" class="toolbar">
-          <select name="ta" data-autosubmit>${taList.map(t => `<option value="${t.id}" ${String(t.id) === String(taId) ? 'selected' : ''}>TA ${esc(t.nama)}</option>`).join('')}</select>
-        </form>
+      <div class="between">
+        <div style="min-width:0">
+          <div class="t-strong" style="display:flex;align-items:center;gap:8px">${ui.icon('card', 'i-sm')} SPP kini punya halaman terpisah</div>
+          <div class="small muted" style="margin-top:3px;max-width:720px">
+            Menu <b>SPP</b> (kelompok <b>Grup Iuran</b>) memuat grafik penerimaan SPP yang dihitung dari pembayaran iuran riil,
+            target bulanan, serta capaian per bulan. Halaman Piutang ini fokus pada piutang pegawai &amp; sertifikasi.
+          </div>
+        </div>
+        <div class="toolbar"><a class="btn btn-primary btn-sm" href="${c.base}/spp">${ui.icon('target')}Buka Halaman SPP</a></div>
       </div>
-      ${sppList.some(r => r.total_ditagihkan > 0 || r.total_diterima > 0)
-        ? `${ui.chartSPP(sppList, { id: 'ta' + taId })}
-           <div class="kpi-grid mt-3" style="grid-template-columns:repeat(3,minmax(0,1fr))">
-             <div class="kpi ic-orange"><div class="ico">${ui.icon('target')}</div><div class="lbl">Total Ditagihkan Setahun</div><div class="val" style="font-size:18px">${rupiah(totalTagih)}</div></div>
-             <div class="kpi ic-green"><div class="ico">${ui.icon('check')}</div><div class="lbl">Total Diterima</div><div class="val" style="font-size:18px">${rupiah(totalTerima)}</div><div class="meta">${totalTagih ? ((totalTerima / totalTagih) * 100).toFixed(1) : 0}% capaian setahun</div></div>
-             <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Sisa Tunggakan</div><div class="val" style="font-size:18px">${rupiah(tunggakanSpp)}</div><div class="meta">Setelah beasiswa ${rupiah(beasiswaTa)} · ${sppList.filter(r => r.total_ditagihkan > r.total_diterima).length} bulan belum lunas</div></div>
-           </div>`
-        : ui.emptyState('Belum ada data SPP pada tahun ajaran ini', 'Isi Total Ditagihkan pada tabel di bawah — grafik akan terbentuk otomatis per bulan.')}
     </div>
 
     <div class="card">
@@ -830,4 +826,82 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     backGo(req, res, 
       `Import selesai: ${baru} pinjaman baru, ${cicilan} cicilan tercatat, ${dilewati} baris dilewati${tanpaPiutang ? `, ${tanpaPiutang} pembayaran tidak menemukan data piutang` : ''}.`, 'ok');
   });
+
+  /* ================= HALAMAN SPP (dipisah dari menu Piutang) ================= */
+  get('/spp', (req, res) => {
+    guard(req, res, 'piutang', 'view');
+    const c = ctx(req);
+    const taList = dbm.allTahun();
+    const taId = Number(req.query.get('ta') || c.taId || 0) || null;
+    const ta = taList.find(t => String(t.id) === String(taId)) || c.ta;
+    const sppList = (() => {
+      const all = sppRows(taId);
+      const byMonth = new Map(all.map(r => [Number(r.bulan), r]));
+      return dbm.BULAN_TA.map(b => byMonth.get(b)).filter(Boolean);
+    })();
+    const totalTagih = sppList.reduce((s, r) => s + r.total_ditagihkan, 0);
+    const totalTerima = sppList.reduce((s, r) => s + r.total_diterima, 0);
+    const beasiswaTa = dbm.beasiswaTotal(taId);
+    const tunggakanBruto = Math.max(0, totalTagih - totalTerima);
+    const tunggakanSpp = Math.max(0, tunggakanBruto - beasiswaTa);
+    const editableSpp = c.can('piutang', 'create') || c.can('piutang', 'edit');
+    // realisasi riil dari data iuran (grup SPP)
+    const series = dbm.sppSeries(taId);
+    const realTotal = series.reduce((a, r) => a + r.diterima, 0);
+    const targetIuran = series.reduce((a, r) => a + r.ditagihkan, 0);
+    const seriesAda = series.some(r => r.diterima > 0 || r.ditagihkan > 0);
+    const sppTampil = dbm.sppTampil();
+
+    const content = `<div class="between mb-2">
+      <div class="toolbar"><span class="badge ${sppTampil ? 'green' : 'gray'}">${sppTampil ? 'SPP tampil di dashboard & rekon' : 'SPP disembunyikan dari dashboard'}</span></div>
+      <div class="toolbar">
+        <form method="get" action="${c.base}/spp"><select name="ta" data-autosubmit>
+          ${taList.map(t => `<option value="${t.id}" ${String(t.id) === String(taId) ? 'selected' : ''}>TA ${esc(t.nama)}</option>`).join('')}
+        </select></form>
+        <a class="btn btn-sm" href="${c.base}/beasiswa?ta=${esc(taId || '')}">${ui.icon('target')}Beasiswa</a>
+        <a class="btn btn-sm" href="${c.base}/iuran/data">${ui.icon('coins')}Data Iuran</a>
+      </div>
+    </div>
+
+    <div class="kpi-grid mb-3" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+      <div class="kpi ic-orange"><div class="ico">${ui.icon('target')}</div><div class="lbl">Target Ditagihkan SPP</div><div class="val" style="font-size:18px">${rupiah(totalTagih)}</div><div class="meta">Tahun pelajaran ${esc(ta ? ta.nama : '-')}</div></div>
+      <div class="kpi ic-green"><div class="ico">${ui.icon('check')}</div><div class="lbl">Realisasi Penerimaan</div><div class="val" style="font-size:18px">${rupiah(realTotal)}</div><div class="meta">Dari pembayaran iuran grup SPP</div></div>
+      <div class="kpi ic-blue"><div class="ico">${ui.icon('wallet')}</div><div class="lbl">Tagihan Iuran SPP</div><div class="val" style="font-size:18px">${rupiah(targetIuran)}</div><div class="meta">Total tagihan siswa pada grup SPP</div></div>
+      <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Sisa Tunggakan</div><div class="val" style="font-size:18px">${rupiah(tunggakanSpp)}</div><div class="meta">Setelah beasiswa ${rupiah(beasiswaTa)}</div></div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-head"><div><h3>Tren Penerimaan SPP per Bulan</h3>
+        <div class="sub">Dihitung dari pembayaran iuran grup SPP yang benar-benar tercatat (bukan tabel target)</div></div></div>
+      ${seriesAda ? ui.chartLineSPP(series, { id: 'spppage' + taId })
+        : ui.emptyState('Belum ada penerimaan SPP', 'Grafik terbentuk otomatis setelah pembayaran iuran grup SPP dicatat.')}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h3>Target &amp; Realisasi SPP (Rekap Bulanan)</h3>
+        <div class="sub">Kolom target boleh diubah · realisasi terkunci &amp; otomatis dari transaksi kode rekening 4.1.01</div></div>
+        <div class="toolbar"><a class="btn btn-sm" href="${c.base}/laporan?r=piutang&ta=${esc(taId || '')}" target="_blank">${ui.icon('printer')}Cetak Rekap</a></div></div>
+      <form method="post" action="${c.base}/spp/save">
+        <input type="hidden" name="tahun_ajaran_id" value="${esc(taId || '')}">
+        <input type="hidden" name="back" value="/spp">
+        <div class="table-wrap"><table><thead><tr><th>Bulan</th><th class="num" style="width:200px">Total Ditagihkan</th><th class="num" style="width:210px">Total Diterima <span class="badge gray plain">terkunci</span></th><th class="num">Tunggakan</th><th style="width:150px">Capaian</th></tr></thead><tbody>
+        ${sppList.map(r => {
+      const tung = r.total_ditagihkan - r.total_diterima;
+      const pct = r.total_ditagihkan > 0 ? (r.total_diterima / r.total_ditagihkan) * 100 : 0;
+      return `<tr><td class="t-strong">${r.nama}</td>
+          <td class="num">${editableSpp ? ui.moneyInput('tagih_' + r.bulan, r.total_ditagihkan) : rupiah(r.total_ditagihkan)}</td>
+          <td class="num"><div class="t-strong">${rupiah(r.total_diterima)}</div>
+            <div class="t-sub">${r.diterima_transaksi ? `${rupiah(r.diterima_transaksi)} dari transaksi` : 'belum ada transaksi SPP'}${r.diterima_manual ? ` · ${rupiah(r.diterima_manual)} saldo awal` : ''}</div></td>
+          <td class="num" style="color:${tung > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(tung)}</td>
+          <td>${ui.prog(pct, pct >= 95 ? 'g' : pct >= 70 ? '' : 'r')}<div class="t-sub">${pct.toFixed(0)}%</div></td></tr>`;
+    }).join('')}
+        </tbody><tfoot><tr><td>TOTAL</td><td class="num">${rupiah(totalTagih)}</td><td class="num">${rupiah(totalTerima)}</td><td class="num">${rupiah(tunggakanSpp)}</td><td></td></tr></tfoot></table></div>
+        ${editableSpp ? `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Total Tagihan SPP</button></div>` : ''}
+      </form>
+      <div class="alert info mt-2">${ui.icon('info')}<div><b>Beasiswa SPP:</b> ${rupiah(beasiswaTa)} dari <a href="${c.base}/beasiswa?ta=${esc(taId || '')}"><b>Master Data Beasiswa</b></a> otomatis mengurangi tunggakan.
+        Tunggakan bruto ${rupiah(tunggakanBruto)} → setelah beasiswa ${rupiah(tunggakanSpp)}.</div></div>
+    </div>`;
+    page(req, res, { title: 'SPP — Target & Realisasi', sub: 'Rekap tagihan dan penerimaan SPP per bulan', active: 'spp', content });
+  });
+
 };
