@@ -191,8 +191,14 @@ const today = new Date().toISOString().slice(0, 10);
   ok('form portal slip memakai slug baru', /action="\/portal-slip-pegawai\/otp"/.test(r.text), (r.text.match(/action="[^"]*\/otp"/) || [])[0]);
   r = await req('GET', '/piutang-pegawai', null, { public: true });
   ok('tautan antar portal memakai slug baru', /href="\/portal-slip-pegawai"/.test(r.text));
-  // alamat default tetap berfungsi (kompatibilitas)
-  ok('alamat default /portal tetap dapat dibuka', (await req('GET', '/portal', null, { public: true })).status === 200);
+  // ronde 32: alamat bawaan /portal tidak lagi dipakai setelah slug diganti (mode otomatis)
+  r = await req('GET', '/portal', null, { public: true });
+  ok('alamat bawaan /portal tidak lagi dipakai (404)', r.status === 404 && /sudah tidak digunakan/i.test(r.text), String(r.status));
+  // ...tetapi bisa diaktifkan kembali lewat pengaturan (tautan lama tetap hidup bila diinginkan)
+  await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai', portal_default_alias: 'on' });
+  ok('mode "on" menghidupkan kembali /portal (kompatibilitas)',
+    (await req('GET', '/portal', null, { public: true })).status === 200);
+  await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai', portal_default_alias: 'auto' });
   // validasi
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'transaksi', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug yang menabrak halaman aplikasi ditolak', r.status === 303 && /err=/.test(r.loc) && /dipakai halaman lain/.test(decode(r.loc)), decode(r.loc).slice(0, 140));

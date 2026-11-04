@@ -556,6 +556,36 @@ function portalAccessPage({ base, tenant, access }) {
 </div></body></html>`;
 }
 
+/* ---------------- halaman "alamat portal lama sudah tidak dipakai" ---------------- */
+function portalMovedPage({ base, tenant, activeUrl, activeLabel }) {
+  const t = tenant || {};
+  let logo = '', nama = t.nama || 'Sekolah';
+  try {
+    const conn = dbm.openTenantConn(t.id, t.db_file);
+    const rows = conn.prepare("SELECT k,v FROM settings WHERE k IN ('sekolah_logo','sekolah_nama')").all();
+    const g = k => String(((rows.find(x => x.k === k) || {}).v) || '');
+    logo = g('sekolah_logo'); if (g('sekolah_nama')) nama = g('sekolah_nama');
+  } catch (e) { }
+  const mark = logo
+    ? `<img src="${lib.esc(logo)}" alt="Logo" width="64" height="64" style="max-width:64px;max-height:64px;object-fit:contain">`
+    : `<div style="width:58px;height:58px;border-radius:18px;margin:0 auto;display:grid;place-items:center;background:#FFF1E6;color:#EA580C;font-size:24px;font-weight:800">${lib.esc(String(nama).charAt(0))}</div>`;
+  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Halaman Tidak Ditemukan · ${lib.esc(nama)}</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}"><link rel="icon" href="${base}/favicon.ico">
+</head><body style="display:grid;place-items:center;min-height:100vh;margin:0;padding:24px">
+<div class="card" style="max-width:540px;width:100%;padding:34px;text-align:center">
+  ${mark}
+  <div style="font-weight:800;letter-spacing:-.02em;margin-top:12px">${lib.esc(nama)}</div>
+  <div style="font-size:52px;font-weight:800;color:var(--o-500);line-height:1;letter-spacing:-.05em;margin:14px 0 6px">404</div>
+  <h2 style="margin:0 0 8px;font-size:21px">Halaman Tidak Ditemukan</h2>
+  <p class="muted" style="line-height:1.7;margin:0 auto 16px;max-width:400px">
+    Alamat portal ini <b>sudah tidak digunakan</b>. Silakan buka alamat portal sekolah yang berlaku:</p>
+  ${activeUrl ? `<p style="margin:0 auto 18px"><a class="url-chip" href="${lib.esc(activeUrl)}" style="font-size:13px">${lib.esc(activeLabel || activeUrl)}</a></p>` : ''}
+  <a class="btn btn-primary" href="${lib.esc(activeUrl || base + '/login')}">Buka Portal Sekolah</a>
+</div></body></html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   const base = String(req.headers['x-public-base-path'] || '').replace(/\/$/, '');
   req.BASE = base;
@@ -753,12 +783,23 @@ const server = http.createServer(async (req, res) => {
       if (portalPath) {
         const t = tByCode || portalTenant || saas.tenantById(1);
         if (!t) return R.html(renderError(503, 'Belum ada sekolah', 'Belum ada sekolah yang terdaftar pada layanan ini.'), 503);
+        /* ---- alamat bawaan /portal yang sudah diganti slug kustom → tidak dilayani ---- */
+        const defaultPathHit = /^\/portal(\/|$)/.test(pathname0);
         /* ---- validasi akses halaman publik (Super Admin override + sakelar sekolah) ---- */
         const access = (() => { try { return saas.portalAccess(t, portalPath); } catch (e) { return { ok: true }; } })();
         if (!access.ok) return R.html(portalAccessPage({ base, tenant: t, access }), access.status);
         return await dbm.runAsTenant(t, async () => {
           req.tenant = t;
           req.TA = null; req.taId = null;
+          if (defaultPathHit) {
+            const alias = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return { on: true }; } })();
+            if (!alias.on) {
+              const active = `/${alias.slug}`;
+              return R.html(portalMovedPage({
+                base, tenant: t, activeUrl: base + active, activeLabel: active
+              }), 404);
+            }
+          }
           try {
             await dbm.runWithMeta({ ip: clientIp(req), tenantId: t.id, tenantNama: t.nama }, () => runRoute(portalPath));
           } catch (err) { handleError(err, portalPath); }
@@ -829,6 +870,14 @@ const server = http.createServer(async (req, res) => {
           if (/^\/(portal|portal-pegawai|portal-slip)(\/|$)/.test(pathname)) {
             const acc = (() => { try { return saas.portalAccess(tenant, pathname); } catch (e) { return { ok: true }; } })();
             if (!acc.ok) return R.html(portalAccessPage({ base, tenant, access: acc }), acc.status);
+          }
+          // ---- alamat bawaan /portal yang sudah diganti slug kustom → tidak dilayani ----
+          if (/^\/portal(\/|$)/.test(pathname0)) {
+            const alias = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return { on: true }; } })();
+            if (!alias.on) {
+              const active = `/${alias.slug}`;
+              return R.html(portalMovedPage({ base, tenant, activeUrl: base + active, activeLabel: active }), 404);
+            }
           }
 
           const demoMode = u.role === 'demo';

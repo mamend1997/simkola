@@ -918,6 +918,8 @@ function bootstrap() {
       // teks halaman portal publik (kosong = memakai default Super Admin)
       portal_page_title: '',
       portal_subtitle: '',
+      // judul tab saat tautan bertoken (?token=…) — boleh memakai placeholder {judul}
+      portal_token_title: '',
       // alamat (slug) ujung URL portal publik — boleh diubah, default seperti di bawah
       portal_slug: 'portal',
       portal_pegawai_slug: 'portal-pegawai',
@@ -1298,6 +1300,7 @@ function bootstrap() {
       setif2.run('portal_slip_aktif', '1');
       setif2.run('portal_page_title', '');
       setif2.run('portal_subtitle', '');
+      setif2.run('portal_token_title', '');
       // alamat (slug) portal publik — dapat diubah di menu Identitas Sekolah
       setif2.run('portal_slug', 'portal');
       setif2.run('portal_pegawai_slug', 'portal-pegawai');
@@ -1584,6 +1587,20 @@ function portalSlugs() {
 function resetPortalSlugCache() { portalSlugCache = null; }
 /** true bila slug berbeda dari default (dipakai UI) */
 function portalSlugIsCustom(key) { return portalSlugs()[key] !== PORTAL_SLUG_DEFAULT[key]; }
+/**
+ * Apakah alamat bawaan "/portal" (path kanonik portal tagihan siswa) masih dilayani?
+ * Setting `portal_default_alias`:
+ *   'auto' (default) → hanya selama slug portal masih "portal" (belum diganti sekolah)
+ *   'on'             → selalu dilayani (kompatibilitas tautan lama)
+ *   'off'            → tidak pernah dilayani (hanya alamat kustom)
+ * Dipakai server.js untuk "menghapus" URL ganda /portal setelah sekolah memilih slug kustom.
+ */
+function portalDefaultAlias() {
+  const mode = String(getSetting('portal_default_alias', 'auto') || 'auto').trim().toLowerCase();
+  const custom = portalSlugIsCustom('siswa');
+  const on = mode === 'on' ? true : mode === 'off' ? false : !custom;
+  return { on, mode: (mode === 'on' || mode === 'off') ? mode : 'auto', custom, slug: portalSlugs().siswa };
+}
 /**
  * Path kanonik untuk sebuah request: slug kustom → path internal.
  * Dipakai server.js sebelum pencocokan route (mis. /portal-slip-pegawai → /portal-slip).
@@ -4312,7 +4329,7 @@ module.exports = {
   ekskulRows, ekskulPending, dedupeAset,
   // ronde 9: analitik iuran, rekap sertifikasi, OTP portal, pesan orang tua, beasiswa siswa
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
-  portalSlugs, portalSlugIsCustom, resetPortalSlugCache, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
+  portalSlugs, portalSlugIsCustom, resetPortalSlugCache, portalDefaultAlias, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,

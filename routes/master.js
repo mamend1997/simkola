@@ -444,6 +444,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     /* ---- teks portal (judul tab + sub-judul banner) & status publikasi ---- */
     const txt = (saas.portalText ? saas.portalText(s) : { title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA', defaultTitle: 'Cek Tagihan', defaultSubtitle: 'PORTAL CEK TAGIHAN IURAN SISWA' });
     const namaSekolah = String(s.sekolah_nama || t.nama || 'Sekolah');
+    /* status alamat bawaan /portal (otomatis nonaktif bila slug portal sudah diganti) */
+    const alias = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return { on: true, mode: 'auto', slug: 'portal' }; } })();
     const publishedOn = String(s.portal_aktif || '1') === '1';
     const pegawaiOn = String(s.portal_pegawai_aktif || '1') === '1';
     const slipOn = String(s.portal_slip_aktif || '1') === '1';
@@ -494,7 +496,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
               <div class="field"><label>Judul Tab Browser (page_title)</label>
                 <input type="text" name="portal_page_title" value="${esc(s.portal_page_title || '')}" maxlength="40"
                   placeholder="${esc(txt.defaultTitle)}" ${ro ? 'readonly' : ''} data-pv-title>
-                <div class="hint">Tampil pada tab browser: <code data-pv-tabhint>${esc(txt.title)} · ${esc(namaSekolah)}</code>.
+                <div class="hint">Tampil pada tab browser &amp; pratinjau WhatsApp:
+                  <code data-pv-tabhint>${esc(txt.title)} · ${esc(namaSekolah)}</code>.
                   Kosongkan untuk memakai default <b>${esc(txt.defaultTitle)}</b>.</div></div>
               <div class="field"><label>Sub-Judul Banner Portal</label>
                 <input type="text" name="portal_subtitle" value="${esc(s.portal_subtitle || '')}" maxlength="60"
@@ -502,12 +505,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
                 <div class="hint">Maksimal <b>60 karakter</b> agar tata letak portal di layar HP tetap rapi.
                   Kosongkan untuk memakai default <b>${esc(txt.defaultSubtitle)}</b>.</div></div>
             </div>
+            <div class="field"><label>Judul Tab Saat Tautan Bertoken (opsional)</label>
+              <input type="text" name="portal_token_title" value="${esc(s.portal_token_title || '')}" maxlength="60"
+                placeholder="mis. Rincian {judul}" ${ro ? 'readonly' : ''} data-pv-token>
+              <div class="hint">Dipakai ketika orang tua membuka tautan pribadi dari WhatsApp (<code>?token=…</code>).
+                Gunakan <code>{judul}</code> untuk menyisipkan judul di atas — contoh <code>Rincian {judul}</code> menjadi
+                <code data-pv-tokenhint>${esc(txt.tokenTitle)} · ${esc(namaSekolah)}</code>.
+                Kosongkan agar judul tetap sama pada kedua kondisi (Opsi A — konsisten).</div></div>
             <div class="card-head" style="padding:0;margin:4px 0 8px"><div><h3 style="font-size:14px">Pratinjau Langsung</h3>
               <div class="sub">Tab browser &amp; banner portal — berubah saat Anda mengetik</div></div></div>
             <div class="portal-preview" data-portal-preview
               data-def-title="${esc(txt.defaultTitle)}" data-def-sub="${esc(txt.defaultSubtitle)}"
               data-school="${esc(namaSekolah)}">
               <div class="pv-tab"><span class="pv-dot"></span><span class="pv-title" data-pv-tab>${esc(txt.title)} · ${esc(namaSekolah)}</span></div>
+              <div class="pv-token"><span class="badge blue plain">Tautan pribadi</span>
+                <span class="pv-title" data-pv-tokentab>${esc(txt.tokenTitle)} · ${esc(namaSekolah)}</span></div>
               <div class="pv-banner">
                 ${pvLogo}
                 <div><div class="pv-name">${esc(namaSekolah)}</div><div class="pv-sub" data-pv-subtitle>${esc(txt.subtitle)}</div></div>
@@ -528,8 +540,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
               ${slugRow('Portal Piutang Pegawai', 'portal_pegawai_slug', 'portal-pegawai', `Contoh: <code>${esc(localHost)}/${esc(s.portal_pegawai_slug || 'portal-pegawai')}</code>`)}
               ${slugRow('Portal Slip Gaji Pegawai', 'portal_slip_slug', 'portal-slip', `Contoh: <code>${esc(localHost)}/${esc(s.portal_slip_slug || 'portal-slip')}</code>`)}
             </div>
+            <div class="field"><label>Alamat Bawaan <code>/portal</code></label>
+              <select name="portal_default_alias" ${ro ? 'disabled' : ''}>
+                <option value="auto" ${alias.mode === 'auto' ? 'selected' : ''}>Otomatis — aktif hanya bila slug masih &quot;portal&quot; (rekomendasi)</option>
+                <option value="on" ${alias.mode === 'on' ? 'selected' : ''}>Selalu aktifkan (tautan lama tetap jalan)</option>
+                <option value="off" ${alias.mode === 'off' ? 'selected' : ''}>Nonaktifkan (hanya alamat kustom)</option>
+              </select>
+              <div class="hint">Saat ini: ${alias.on
+        ? `<b style="color:var(--green)">aktif</b> — <code>${esc(localHost)}/portal</code> masih dapat dibuka`
+        : `<b style="color:var(--red)">nonaktif</b> — <code>${esc(localHost)}/portal</code> menampilkan halaman 404, portal hanya di <code>${esc(localHost)}/${esc(dbm.portalSlugs().siswa)}</code>`}.</div></div>
             <div class="alert info">${ui.icon('info')}<div>Gunakan huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.
-              Alamat bawaan tetap dapat dibuka. Perubahan langsung berlaku tanpa restart server.</div></div>
+              Bila slug diganti, alamat bawaan <code>/portal</code> otomatis tidak dipakai lagi agar tidak ada dua alamat dengan isi yang sama.
+              Perubahan langsung berlaku tanpa restart server.</div></div>
             ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Alamat Portal</button></div>`}
           </form>
         </div>
@@ -629,9 +651,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       if (err) return res.redirect(req.BASE + '/portal-publik?err=' + encodeURIComponent(err));
       baru[settingKey] = raw || dbm.PORTAL_SLUG_DEFAULT[key];
     }
+    /* mode alamat bawaan /portal: auto | on | off */
+    const aliasRaw = String(req.body.portal_default_alias || '').trim().toLowerCase();
+    const aliasMode = ['auto', 'on', 'off'].includes(aliasRaw) ? aliasRaw : null;
     for (const [k, v] of Object.entries(baru)) dbm.setSetting(k, v);
-    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Mengubah alamat portal publik (${Object.values(baru).join(', ')})`);
-    res.redirect(req.BASE + '/portal-publik?ok=' + encodeURIComponent('Alamat portal publik disimpan.'));
+    if (aliasMode) dbm.setSetting('portal_default_alias', aliasMode);
+    const st = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return null; } })();
+    dbm.logAudit(req.user, 'EDIT', 'sekolah',
+      `Mengubah alamat portal publik (${Object.values(baru).join(', ') || 'tanpa perubahan slug'})`
+      + (st ? `; alamat bawaan /portal ${st.on ? 'aktif' : 'NONAKTIF'} (mode ${st.mode})` : ''));
+    const note = st && !st.on ? ` Alamat bawaan /portal tidak dipakai — portal hanya di /${st.slug}.` : '';
+    res.redirect(req.BASE + '/portal-publik?ok=' + encodeURIComponent('Alamat portal publik disimpan.' + note));
   });
 
   /* ---------------- URL portal (slug unik antar sekolah) ---------------- */
@@ -659,7 +689,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     try {
       const title = String(req.body.portal_page_title || '').replace(/\s+/g, ' ').trim();
       const subtitle = String(req.body.portal_subtitle || '').replace(/\s+/g, ' ').trim();
-      const err = saas.portalTextError ? saas.portalTextError({ title, subtitle }) : null;
+      /* judul tab khusus tautan bertoken (opsional, boleh "Rincian {judul}") */
+      const tokenTitle = String(req.body.portal_token_title || '').replace(/\s+/g, ' ').trim();
+      const err = saas.portalTextError ? saas.portalTextError({ title, subtitle, tokenTitle }) : null;
       if (err) throw new Error(err);
       /* sakelar publikasi ketiga portal (nilai '1'/'0').
          Hanya diproses bila form publikasi yang dikirim (penanda simpan_publikasi) —
@@ -681,9 +713,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       }
       dbm.setSetting('portal_page_title', title);
       dbm.setSetting('portal_subtitle', subtitle);
+      dbm.setSetting('portal_token_title', tokenTitle);
       dbm.logAudit(req.user, 'EDIT PORTAL', 'sekolah',
         `Portal publik — ${withSwitches ? (changed.length ? changed.join(' · ') : 'sakelar tidak berubah') : 'teks saja'}; ` +
-        `judul "${title || '(default)'}", sub-judul "${subtitle || '(default)'}"`);
+        `judul "${title || '(default)'}", judul bertoken "${tokenTitle || '(ikut judul)'}", sub-judul "${subtitle || '(default)'}"`);
       const anyOff = withSwitches && SW.some(([key]) => !req.body[key]);
       res.redirect(req.BASE + flashUrl('/portal-publik', 'ok',
         !withSwitches ? 'Teks portal publik disimpan.'

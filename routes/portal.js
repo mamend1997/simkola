@@ -10,8 +10,16 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas }) => {
   const url = (base, sub = '') => `${base}/${slug()}${sub}`;
   /** teks portal (judul tab + sub-judul banner) — default dari Super Admin Pusat */
   const textOf = settings => (saas && saas.portalText ? saas.portalText(settings) : {
-    title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA'
+    title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA', tokenTitle: 'Cek Tagihan'
   });
+  /**
+   * Judul tab terpusat: `{{ prefix }} · {{ nama sekolah }}`.
+   * Prefix = `portal_page_title`, atau `portal_token_title` bila URL membawa token terverifikasi.
+   * Tidak ada judul yang di-hardcode di komponen halaman (dulu sempat "Tagihan Siswa").
+   */
+  const titleOf = (settings, token) => (saas && saas.portalTitleFull
+    ? saas.portalTitleFull(settings, { token: !!token })
+    : { prefix: 'Cek Tagihan', school: String((settings || {}).sekolah_nama || 'Sekolah'), full: 'Cek Tagihan · Sekolah' });
 
   const NAMA_BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
   const bulanNama = m => NAMA_BULAN[(Number(m) - 1 + 12) % 12] || '-';
@@ -33,23 +41,50 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas }) => {
     return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
 
-  function shell({ base, settings, content, title }) {
+  /**
+   * Kerangka halaman portal publik.
+   * `token` = true bila tautan pribadi (?token=…) sudah TERVERIFIKASI → memakai
+   * `portal_token_title` (bila diisi sekolah) sebagai prefix judul tab.
+   * `canonical` = alamat publik tanpa query (dipakai og:url agar token tidak tersebar).
+   */
+  function shell({ base, settings, content, token = false, canonical = '' }) {
     const logo = settings.sekolah_logo
       ? `<img src="${esc(settings.sekolah_logo)}"${ui.logoSrcset(settings, "52px")} alt="Logo" width="52" height="52" fetchpriority="high" decoding="async">`
       : `<div class="p-logo-ph">${esc((settings.sekolah_nama || 'S').charAt(0))}</div>`;
     const footerId = ui.identitasFooter(settings);
     const txt = textOf(settings);
-    const pageTitle = String(title || txt.title);
+    const judul = titleOf(settings, token);
+    /* ---- Open Graph / Twitter: pratinjau WhatsApp & media sosial ---- */
+    const ogImage = (() => {
+      const raw = String(settings.sekolah_logo || '').trim();
+      if (!raw) return '';
+      return /^https?:\/\//i.test(raw) ? raw : (/^https?:\/\//i.test(canonical) ? canonical.replace(/^(https?:\/\/[^/]+).*$/, '$1') + raw : '');
+    })();
+    const ogDesc = [txt.subtitle, settings.sekolah_nama].filter(Boolean).join(' — ').slice(0, 200);
+    const metaOg = `
+<meta name="description" content="${esc(ogDesc)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${esc(settings.sekolah_nama || 'Sekolah')}">
+<meta property="og:title" content="${esc(judul.full)}">
+<meta property="og:description" content="${esc(ogDesc)}">
+${canonical ? `<meta property="og:url" content="${esc(canonical)}">` : ''}
+${ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : ''}
+<meta property="og:locale" content="id_ID">
+<meta name="twitter:card" content="${ogImage ? 'summary' : 'summary'}">
+<meta name="twitter:title" content="${esc(judul.full)}">
+<meta name="twitter:description" content="${esc(ogDesc)}">
+${ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : ''}
+${token ? '<meta name="robots" content="noindex,nofollow">' : ''}`;
     return `<!DOCTYPE html><html lang="id" data-mode="${ui.modeOf(settings)}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(pageTitle)} · ${esc(settings.sekolah_nama || 'Sekolah')}</title>
+<title>${esc(judul.full)}</title>${metaOg}
 ${ui.fontLinks()}
 ${ui.logoPreconnect([settings.sekolah_logo])}
 ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.sekolah_logo)}" fetchpriority="high">` : ''}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}">
 <link rel="icon" href="${base}/favicon.ico">
 <meta name="theme-color" content="#F97316">
-</head><body class="portal-body">
+</head><body class="portal-body"${token ? ' data-portal-token="1"' : ''}>
 <div class="portal-wrap">
   <header class="portal-head">
     ${logo}
@@ -66,8 +101,9 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
   }
 
   function searchForm({ settings, base, nama = '', lahir = '', err = '', ok = '' }) {
+    /* judul kartu mengikuti judul portal yang diatur sekolah (bukan teks hardcode) */
     return `<div class="portal-card">
-      <h2>Cek Tagihan Iuran</h2>
+      <h2>${esc(textOf(settings).title)}</h2>
       <p class="muted small">Masukkan <b>nama siswa</b> dan <b>tanggal lahir</b> sesuai data sekolah untuk melihat tagihan. Kedua data harus cocok (verifikasi 2 faktor sederhana).</p>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
       ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
@@ -206,9 +242,13 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
   function handle(req, res) {
     const base = req.BASE;
     const settings = dbm.settingsAll();
+    /* alamat publik tanpa query — dipakai og:url agar token pribadi tidak ikut tersebar */
+    const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim() || 'https';
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const canonical = host ? `${proto}://${host}${base}/${slug()}` : '';
     if (dbm.getSetting('portal_aktif', '1') !== '1') {
       return res.html(shell({
-        base, settings, content: `<div class="portal-card"><h2>Portal sementara ditutup</h2><p class="muted">Pengelola sekolah menonaktifkan portal cek tagihan. Silakan hubungi bendahara sekolah.</p></div>`
+        base, settings, canonical, content: `<div class="portal-card"><h2>Portal sementara ditutup</h2><p class="muted">Pengelola sekolah menonaktifkan portal cek tagihan. Silakan hubungi bendahara sekolah.</p></div>`
       }), 503);
     }
     const nama = String(req.query.get('nama') || '').trim();
@@ -221,33 +261,34 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
       const siswaId = reminder.verifyPortalToken(dbm, tokenRaw);
       const s = siswaId ? db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id WHERE s.id=?`).get(siswaId) : null;
       if (!s) {
+        /* token tidak sah → judul kembali ke judul publik biasa (bukan "Rincian …") */
         return res.html(shell({
-          base, settings, title: 'Tautan Tidak Valid',
+          base, settings, canonical,
           content: searchForm({ settings, base, err: 'Tautan tagihan tidak valid atau sudah tidak berlaku. Silakan cari data dengan nama dan tanggal lahir siswa.' })
         }));
       }
       const students = [{ ...s, tags: dbm.iuranTagihanRows({ siswaId: s.id }) }];
       return res.html(shell({
-        base, settings, title: 'Tagihan Siswa',
+        base, settings, canonical, token: true,
         content: `<div class="alert ok">${ui.icon('check')}<div>Tautan pribadi terverifikasi — menampilkan tagihan <b>${esc(s.nama)}</b> (${esc(s.kelas_nama || '-')}).</div></div>`
           + renderResults({ settings, base, students, pesanOk, pesanErr })
       }));
     }
-    if (!nama && !lahirRaw) return res.html(shell({ base, settings, content: searchForm({ settings, base, err: pesanErr, ok: pesanOk }) }));
+    if (!nama && !lahirRaw) return res.html(shell({ base, settings, canonical, content: searchForm({ settings, base, err: pesanErr, ok: pesanOk }) }));
     const lahir = normalizeDate(lahirRaw) || (/^\d{4}-\d{2}-\d{2}$/.test(lahirRaw) ? lahirRaw : null);
     if (!nama || !lahir) {
-      return res.html(shell({ base, settings, content: searchForm({ settings, base, nama, lahir: lahirRaw, err: 'Nama dan tanggal lahir wajib diisi dengan benar.' }) }));
+      return res.html(shell({ base, settings, canonical, content: searchForm({ settings, base, nama, lahir: lahirRaw, err: 'Nama dan tanggal lahir wajib diisi dengan benar.' }) }));
     }
     const cands = db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id
       WHERE lower(trim(s.nama))=lower(?) AND s.tanggal_lahir=?`).all(nama, lahir);
     if (!cands.length) {
       return res.html(shell({
-        base, settings, title: 'Data Tidak Ditemukan',
+        base, settings, canonical,
         content: searchForm({ settings, base, nama, lahir: lahirRaw, err: 'Data tidak ditemukan. Pastikan nama dan tanggal lahir sama persis dengan data sekolah (tanggal lahir wajib diisi petugas).' })
       }));
     }
     const students = cands.map(s => ({ ...s, tags: dbm.iuranTagihanRows({ siswaId: s.id }) }));
-    res.html(shell({ base, settings, title: 'Tagihan Siswa', content: renderResults({ settings, base, students, pesanOk, pesanErr }) }));
+    res.html(shell({ base, settings, canonical, content: renderResults({ settings, base, students, pesanOk, pesanErr }) }));
   }
 
   get('/portal', handle);

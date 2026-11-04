@@ -353,8 +353,12 @@ const cookieOf = sc => String(sc || '').split(';')[0];
   ok('slug tersimpan di control plane', sdb.prepare('SELECT portal_slug FROM tenants WHERE id=1').get().portal_slug === 'smk-pgri-cikoneng');
   r = await req('GET', '/smk-pgri-cikoneng/portal', null, {});
   ok('portal /<slug>/portal dapat dibuka', r.status === 200 && /Portal/.test(r.text), r.status);
+  /* ronde 32: bentuk lama /portal/<slug> ikut ditutup (alamat bawaan /portal dihapus) */
   r = await req('GET', '/portal/smk-pgri-cikoneng', null, {});
-  ok('portal /portal/<slug> dapat dibuka', r.status === 200, r.status);
+  ok('bentuk lama /portal/<slug> tidak lagi dilayani (404)', r.status === 404, r.status);
+  /* alamat per sekolah tetap tersedia: /<slug> dan /<slug>/portal */
+  r = await req('GET', '/smk-pgri-cikoneng', null, {});
+  ok('alamat /<slug> tetap dapat dibuka', r.status === 200 && /portal-head/.test(r.text), r.status);
   r = await req('GET', '/sekolah-tidak-ada/portal', null, {});
   ok('slug tidak dikenal → 404 Sekolah Tidak Ditemukan', r.status === 404 && /Sekolah Tidak Ditemukan/.test(r.text), r.status);
 

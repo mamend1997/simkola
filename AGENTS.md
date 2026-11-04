@@ -1180,3 +1180,107 @@ node dev-tests/round30.js     # 46 cek: redirect dashboard, sesi otomatis, kartu
 node dev-tests/ui-round30.js  # 22 cek Playwright: alur daftar di browser, Lihat password, Salin ke clipboard,
                               # mobile 390px (1 kolom), tutup kartu & tidak muncul lagi, login ulang
 ```
+
+---
+
+## Ronde 31 — Judul tab dinamis (tanpa token vs `?token=`) + Open Graph
+
+### Satu sumber kebenaran: `saas.portalTitleFull()`
+`saas_extra.js` (diekspor lewat `saas`):
+- `portalText(settings)` → `{ title, subtitle, tokenTitle, tokenTitleRaw, defaultTitle, defaultSubtitle, defaultTokenTitle }`.
+- `fillTitle(raw, base)` → isi placeholder **`{judul}`** / `{title}`.
+- **`portalTitleFull(settings, { token })`** → `{ prefix, school, full }`, `full = "<prefix> · <nama sekolah>"`.
+  `prefix` = `portal_token_title` (bila `token:true` dan terisi) atau `portal_page_title`.
+- Setting baru (per sekolah): **`portal_token_title`** (maks `PORTAL_TOKEN_TITLE_MAX` = 60, boleh `Rincian {judul}`).
+- Default global Super Admin: **`portal_default_token_title`** (`/super-admin/branding`). Kosong = ikut `portal_default_title`.
+- `portalTextError({title, subtitle, tokenTitle})` memvalidasi ketiganya **sebelum** ada setting yang ditulis.
+
+Perilaku (sesuai permintaan):
+| Kondisi | Judul tab |
+|---|---|
+| tanpa token | `<portal_page_title> · <sekolah>` |
+| `?token=…` **terverifikasi** | `<portal_token_title> · <sekolah>`; kosong ⇒ **sama** dengan judul biasa (Opsi A) |
+| `?token=…` berisi `{judul}` | placeholder diganti `portal_page_title` (mis. `Rincian Kewajiban Iuran`) |
+| `?token=` palsu/kedaluwarsa | judul biasa (token tidak dianggap aktif) |
+
+### `<head>` terpusat (`routes/portal.js` `shell()`)
+Tidak ada lagi judul hardcode (`'Tagihan Siswa'`, `'Tautan Tidak Valid'`, dst. dihapus). Shell menerima `token` dan `canonical`:
+- `<title>` + **`og:title`** + **`twitter:title`** = `portalTitleFull()` (selalu sinkron).
+- `og:type=website`, `og:site_name`, `og:locale=id_ID`, `og:description`/`twitter:description` (= sub-judul + nama sekolah), `og:image`/`twitter:image` (logo sekolah; URL relatif dijadikan absolut), `twitter:card=summary`.
+- **`og:url` = alamat publik tanpa query** (token pribadi tidak ikut tersebar ke pratinjau WhatsApp).
+- Halaman bertoken: **`<meta name="robots" content="noindex,nofollow">`** + `body[data-portal-token="1"]`; halaman publik biasa tidak noindex.
+- Judul kartu form pencarian (`<h2>`) kini memakai `portal_page_title`, bukan teks hardcode.
+
+### Panel admin
+- **Tenant** (`/portal-publik`): isian **"Judul Tab Saat Tautan Bertoken (opsional)"** (`portal_token_title`, maxlength 60) + baris pratinjau `.pv-token` (`data-pv-tokentab`, `data-pv-tokenhint`). JS `portal-preview` mengisi `{judul}` secara live untuk kedua pratinjau.
+- **Super Admin** (`/super-admin/branding`): isian "Default Judul Tab Saat Tautan Bertoken".
+
+### Tanpa JS hydration
+`public/app.js` **tidak pernah** menulis `document.title` (dijaga oleh tes), jadi judul dari server tidak ditimpa setelah token diverifikasi di latar belakang.
+
+### Tes
+```bash
+node dev-tests/round31.js     # 47 cek: judul tanpa token, OG/Twitter sinkron, og:image & og:url,
+                              # Opsi A (kosong) & Opsi B ({judul}/teks bebas), token palsu, noindex,
+                              # slug kustom (iuran-siswa-spc), validasi 60 karakter tanpa simpan separuh,
+                              # default Super Admin, panel tenant, audit, tidak ada document.title di JS
+node dev-tests/ui-round31.js  # 18 cek Playwright: pratinjau dua judul secara live, hasil nyata di <title>,
+                              # meta OG di halaman, mobile 390px, judul tidak berubah oleh JS
+```
+
+---
+
+## Ronde 32 — Menghapus alamat bawaan `/portal` setelah sekolah memakai slug kustom
+
+### Masalah
+`/portal` (path kanonik) **selalu** dilayani dan selalu menampilkan portal tenant 1, sehingga isinya sama
+dengan alamat kustom sekolah (mis. `/iuran-siswa-spc`) → dua URL untuk satu halaman yang sama.
+
+### Setting baru `portal_default_alias` (per sekolah, di DB tenant)
+| Nilai | Arti |
+|---|---|
+| `auto` (**default**) | `/portal` hanya dilayani selama slug portal masih `portal` |
+| `on` | `/portal` selalu dilayani (kompatibilitas tautan lama) |
+| `off` | `/portal` tidak pernah dilayani (hanya alamat kustom) |
+
+Helper **`dbm.portalDefaultAlias()`** → `{ on, mode, custom, slug }` (menghormati `portalSlugs()` yang sudah
+divalidasi & unik). Karena `auto` + slug kustom (mis. `iuran-siswa-spc`) menghasilkan `on:false`, sekolah yang
+sudah mengganti slug otomatis kehilangan alamat bawaan tanpa perlu mengubah data apa pun.
+
+### Middleware (`server.js`)
+- Jalur **belum login**: di dalam `runAsTenant` (butuh setting tenant) — bila `pathname0` cocok `/^\/portal(\/|$)/`
+  dan `!alias.on` → `portalMovedPage(...)` status **404**. Yang dicek adalah **path permintaan asli**, bukan
+  `portalPath` hasil rewrite, sehingga `/<slug>` & `<slug>/portal` tetap normal.
+- Jalur **sudah login**: pengecekan sama sebelum `runRoute`, jadi admin sekolah pun tidak bisa membuka `/portal`.
+- `portalMovedPage({base, tenant, activeUrl, activeLabel})` (server.js): halaman 404 ber-branding sekolah
+  (logo + nama), teks **"Alamat portal ini sudah tidak digunakan"**, tautan `.url-chip` ke alamat aktif, tombol
+  "Buka Portal Sekolah", dan `robots: noindex`.
+- Urutan prioritas: status Super Admin (`portalAccess`) **diperiksa lebih dulu** — sekolah nonaktif/private/hapus
+  tetap 404 dari `portalAccessPage`, bukan halaman "dipindahkan".
+- Yang ikut tertutup: `/portal`, `/portal/`, `/portal/<sub-route>` (mis. `/portal/siswa`), bentuk lama
+  `/portal/<slug>`, dan tautan `?token=…` yang dibuka lewat `/portal`.
+- Yang **tidak** terpengaruh: `/portal-pegawai`, `/portal-slip` (punya sakelar sendiri), `/<slug>`, `/<slug>/portal`,
+  sub-route internal lewat slug (`/<slug>/siswa`, `POST /<slug>/pesan`), dan akar domain khusus.
+
+### Panel tenant (`/portal-publik` → kartu "Alamat (URL) Portal Publik")
+Select **Alamat Bawaan `/portal`** (`auto`/`on`/`off`) + baris status hidup:
+`Saat ini: nonaktif — (domain)/portal menampilkan halaman 404, portal hanya di (domain)/<slug>`.
+POST `/sekolah/portal-slug` menyimpan slug **dan** mode dalam satu validasi (slug divalidasi dulu; mode hanya
+`auto|on|off`), audit mencatat `alamat bawaan /portal aktif|NONAKTIF (mode …)`, dan flash mengingatkan bahwa
+alamat bawaan tidak dipakai.
+
+### Tes
+```bash
+node dev-tests/round32.js   # 41 cek: slug default+auto (200), slug kustom+auto (404 + tautan alamat aktif),
+                            # alamat kustom & sub-rute & catatan & token tetap jalan, /portal-* tidak terpengaruh,
+                            # mode on/off, pengguna login juga 404, prioritas status Super Admin, UI tenant & audit
+```
+Disesuaikan karena perubahan **disengaja**:
+- `round18.js` — dulu "alamat default /portal tetap dapat dibuka"; kini 404 + bukti mode `on` menghidupkannya lagi (57 cek).
+- `round23.js` — bentuk lama `/portal/<slug>` kini 404; `/<slug>` diuji sebagai alamat yang berlaku (128 cek).
+- `round28.js` — semua pengecekan portal memakai slug aktif (`/${slug0}`), bukan `/portal` (72 cek).
+
+### Catatan live
+Sekolah live (`SMK PGRI CIKONENG`) memakai slug `iuran-siswa-spc` (pegawai `piutang-pegawai-spc`, slip
+`slip-honor-spc`), jadi dengan mode `auto` alamat `/portal` **otomatis** menjadi 404 setelah rilis ini —
+tanpa perlu mengubah data di database live.

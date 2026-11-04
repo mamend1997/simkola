@@ -885,6 +885,10 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
               <input type="text" name="portal_default_subtitle" value="${esc(saas.portalDefaults().subtitle)}" maxlength="60" placeholder="PORTAL CEK TAGIHAN IURAN SISWA">
               <div class="hint">Maksimal 60 karakter agar banner tetap rapi di layar HP.</div></div>
           </div>
+          <div class="field"><label>Default Judul Tab Saat Tautan Bertoken (opsional)</label>
+            <input type="text" name="portal_default_token_title" value="${esc(saas.portalDefaults().tokenTitle || '')}" maxlength="60" placeholder="mis. Rincian {judul} — kosong = sama dengan Default Title">
+            <div class="hint">Berlaku untuk sekolah yang membuka tautan pribadi <code>?token=…</code> dan belum mengisi judulnya sendiri.
+              Placeholder <code>{judul}</code> diganti judul portal sekolah. Kosongkan agar judulnya konsisten (Opsi A).</div></div>
           <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Branding &amp; Keamanan</button></div>
         </form>
       </div>
@@ -950,6 +954,11 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (b.portal_default_subtitle !== undefined) {
         const v = String(b.portal_default_subtitle || '').trim().slice(0, saas.PORTAL_SUBTITLE_MAX || 60);
         saas.set('portal_default_subtitle', v || saas.PORTAL_TEXT_DEFAULT.subtitle);
+      }
+      if (b.portal_default_token_title !== undefined) {
+        /* kosong = ikut Default Title (perilaku konsisten untuk semua sekolah) */
+        const v = String(b.portal_default_token_title || '').trim().slice(0, saas.PORTAL_TOKEN_TITLE_MAX || 60);
+        saas.set('portal_default_token_title', v);
       }
       saas.logSaas(u, 'EDIT BRANDING', 'saas', 'Memperbarui branding sistem & pengaturan keamanan pendaftaran');
       res.redirect(req.BASE + flash('/super-admin/branding', 'ok', 'Branding sistem disimpan.'));

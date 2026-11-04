@@ -177,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
   };
   const PORTAL_TEXT_DEFAULT = { title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA' };
   const PORTAL_TITLE_MAX = 40;
+  const PORTAL_TOKEN_TITLE_MAX = 60;   // judul saat tautan bertoken (boleh "Rincian {judul}")
   const PORTAL_SUBTITLE_MAX = 60;
 
   function portalStatusOf(t) {
@@ -264,23 +265,54 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
   }
 
   function portalDefaults() {
+    const title = String(get('portal_default_title', '') || '').trim() || PORTAL_TEXT_DEFAULT.title;
     return {
-      title: String(get('portal_default_title', '') || '').trim() || PORTAL_TEXT_DEFAULT.title,
-      subtitle: String(get('portal_default_subtitle', '') || '').trim() || PORTAL_TEXT_DEFAULT.subtitle
+      title,
+      subtitle: String(get('portal_default_subtitle', '') || '').trim() || PORTAL_TEXT_DEFAULT.subtitle,
+      /* judul tab saat URL membawa token terverifikasi; kosong = ikut judul utama */
+      tokenTitle: String(get('portal_default_token_title', '') || '').trim() || ''
     };
   }
-  /** teks portal sekolah: judul tab + sub-judul banner (fallback ke default Super Admin) */
+  /** isi placeholder {judul} / {title} pada teks judul dari admin */
+  function fillTitle(raw, base) {
+    return String(raw || '').replace(/\{(?:judul|title)\}/gi, String(base || '')).replace(/\s+/g, ' ').trim();
+  }
+  /**
+   * Teks portal sekolah: judul tab (normal & saat token), sub-judul banner.
+   * - `portal_page_title`  → judul tab biasa (default Super Admin bila kosong)
+   * - `portal_token_title` → judul tab saat membuka tautan bertoken (?token=…);
+   *   boleh memakai placeholder {judul}, mis. "Rincian {judul}". Kosong = ikut judul biasa.
+   */
   function portalText(settings) {
     const d = portalDefaults();
     const s = settings || {};
-    const title = String(s.portal_page_title || '').trim() || d.title;
-    const subtitle = String(s.portal_subtitle || '').trim() || d.subtitle;
-    return { title: title.slice(0, PORTAL_TITLE_MAX), subtitle: subtitle.slice(0, PORTAL_SUBTITLE_MAX), defaultTitle: d.title, defaultSubtitle: d.subtitle };
+    const title = (String(s.portal_page_title || '').trim() || d.title).slice(0, PORTAL_TITLE_MAX);
+    const subtitle = (String(s.portal_subtitle || '').trim() || d.subtitle).slice(0, PORTAL_SUBTITLE_MAX);
+    const tokenRaw = String(s.portal_token_title || '').trim() || d.tokenTitle || '';
+    const tokenTitle = (fillTitle(tokenRaw, title) || title).slice(0, PORTAL_TOKEN_TITLE_MAX);
+    return {
+      title, subtitle, tokenTitle,
+      defaultTitle: d.title, defaultSubtitle: d.subtitle, defaultTokenTitle: d.tokenTitle,
+      tokenTitleRaw: tokenRaw
+    };
   }
-  function portalTextError({ title, subtitle } = {}) {
+  /** judul tab final sesuai konteks: { token: true } untuk tautan bertoken */
+  function portalTitle(settings, opts = {}) {
+    const t = portalText(settings);
+    return opts.token ? (t.tokenTitle || t.title) : t.title;
+  }
+  /** versi lengkap untuk <title> & OG: prefix + nama sekolah */
+  function portalTitleFull(settings, opts = {}) {
+    const t = portalText(settings);
+    const prefix = opts.token ? (t.tokenTitle || t.title) : t.title;
+    const nama = String((settings && settings.sekolah_nama) || '').trim() || 'Sekolah';
+    return { prefix, school: nama, full: `${prefix} · ${nama}` };
+  }
+  function portalTextError({ title, subtitle, tokenTitle } = {}) {
     if (String(title || '').length > PORTAL_TITLE_MAX) return `Judul tab browser maksimal ${PORTAL_TITLE_MAX} karakter.`;
+    if (String(tokenTitle || '').length > PORTAL_TOKEN_TITLE_MAX) return `Judul tab saat tautan bertoken maksimal ${PORTAL_TOKEN_TITLE_MAX} karakter.`;
     if (String(subtitle || '').length > PORTAL_SUBTITLE_MAX) return `Sub-judul banner maksimal ${PORTAL_SUBTITLE_MAX} karakter.`;
-    if (/\n|\r/.test(String(title || '') + String(subtitle || ''))) return 'Teks portal tidak boleh memuat baris baru.';
+    if (/\n|\r/.test(String(title || '') + String(tokenTitle || '') + String(subtitle || ''))) return 'Teks portal tidak boleh memuat baris baru.';
     return null;
   }
 
@@ -679,10 +711,10 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
   return {
     RESERVED, slugify, slugFromName, portalSlugTaken, portalSlugError, setPortalSlug,
     tenantByPortalSlug, normalizeDomain, domainError, setCustomDomain, tenantByDomain, checkDns,
-    PORTAL_STATUS, PORTAL_TEXT_DEFAULT, PORTAL_TITLE_MAX, PORTAL_SUBTITLE_MAX,
+    PORTAL_STATUS, PORTAL_TEXT_DEFAULT, PORTAL_TITLE_MAX, PORTAL_SUBTITLE_MAX, PORTAL_TOKEN_TITLE_MAX,
     portalStatusOf, portalStatusInfo, setPortalStatus, clearPortalSlug,
     PORTAL_SWITCH, portalKindOf, tenantPortalSwitches, tenantPortalPublished,
-    portalAccess, portalDefaults, portalText, portalTextError,
+    portalAccess, portalDefaults, portalText, portalTitle, portalTitleFull, fillTitle, portalTextError,
     npsnNormalize, npsnError, setTenantNpsn, tenantNpsn, serverIp,
     guideRows, guideById, guideSave, guideDelete, guideReorder,
     announcementRows, announcementById, announcementSave, announcementDelete, visibleAnnouncements,
