@@ -65,52 +65,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
      (kode server, routes, aset publik, tes, dokumentasi). Berkas
      rahasia (.env) & database TIDAK disertakan.
      ------------------------------------------------------------------ */
-  const SRC_INCLUDE_FILES = [
-    'server.js', 'env.js', 'db.js', 'lib.js', 'ui.js', 'wa.js', 'xlsx-read.js',
-    'importer.js', 'impcache.js', 'printcfg.js', 'package.json', 'package-lock.json',
-    '.env.example', '.gitignore', 'AGENTS.md', 'README.md'
-  ];
-  const SRC_INCLUDE_DIRS = ['routes', 'public', 'dev-tests'];
-  const SRC_EXCLUDE_FILES = new Set(['.env', '.env.local', '.vibecoder-media-token']);
-  const SRC_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'data', '.cache', '.vscode']);
-  const MAX_SRC_BYTES = 3 * 1024 * 1024;
-  function collectSource() {
-    const files = [];
-    const root = path.join(__dirname, '..');
-    const put = (abs, rel) => {
-      try {
-        const st = fs.statSync(abs);
-        if (!st.isFile() || st.size > MAX_SRC_BYTES) return;
-        files.push({ name: rel.replace(/\\/g, '/'), data: fs.readFileSync(abs) });
-      } catch (e) { }
-    };
-    const walk = (dirAbs, dirRel) => {
-      let entries = [];
-      try { entries = fs.readdirSync(dirAbs, { withFileTypes: true }); } catch (e) { return; }
-      for (const en of entries) {
-        const abs = path.join(dirAbs, en.name);
-        const rel = dirRel ? dirRel + '/' + en.name : en.name;
-        if (en.isDirectory()) {
-          if (SRC_EXCLUDE_DIRS.has(en.name)) continue;
-          walk(abs, rel);
-        } else if (en.isFile()) {
-          if (SRC_EXCLUDE_FILES.has(en.name)) continue;
-          if (/\.(sqlite|sqlite3|db)(-wal|-shm)?$/i.test(en.name)) continue;
-          if (/^\.tmp-/.test(en.name)) continue;
-          put(abs, rel);
-        }
-      }
-    };
-    for (const f of SRC_INCLUDE_FILES) {
-      const abs = path.join(root, f);
-      if (fs.existsSync(abs)) put(abs, f);
-    }
-    for (const d of SRC_INCLUDE_DIRS) {
-      const abs = path.join(root, d);
-      if (fs.existsSync(abs)) walk(abs, d);
-    }
-    return files;
-  }
+  const collectSource = require('../sourcepack').collectSource;
 
   function modalCollector() {
     const list = [];
@@ -141,7 +96,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         <div class="field"><label>Role</label><select name="role">
           ${Object.entries(dbm.ROLE_LABEL).map(([k, v]) => `<option value="${k}" ${u && u.role === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}
         </select>
-        <div class="hint">Role <b>Akun Demo</b> memakai database dummy terpisah (sandbox) dan tidak dapat mengubah kata sandinya sendiri.</div></div>
+        <div class="hint">Role menentukan hak akses menu. Super Admin memiliki akses penuh, Kepala Sekolah hanya membaca &amp; menyetujui,
+          Staff hanya mencatat transaksi.</div></div>
         <div class="field"><label>Jabatan</label><input name="jabatan" value="${esc(u ? u.jabatan : '')}" placeholder="Bendahara / Staf TU"></div>
       </div>
       <div class="field"><label>Password ${u ? '(kosongkan jika tidak diubah)' : ''}</label><input type="password" name="password" minlength="6" ${u ? '' : 'required'} placeholder="Minimal 6 karakter"></div>
@@ -179,8 +135,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
       }
       return `<div class="card mb-3">
         <div class="card-head"><div><h3>${esc(dbm.ROLE_LABEL[role])}</h3><div class="sub">Hak akses per modul · ${role === 'kepala_sekolah' ? 'read-only + approval + export laporan'
-        : role === 'demo' ? 'database dummy terpisah · pilih menu yang boleh dicoba akun demo'
-          : 'hanya input transaksi pada BKU aktif'}</div></div>
+        : 'hanya input transaksi pada BKU aktif'}</div></div>
           <label class="check small">${c.can('pengguna', 'edit') ? `<input type="checkbox" data-toggle-col="${role}" ${'title="Centang / hapus semua untuk role ini"'}> Pilih semua` : ''}</label></div>
         <div class="table-wrap"><table class="matrix"><thead><tr><th>Modul</th>${dbm.ACTIONS.map(a => `<th class="center">${ACTION_LABEL[a]}</th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody></table></div></div>`;
@@ -229,12 +184,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     <form method="post" action="${c.base}/pengguna/permissions">
       ${matrixTable('kepala_sekolah')}
       ${matrixTable('staff')}
-      ${matrixTable('demo')}
-      <div class="alert info" style="margin:12px 0 0">${ui.icon('shield')}<div><b>Akun Demo (Sandbox).</b>
-        Pengguna dengan role <b>Akun Demo</b> masuk ke <b>database dummy terpisah</b> — semua transaksi, iuran, honor &amp; pengaturan yang mereka ubah
-        <b>tidak memengaruhi data sekolah</b>. Centang modul/menu yang boleh mereka akses pada tabel <b>Akun Demo</b> di atas
-        (modul sistem seperti Pengguna, Identitas Sekolah, Backup &amp; Audit diblokir secara bawaan).
-        Kata sandi akun demo hanya dapat diatur admin melalui tombol Edit pada daftar pengguna — akun demo tidak bisa mengubah sandinya sendiri.</div></div>
+      <div class="alert info" style="margin:12px 0 0">${ui.icon('shield')}<div><b>Role akun sekolah:</b> Super Admin / Bendahara Utama (akses penuh),
+        Kepala Sekolah (baca + persetujuan), dan Staff / Staf Inputer (input transaksi pada BKU aktif).
+        Role <b>Akun Demo</b> sudah dihapus dari seluruh modul.</div></div>
       ${c.can('pengguna', 'edit') ? `<div class="form-actions" style="border:0"><button class="btn btn-primary">${ui.icon('save')}Simpan Permission Matrix</button></div>` : ''}
     </form>
 
@@ -255,16 +207,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         </div>
         <hr class="sep">
         <div class="t-strong mb-1">Portal Publik &amp; OTP WhatsApp</div>
-        <div class="row2">
+        <div class="alert info">${ui.icon('link')}<div>Status tayang ketiga portal (tagihan siswa, piutang pegawai, slip gaji) beserta judul tab
+          &amp; sub-judul bannernya kini diatur pada menu <a href="${c.base}/portal-publik"><b>Portal Publik</b></a>.</div></div>
+        <div class="row3">
           <div class="field"><label>Portal Cek Tagihan Siswa</label>
-            <label class="check"><input type="checkbox" name="portal_aktif" value="1" ${dbm.getSetting('portal_aktif', '1') === '1' ? 'checked' : ''}> Aktifkan portal tagihan siswa (orang tua)</label>
-            <div class="hint">Alamat: <a href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank">${c.base}/${dbm.portalSlugs().siswa}</a>
-              — ubah di menu <a href="${c.base}/sekolah">Identitas Sekolah</a></div></div>
-          <div class="field"><label>Portal Pegawai</label>
-            <label class="check"><input type="checkbox" name="portal_pegawai_aktif" value="1" ${dbm.getSetting('portal_pegawai_aktif', '1') === '1' ? 'checked' : ''}> Aktifkan portal piutang pegawai</label>
-            <div class="hint">Alamat: <a href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank">${c.base}/${dbm.portalSlugs().pegawai}</a></div>
-            <label class="check"><input type="checkbox" name="portal_slip_aktif" value="1" ${dbm.getSetting('portal_slip_aktif', '1') === '1' ? 'checked' : ''}> Aktifkan portal slip gaji pegawai</label>
-            <div class="hint">Alamat: <a href="${c.base}/${dbm.portalSlugs().slip}" target="_blank">${c.base}/${dbm.portalSlugs().slip}</a></div></div>
+            <a class="btn btn-sm btn-block" href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
+            <div class="hint"><code>${dbm.portalSlugs().siswa}</code></div></div>
+          <div class="field"><label>Portal Piutang Pegawai</label>
+            <a class="btn btn-sm btn-block" href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
+            <div class="hint"><code>${dbm.portalSlugs().pegawai}</code></div></div>
+          <div class="field"><label>Portal Slip Gaji Pegawai</label>
+            <a class="btn btn-sm btn-block" href="${c.base}/${dbm.portalSlugs().slip}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
+            <div class="hint"><code>${dbm.portalSlugs().slip}</code></div></div>
         </div>
         <div class="row2">
           <div class="field"><label>URL Gateway WhatsApp (OTP)</label>
@@ -303,7 +257,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
 
   post('/pengguna/save', async (req, res) => {
     if (!guard(req, res, 'pengguna', req.body.id ? 'edit' : 'create')) return;
-    const { id, nama, email, role, jabatan, password, aktif } = req.body;
+    const { id, nama, email, jabatan, password, aktif } = req.body;
+    let role = String(req.body.role || 'staff');
+    // role "demo" sudah dihapus total — hanya tiga role akun sekolah yang sah
+    if (!dbm.ROLES.includes(role)) return res.redirect(req.BASE + '/pengguna?err=' + encodeURIComponent('Role akun tidak dikenal. Pilih Super Admin, Kepala Sekolah, atau Staff.'));
     if (!nama || !email) return res.redirect(req.BASE + '/pengguna?err=' + encodeURIComponent('Nama dan email wajib diisi.'));
     const dup = db.prepare('SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?').get(String(email).trim(), id || 0);
     if (dup) return res.redirect(req.BASE + '/pengguna?err=' + encodeURIComponent('Email sudah dipakai pengguna lain.'));
@@ -338,7 +295,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
 
   post('/pengguna/role', (req, res) => {
     if (!guard(req, res, 'pengguna', 'edit')) return;
-    const { id, role, aktif } = req.body;
+    const { id, aktif } = req.body;
+    const role = String(req.body.role || 'staff');
+    if (!dbm.ROLES.includes(role)) return res.redirect(req.BASE + '/pengguna?err=' + encodeURIComponent('Role akun tidak dikenal.'));
     const u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     if (!u) return res.redirect(req.BASE + '/pengguna?err=' + encodeURIComponent('Pengguna tidak ditemukan.'));
     if (u.role === 'super_admin' && role !== 'super_admin') {
@@ -367,7 +326,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     if (!guard(req, res, 'pengguna', 'edit')) return;
     db.transaction(() => {
       const upd = db.prepare('INSERT INTO permissions (role,module,action,allowed) VALUES (?,?,?,?) ON CONFLICT(role,module,action) DO UPDATE SET allowed=excluded.allowed');
-      for (const role of ['kepala_sekolah', 'staff', 'demo']) {
+      for (const role of ['kepala_sekolah', 'staff']) {
         for (const m of dbm.MODULES) {
           for (const a of dbm.ACTIONS) {
             const val = req.body[`p_${role}_${m.key}_${a}`] ? 1 : 0;
@@ -376,7 +335,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         }
       }
     })();
-    dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Memperbarui permission matrix role Kepala Sekolah, Staff & Akun Demo');
+    dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Memperbarui permission matrix role Kepala Sekolah & Staff');
     res.redirect(req.BASE + '/pengguna?ok=' + encodeURIComponent('Permission matrix diperbarui.'));
   });
 
@@ -389,11 +348,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
       dbm.setSetting('wa_api_token', String(req.body.wa_api_token || '').trim());
       dbm.setSetting('wa_api_payload', req.body.wa_api_payload === 'json' ? 'json' : 'form');
       dbm.setSetting('wa_demo_tampil', req.body.wa_demo_tampil ? '1' : '0');
-      dbm.setSetting('portal_aktif', req.body.portal_aktif ? '1' : '0');
-      dbm.setSetting('portal_pegawai_aktif', req.body.portal_pegawai_aktif ? '1' : '0');
-      dbm.setSetting('portal_slip_aktif', req.body.portal_slip_aktif ? '1' : '0');
+      /* status tayang portal publik diatur di menu Portal Publik (/portal-publik),
+         bukan di sini — jangan menulis portal_* dari form ini agar tidak saling menimpa. */
     }
-    dbm.logAudit(req.user, 'EDIT', 'pengguna', `Pengaturan sistem: ambang approval Rp ${ambang}${req.body.wa_api_url !== undefined ? ' + portal publik & gateway WhatsApp' : ''}`);
+    dbm.logAudit(req.user, 'EDIT', 'pengguna', `Pengaturan sistem: ambang approval Rp ${ambang}${req.body.wa_api_url !== undefined ? ' + gateway WhatsApp & OTP' : ''}`);
     res.redirect(req.BASE + '/pengguna?ok=' + encodeURIComponent('Pengaturan sistem disimpan.'));
   });
 
@@ -402,13 +360,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     guard(req, res, 'pengguna', 'view');
     const c = ctx(req);
     if (req.query.get('reset') === '1' && c.can('pengguna', 'edit')) {
-      dbm.setMainSetting('nav_hidden', '');
-      dbm.setNavUiGlobal({});
+      dbm.setSetting('nav_hidden', '');
+      dbm.setNavUi({});
       dbm.logAudit(req.user, 'EDIT', 'pengguna', 'Pengaturan tampilan menu: semua menu ditampilkan & urutan dikembalikan ke bawaan');
       return res.redirect(req.BASE + '/tampilan-menu?ok=' + encodeURIComponent('Semua menu ditampilkan kembali (urutan, judul & ikon kembali ke bawaan).'));
     }
-    const hidden = ui.navVisibility(dbm.mainSetting('nav_hidden', ''));
-    const uiCfg = dbm.navUiGlobal();
+    const hidden = ui.navVisibility(dbm.getSetting('nav_hidden', ''));
+    const uiCfg = dbm.navUi();
     const canEdit = c.can('pengguna', 'edit');
     const catalog = ui.navOrdered(uiCfg);
     const totalItems = catalog.reduce((s, g) => s + g.items.length, 0);
@@ -487,7 +445,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
 
   post('/tampilan-menu', async (req, res) => {
     if (!guard(req, res, 'pengguna', 'edit')) return;
-    const catalog = ui.navOrdered(dbm.navUiGlobal());
+    const catalog = ui.navOrdered(dbm.navUi());
     const all = ui.navCatalog().flatMap(g => g.items.map(i => i.href));
     const shown = new Set([].concat(req.body.show || []).map(String));
     const hidden = all.filter(h => !shown.has(h));
@@ -531,8 +489,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
       }
       if (url) icons[r.href] = url;
     }
-    dbm.setNavUiGlobal({ order, groups, labels, icons });
-    dbm.setMainSetting('nav_hidden', hidden.join(','));
+    dbm.setNavUi({ order, groups, labels, icons });
+    dbm.setSetting('nav_hidden', hidden.join(','));
     dbm.logAudit(req.user, 'EDIT', 'pengguna',
       `Pengaturan tampilan menu: ${all.length - hidden.length}/${all.length} menu ditampilkan, ${Object.keys(labels).length} judul diubah, ${Object.keys(icons).length} ikon kustom`);
     const msg = `Pengaturan tampilan menu disimpan.${gagal ? ' Sebagian ikon gagal diunggah: ' + gagal : ''}`;
@@ -561,7 +519,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
           <button class="btn">${ui.icon('search')}Filter</button>
         </form></div>
       <div class="table-wrap sticky-head"><table><thead><tr><th style="width:150px">Waktu</th><th>Pengguna</th><th>Tindakan</th><th>Modul</th><th>Detail</th></tr></thead><tbody>
-        ${rows.map(a => `<tr><td class="nowrap t-sub">${esc(a.created_at)}</td><td class="t-strong">${esc(a.user_nama || '-')}</td>
+        ${rows.map(a => `<tr><td class="nowrap t-sub">${esc(lib.stampID(a.created_at))}</td><td class="t-strong">${esc(a.user_nama || '-')}</td>
           <td>${ui.badge(a.aksi, tone(a.aksi), 'plain')}</td><td class="t-sub">${esc(a.modul)}</td><td>${esc(a.detail)}</td></tr>`).join('')
         || '<tr><td colspan="5" class="center muted">Belum ada aktivitas tercatat.</td></tr>'}
       </tbody></table></div>
@@ -580,50 +538,36 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     const backups = db.prepare("SELECT * FROM audit WHERE aksi IN ('BACKUP','RESTORE') ORDER BY id DESC LIMIT 6").all();
     const content = `<div class="split">
       <div class="card">
-        <div class="card-head"><div><h3>Backup Menyeluruh — Database &amp; Source Code</h3><div class="sub">Satu berkas ZIP berisi seluruh basis data website + rekap CSV</div></div>
-          <div class="toolbar">
-            <a class="btn btn-sm btn-primary" href="${c.base}/pengaturan-backup">${ui.icon('cloud')}Pengaturan Auto-Backup (Telegram)</a>
-          </div></div>
-        <div class="alert info">${ui.icon('info')}<div>Berkas ZIP memuat <b>seluruh basis data</b>: akun &amp; hak akses, BKU umum/kegiatan, transaksi, aset &amp; pinjaman, payroll, piutang, SPP &amp; beasiswa, nota (tautan), serta log aktivitas. Nama berkas otomatis memakai tanggal ekspor.</div></div>
-        <div class="alert info">${ui.icon('cloud')}<div><b>Auto-Backup Telegram:</b> backup otomatis
-          (berkas .zip) dikirim 2x sehari ke Telegram sekolah. Atur Bot Token &amp; Chat ID pada
-          <a href="${c.base}/pengaturan-backup"><b>Pengaturan Auto-Backup</b></a>.
-          Sistem backup lama (email/SMTP dan cloud drive) sudah dihapus.</div></div>
-        <div class="table-wrap mb-2"><table><thead><tr><th>Tabel</th><th class="num">Jumlah baris</th></tr></thead><tbody>
-          ${counts.map(x => `<tr><td class="mono">${esc(x.t)}</td><td class="num">${x.n}</td></tr>`).join('')}
-        </tbody></table></div>
-        <a class="btn btn-primary btn-block" href="${c.base}/backup/download-zip" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Backup Database Keseluruhan (.ZIP)</a>
-        <div class="row2 mt-2">
-          <a class="btn btn-block" href="${c.base}/backup/export-database" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('database')}Export Database (.sql)</a>
-          <a class="btn btn-block" href="${c.base}/backup/download-source" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Download Source Code (.zip)</a>
-        </div>
-        <a class="btn btn-block mt-1" href="${c.base}/backup/download" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Unduh Backup (.json)</a>
-        <div class="alert warn mt-2">${ui.icon('alert')}<div><b>Export Database (.sql)</b> berisi struktur + seluruh isi tabel sebagai perintah SQL — cocok untuk migrasi ke hosting/VPS lain.
-          <b>Download Source Code</b> memuat seluruh kode program (server, routes, aset publik, tes, dokumentasi) <b>tanpa</b> database, <code>node_modules</code>, dan berkas rahasia <code>.env</code>. Sertakan <code>.env.example</code> lalu isi kredensial di server baru.</div></div>
+        <div class="card-head"><div><h3>Backup Data Sekolah</h3>
+          <div class="sub">Berkas JSON berisi seluruh data sekolah ini</div></div>
+          ${ui.badge('Format JSON', 'orange', 'plain')}</div>
+        <div class="alert info">${ui.icon('database')}<div>Berkas <b>.json</b> memuat data internal sekolah Anda saja:
+          identitas sekolah, akun &amp; hak akses, BKU umum/kegiatan, transaksi, aset, piutang, iuran &amp; SPP, payroll, siswa, serta log aktivitas.
+          Berkas ini dapat dipulihkan lewat menu <b>Restore Data Sekolah</b> di samping.</div></div>
+        <a class="btn btn-primary btn-block" href="${c.base}/backup/download" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('download')}Unduh Backup Data Sekolah (.json)</a>
+        <a class="btn btn-block mt-1" href="${c.base}/backup/download-zip" ${c.can('backup', 'create') ? '' : 'disabled'}>${ui.icon('file')}Unduh Arsip .zip (JSON + rekap CSV)</a>
+        <details class="mt-2">
+          <summary class="small muted" style="cursor:pointer">Lihat rincian ${TABLES.length} tabel yang dicadangkan</summary>
+          <div class="table-wrap short mt-2"><table><thead><tr><th>Tabel</th><th class="num">Jumlah baris</th></tr></thead><tbody>
+            ${counts.map(x => `<tr><td class="mono">${esc(x.t)}</td><td class="num">${x.n}</td></tr>`).join('')}
+          </tbody></table></div>
+        </details>
+        <div class="alert info mt-2">${ui.icon('cloud')}<div><b>Cadangan penuh database &amp; source code</b> hanya tersedia untuk
+          <b>Super Admin Pusat</b> melalui menu <b>Backup &amp; Restore Database System</b>.
+          Untuk sekolah, tersedia <b>Auto-Backup Telegram</b> (paket Pro) di
+          <a href="${c.base}/pengaturan-backup"><b>Pengaturan Auto-Backup</b></a>.</div></div>
       </div>
       <div>
         <div class="card mb-3">
-          <div class="card-head"><div><h3>Konfigurasi Lingkungan (.env)</h3><div class="sub">Portable — pindah hosting tanpa mengubah kode</div></div></div>
-          <div class="alert info">${ui.icon('info')}<div>Kredensial database, API key WhatsApp, endpoint media, dan URL domain dibaca dari variabel lingkungan.
-            Buat berkas <code>.env</code> di folder aplikasi (contoh lengkap: <code>.env.example</code>). Nilai dari <code>.env</code> diutamakan di atas pengaturan di halaman ini.</div></div>
-          <div class="table-wrap"><table class="env-tbl"><thead><tr><th>Variabel</th><th>Nilai aktif</th><th>Keterangan</th></tr></thead><tbody>
-            ${envCfg.describe().map(x => `<tr>
-              <td>${esc(x.key)}</td>
-              <td class="${x.fromEnv ? 'env-on' : 'env-off'}">${esc(String(x.value || '(kosong)'))}${x.fromEnv ? '' : ' <span class="t-sub">(default/pengaturan)</span>'}</td>
-              <td class="t-sub">${esc(x.note)}</td></tr>`).join('')}
-          </tbody></table></div>
-          <p class="help mt-1">Berkas <code>.env</code> tidak disertakan pada Download Source Code (aman dari kebocoran kredensial).</p>
-        </div>
-        <div class="card mb-3">
-          <div class="card-head"><div><h3>Restore Data</h3><div class="sub">Pulihkan dari berkas ZIP / JSON cadangan</div></div></div>
+          <div class="card-head"><div><h3>Restore Data Sekolah</h3><div class="sub">Pulihkan dari berkas JSON cadangan sekolah ini</div></div></div>
           <div class="alert warn">${ui.icon('alert')}<div><b>Peringatan:</b> restore akan <b>mengganti seluruh data</b> saat ini dengan isi berkas cadangan. Buat backup terbaru terlebih dahulu. Sistem otomatis menyimpan snapshot pra-restore.</div></div>
           <form method="post" action="${c.base}/backup/restore" data-confirm="PERINGATAN: seluruh data saat ini akan diganti dengan isi berkas backup. Lanjutkan restore?">
             <input type="hidden" name="file_b64" id="file_b64">
             <div class="field"><label>Berkas Backup (.zip / .json)</label>
               <input type="file" accept=".zip,.json,application/zip,application/json" data-b64="file_b64" data-max="30">
-              <div class="hint" id="file_b64-info">Format ZIP hasil tombol Backup Database Keseluruhan, atau berkas .json lama.</div></div>
+              <div class="hint" id="file_b64-info">Berkas <b>.json</b> hasil tombol Backup Data Sekolah (atau backup lama).</div></div>
             <label class="check mb-2"><input type="checkbox" name="konfirmasi" value="1" required> Saya memahami seluruh data akan digantikan</label>
-            <button class="btn btn-danger btn-block" ${c.can('backup', 'restore') ? '' : 'disabled'}>${ui.icon('upload')}Restore Data dari File ZIP</button>
+            <button class="btn btn-danger btn-block" ${c.can('backup', 'restore') ? '' : 'disabled'}>${ui.icon('upload')}Restore Data Sekolah</button>
           </form>
         </div>
         <div class="card mb-3">
@@ -636,93 +580,29 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
         <div class="card">
           <div class="card-head"><div><h3>Riwayat Backup / Restore</h3><div class="sub">6 aktivitas terakhir</div></div></div>
           ${backups.length ? `<div class="list">${backups.map(b => `<div class="list-row"><div class="dot-s" style="background:var(--o-500)"></div>
-            <div><div class="nm">${esc(b.aksi)}</div><div class="mt">${esc(b.created_at)} · ${esc(b.user_nama)}</div></div></div>`).join('')}</div>`
+            <div><div class="nm">${esc(b.aksi)}</div><div class="mt">${esc(lib.stampID(b.created_at))} · ${esc(b.user_nama)}</div></div></div>`).join('')}</div>`
         : '<div class="help">Belum ada riwayat.</div>'}
         </div>
       </div>
     </div>`;
-    page(req, res, { title: 'Backup & Restore', sub: 'Cadangan dan pemulihan data keuangan', active: 'backup', content });
+    page(req, res, { title: 'Backup Data Sekolah', sub: 'Unduh & pulihkan data sekolah (format JSON)', active: 'backup', content });
+  });
+
+  /** ZIP data sekolah (database.json + rekap CSV) — tetap tersedia untuk arsip manual */
+  get('/backup/download-zip', (req, res) => {
+    if (!guard(req, res, 'backup', 'create')) return;
+    const z = bd.buildDatabaseZip(db);
+    const stamp = nowStamp().slice(0, 10).replace(/-/g, '');
+    dbm.logAudit(req.user, 'BACKUP', 'backup', `Membuat backup data sekolah (.zip): ${z.rows} baris`);
+    res.file(z.buffer, `backup-sekolah-${stamp}.zip`, 'application/zip');
   });
 
   get('/backup/download', (req, res) => {
     if (!guard(req, res, 'backup', 'create')) return;
     const dump = dumpAll();
-    dbm.logAudit(req.user, 'BACKUP', 'backup', `Mengunduh backup data keuangan JSON (${new Date().toISOString().slice(0, 10)})`);
+    dbm.logAudit(req.user, 'BACKUP', 'backup', `Mengunduh backup data keuangan JSON (${lib.todayISO()})`);
     const name = `backup-simkeu-${nowStamp().replace(/[^\d]/g, '')}.json`;
     res.file(Buffer.from(JSON.stringify(dump, null, 1), 'utf8'), name, 'application/json');
-  });
-
-  get('/backup/download-zip', (req, res) => {
-    if (!guard(req, res, 'backup', 'create')) return;
-    const dump = dumpAll();
-    const files = [
-      { name: 'database.json', data: JSON.stringify(dump, null, 1) },
-      {
-        name: 'README.txt', data: [
-          'BACKUP DATABASE SIMKEU SEKOLAH',
-          'Dibuat: ' + nowStamp(),
-          '',
-          'database.json  = salinan lengkap seluruh tabel (dipakai untuk Restore Data).',
-          'data/*.csv     = rekap tiap tabel dalam format CSV untuk pemeriksaan manual.',
-          '',
-          'Cara restore: menu Pengaturan / Backup & Restore → Restore Data dari File ZIP → pilih berkas ini.',
-          'PERINGATAN: restore mengganti seluruh data yang ada saat ini.'
-        ].join('\r\n')
-      }
-    ];
-    for (const t of TABLES) {
-      const rows = dump.tables[t] || [];
-      files.push({ name: `data/${t}.csv`, data: csvOf(rows) });
-    }
-    const buf = lib.zip(files);
-    const stamp = nowStamp().slice(0, 10).replace(/-/g, '');
-    const rowsCount = TABLES.reduce((s, t) => s + (dump.tables[t] || []).length, 0);
-    dbm.logAudit(req.user, 'BACKUP', 'backup', `Membuat backup database keseluruhan (.zip): ${rowsCount} baris dari ${TABLES.length} tabel`);
-    res.file(buf, `backup-simkeu-${stamp}.zip`, 'application/zip');
-  });
-
-  /** Export database penuh sebagai perintah SQL (portabel untuk hosting lain) */
-  get('/backup/export-database', (req, res) => {
-    if (!guard(req, res, 'backup', 'create')) return;
-    const dump = sqlDump();
-    dbm.logAudit(req.user, 'EXPORT DATABASE', 'backup', `Export database .sql: ${dump.rows} baris dari ${dump.tables} tabel`);
-    const stamp = nowStamp().slice(0, 10).replace(/-/g, '');
-    res.file(Buffer.from(dump.sql, 'utf8'), `simkeu-database-${stamp}.sql`, 'application/sql; charset=utf-8');
-  });
-
-  /** Download source code aplikasi (.zip) — tanpa database, node_modules, dan .env */
-  get('/backup/download-source', (req, res) => {
-    if (!guard(req, res, 'backup', 'create')) return;
-    const files = collectSource();
-    const readme = [
-      'SIMKEU SEKOLAH — SOURCE CODE APLIKASI',
-      'Dibuat: ' + nowStamp(),
-      '',
-      'Isi berkas:',
-      '  server.js, db.js, lib.js, ui.js, wa.js, env.js, xlsx-read.js, importer.js, impcache.js, printcfg.js',
-      '  routes/     = seluruh modul halaman & proses',
-      '  public/     = aset CSS & JS',
-      '  dev-tests/  = skrip pengujian otomatis (node dev-tests/regress.js)',
-      '  package.json & package-lock.json',
-      '  .env.example = contoh konfigurasi lingkungan',
-      '',
-      'CARA PASANG DI VPS / HOSTING BARU',
-      '  1. Salin seluruh isi ZIP ke folder aplikasi.',
-      '  2. npm install   (butuh better-sqlite3 versi 12.9.0).',
-      '  3. Salin .env.example menjadi .env lalu isi DB_PATH, APP_BASE_URL,',
-      '     APP_MEDIA_URL/APP_MEDIA_TOKEN, dan WA_API_URL/WA_API_TOKEN.',
-      '  4. Pindahkan berkas database hasil menu "Export Database (.sql)" atau',
-      '     "Backup Database Keseluruhan (.ZIP)" ke folder data/.',
-      '  5. Jalankan: npm start   (port mengikuti variabel PORT).',
-      '',
-      'CATATAN: database, node_modules, dan berkas .env sengaja TIDAK disertakan.',
-      'Gunakan menu Backup & Restore untuk memindahkan data keuangan.'
-    ].join('\r\n');
-    files.push({ name: 'README-SOURCE.txt', data: readme });
-    const buf = lib.zip(files);
-    const stamp = nowStamp().slice(0, 10).replace(/-/g, '');
-    dbm.logAudit(req.user, 'DOWNLOAD SOURCE', 'backup', `Mengunduh source code aplikasi (.zip): ${files.length} berkas`);
-    res.file(buf, `simkeu-source-${stamp}.zip`, 'application/zip');
   });
 
   post('/backup/restore', (req, res) => {
@@ -789,6 +669,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     })();
     // sesi lama dihapus agar konsisten dengan data pengguna hasil restore
     dbm.controlDb.prepare('DELETE FROM sessions WHERE tenant_id=?').run(req.tenant ? req.tenant.id : 1);
+    /* backup lama (dibuat sebelum aplikasi memakai WIB) belum punya penanda
+       `mig_tz_wib_v1` → stempel waktunya digeser +7 jam seperti saat bootstrap.
+       Backup baru sudah membawa penanda tersebut sehingga tidak digeser dua kali. */
+    try { dbm.migrateLegacyTimestamps(dbm.currentTenantConn() || db, 'settings'); } catch (e) { }
     dbm.logAudit(null, 'RESTORE', 'backup', `Restore data dari berkas backup (${restored} baris)`);
     res.set('Set-Cookie', 'simkeu_sid=; Path=/; Max-Age=0');
     res.redirect(req.BASE + '/login?ok=' + encodeURIComponent('Restore berhasil. Silakan masuk kembali.'));

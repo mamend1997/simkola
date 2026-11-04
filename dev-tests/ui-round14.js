@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test UI ronde 14 (Playwright):
    1. Live search filter Data Iuran bekerja tanpa klik [Terapkan]
    2. Halaman detail iuran: pemilih TA hanya menampilkan data satu tahun pelajaran

@@ -403,7 +403,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <th class="num">Nominal</th><th class="num">Dibayar</th><th class="num">Sisa</th><th>Status</th><th>Keterangan</th><th class="right">Aksi</th>
         </tr></thead><tbody>
         ${rekapInput.map((r, ri) => `<tr>
-          <td class="nowrap t-sub">${esc(String(r.created_at || '').slice(0, 16) || '-')}</td>
+          <td class="nowrap t-sub">${esc(lib.stampShort(r.created_at))}</td>
           <td>${r.jenis === 'umum' ? ui.badge('Umum', 'orange', 'plain') : ui.badge('Sertifikasi', 'blue', 'plain')}</td>
           <td class="t-strong">${esc(r.nama || '-')}</td>
           <td class="nowrap">${tglID(r.tanggal)}</td>

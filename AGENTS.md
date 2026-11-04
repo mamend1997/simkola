@@ -999,3 +999,184 @@ node dev-tests/round25.js   # 47 cek: peta fitur paket + edit di Super Admin, ka
                             # Basic → daftar + trial 7 hari, paket berbayar → wa.me (tanpa tenant),
                             # kartu layanan ringkas, auto-backup pindah & hapus riwayat + audit
 ```
+
+---
+
+## Ronde 26 (ringkas — detail lengkap di AGENTS.md root)
+
+- **Performa**: `perf.js` (minify CSS/JS + gzip/brotli + `Cache-Control: immutable` untuk `/assets/*?v=`), semua `<script>` `defer`, `ui.fontLinks()` (preconnect + font non-blocking), preload logo LCP + `fetchpriority`, lazy/decoding pada gambar non-kritis, `optimizeImage()` konversi **WebP** di klien (logo/nota/foto, maks 1600 px), logo responsif `sekolah_logo_small`/`app_logo_small` + `ui.logoSrcset()`.
+- **Identitas sekolah**: NPSN (8 digit unik), bentuk pendidikan, status, kepemilikan, telepon, email, website; dua kartu form (Informasi Umum & Kontak / Legalitas & Status); variabel dinamis `{nama} {npsn} {bentuk} {status} {kepemilikan} {alamat} {telp} {email} {website}` dipakai kop, kwitansi, footer portal (`ui.fillIdentitas`, `ui.identitasKontak`, `ui.identitasFooter`); `tenants.npsn` + indeks `uq_tenants_npsn`.
+- **Menu dipisah**: `/sekolah` (Identitas) · `/portal-publik` (3 slug, subdomain, custom domain) · `/tema` (warna, logo, **mode gelap**) · `/desain-cetak` (kop surat + ukuran kuitansi). Nav key baru `identitas/portal_publik/tema/desain_cetak`.
+- **Mode gelap**: setting `mode_tema`, `<html data-mode="dark">`, CSS `html[data-mode="dark"]`; dokumen cetak tetap putih.
+- **Role Demo dihapus** dari `ROLES`, Permission Matrix, dan semua validator pengguna; user lama dipindah ke `staff` + nonaktif.
+- **Backup**: sekolah → JSON/ZIP data sekolah saja; Super Admin → `/super-admin/backup` (ZIP seluruh sistem, `.sql`, source code via `sourcepack.js`, `.env`, modal **Restore Database** ZIP/JSON). `routes/superadmin_db.js` = Database Manager (browse/edit/hapus baris, konsol SQL, export CSV) dengan audit `* DATABASE`.
+- **Custom domain**: `saas.checkDns(domain,{host,ip})` cek CNAME **dan** A Record + `hostMatch`; setting `saas_base_url`, `saas_server_ip`, `portal_cname_target` di `/super-admin/branding`; form sekolah menampilkan Opsi 1 (CNAME) & Opsi 2 (A Record — direkomendasikan).
+- **Preset menu** `/super-admin/menu-default` (`saas_settings.school_menu_default`) diterapkan ke sekolah baru & tombol terapkan massal. `nav_hidden`/`nav_ui` kini **per sekolah**.
+- **Fitur paket granular**: `identitas, portal_publik, tema, desain_cetak, pembantu_kas, pembantu_bank, pembantu_pajak, pembantu_bhp, pembantu_modal` (+ `FEATURE_PARENT` untuk kompatibilitas paket lama).
+- Tes: `node dev-tests/round26.js` (90), `node dev-tests/ui-round26.js` (40).
+
+---
+
+## Ronde 27 (ringkas — detail di AGENTS.md root)
+
+- **`siswa.parent_phone`** (No. HP/WA orang tua) + normalisasi `lib.normPhone()` → `62…`, `lib.phoneDisplay()` → `08…`;
+  form/import/template/export/pratinjau Data Siswa mendukung kolom **NO. HP / WA ORANG TUA**.
+- **`reminder.js`** = inti pengingat tagihan WhatsApp: konfigurasi jadwal (rutin tanggal / H-X jatuh tempo, jam, template dinamis),
+  `wa_template` + `wa_reminder_log`, token portal HMAC (`/portal?token=`), `enqueue*`, **worker latar jeda acak 2–5 detik**,
+  penjadwalan `dueSlots/runSchedule` (toleransi 15 menit, anti dobel via `reminder_done`).
+- **`routes/reminder.js`**: `/iuran/pengingat` (pengaturan, editor template + dynamic tags, pratinjau, riwayat),
+  aksi `simpan|template-utama|template|template/hapus|jalan|jadwal|riwayat`, serta
+  `POST /iuran/wa/satu` & `POST /iuran/wa/massal` + `GET /iuran/wa/preview` (JSON pratinjau).
+- **Data Iuran**: tombol WhatsApp per baris (modal `mWaSatu`) & **Kirim WA Massal** (modal `mWaMassal`: template, ceklis, filter kelas/tingkat).
+- **Gateway**: `wa.waConfig()` = `.env` → sekolah → **pusat Super Admin** (`source`).
+- Tes: `node dev-tests/round27.js` (85), `node dev-tests/ui-round27.js` (38). Disesuaikan: `round18`.
+
+---
+
+## Ronde 28 — Manajemen Halaman Publik & Routing Slug (Super Admin + Tenant)
+
+### 1. Kolom control plane `tenants` (migrasi otomatis di `saas.js` + `saas_extra.js`)
+`portal_status` (default **`aktif`** | `nonaktif` | `private`), `portal_note`, `portal_locked_at`, `portal_locked_by`.
+Semua perubahan status/slug menulis `saas.logSaas` (audit `BLOKIR/BUKA PORTAL PUBLIK`, `UBAH SLUG`, `HAPUS HALAMAN PUBLIK`).
+
+### 2. Helper di `saas_extra.js` (diekspor lewat `saas`)
+- `PORTAL_STATUS` (`aktif`/`nonaktif`/`private` + label & warna), `portalStatusOf(t)`, `portalStatusInfo(t)`, `setPortalStatus(id, status, note, user)`.
+- `tenantPortalPublished(t)` = `settings.portal_aktif` milik sekolah (sakelar "Publikasikan Halaman Portal").
+- `clearPortalSlug(id, user)` = kosongkan slug **dan** set status `nonaktif` (tombol Hapus Halaman Publik).
+- **`portalAccess(t, path)`** — inti middleware. Urutan: tenant → status `nonaktif` (**404**) → `private` (**403**) → slug kosong (**404**, "halaman publik dihapus") → sakelar sekolah untuk jenis portal yang diminta OFF (**503**).
+  Jenis ditentukan `portalKindOf(path)` (`/portal-slip` → slip, `/portal-pegawai` → pegawai, `/portal` → siswa) dan `tenantPortalSwitches(t)` mengembalikan ketiga status sekaligus; jadi mematikan portal siswa **tidak** mematikan portal pegawai/slip.
+- `PORTAL_TEXT_DEFAULT`, `PORTAL_TITLE_MAX` (40), `PORTAL_SUBTITLE_MAX` (**60**), `portalDefaults()`, `portalText(settings)`, `portalTextError({title,subtitle})`.
+
+### 3. Middleware (`server.js` → `portalAccessPage`)
+Dua tempat memanggil `saas.portalAccess`:
+1. jalur **belum login** (portal publik) — sebelum `runAsTenant`;
+2. jalur **sudah login** untuk pathname `/portal|/portal-pegawai|/portal-slip` — jadi halaman yang diblokir Super Admin tetap tertutup walau pengunjung punya sesi sekolah.
+`portalAccessPage({base,tenant,access})` merender halaman 404/403/503 ber-branding sekolah (logo + nama dari DB tenant), selalu ada tautan "Halaman Masuk Sekolah".
+
+### 4. Sisi tenant — menu **Portal Publik** (`routes/master.js`)
+Kartu **"Publikasi & Teks Halaman Portal"** (`#publikasiPortal`, POST `/sekolah/portal-publik/simpan`):
+sakelar `.sw` (`portal_aktif`, label ON/OFF), `portal_page_title` (maxlength 40), `portal_subtitle` (maxlength 60),
+**pratinjau langsung** (`data-portal-preview` + `data-pv-title`/`data-pv-sub`, JS di blok `public/app.js` bagian "sakelar & pratinjau teks portal"),
+dan hidden `data-pv-tabhint` pada hint. Validasi server: panjang maksimum + tanpa baris baru (`saas.portalTextError`) **sebelum** menyimpan apa pun.
+Bila Super Admin memblokir, halaman ini menampilkan banner `#bannerPortalAdmin`; dashboard menampilkan `#bannerPortalPublik` (hanya jika `can('sekolah','view')`).
+
+### 4b. Sakelar publikasi ketiga portal (pindah dari Pengaturan Sistem)
+Kartu publikasi kini memuat **tiga** sakelar: `portal_aktif` (tagihan siswa), `portal_pegawai_aktif`, `portal_slip_aktif` —
+masing-masing baris `.publ-row` dengan `.sw` + tautan alamat (`url-chip`). CSS: `.publ-list/.publ-row/.publ-meta`.
+POST `/sekolah/portal-publik/simpan` **hanya memproses sakelar bila form mengirim penanda `simpan_publikasi=1`**
+(checkbox yang tidak dicentang memang tidak terkirim, jadi tanpa penanda sebuah POST teks murni akan mematikan semua portal).
+`routes/sistem.js` (`/pengguna`) **tidak lagi** menulis `portal_*` — hanya kartu tautan ke Portal Publik + setelan gateway WA.
+Diuji: menyimpan setelan sistem tidak menyalakan/mematikan portal.
+
+### 5. Sisi Super Admin — `/super-admin/portal-publik`
+Menu sidebar **"Manajemen Custom Slug & Portal Publik"** (`MENU` di `routes/superadmin.js`; CSS `.sa-nav span{line-height:1.28}` agar label 2 baris).
+Tabel seluruh tenant: Nama Sekolah · URL/Custom Slug · Custom Domain · **Status Akses Publik** (select `data-autosubmit`) · Aksi
+(**Lihat** halaman, modal **Edit Slug** `mSlug<id>` dengan slug+status+catatan, **Sembunyikan/Aktifkan** cepat, **Hapus** `data-confirm`).
+KPI: total sekolah, halaman aktif, non-aktif, private, punya slug, custom domain. Kolom status juga menampilkan **sakelar per portal** sekolah
+(`Sakelar sekolah: Siswa ON · Pegawai ON · Slip OFF`), dan kolom Aksi punya tiga tombol Lihat (`Siswa`, `Pegawai`, `Slip`).
+POST: `/portal-publik/:id/status|slug|hapus` → selalu `refreshPortalMap()`.
+Default teks global diatur di **`/super-admin/branding`** → kartu "Default Tampilan Halaman Portal Publik" (`portal_default_title` = `Cek Tagihan`, `portal_default_subtitle` = `PORTAL CEK TAGIHAN IURAN SISWA`).
+
+### 6. Portal publik (`routes/portal.js` + CSS)
+`<title>{judul} · {nama sekolah}</title>` (judul = `portal_page_title` atau default Super Admin) dan banner:
+`.portal-head > .banner-text > h1.school-title` (nama sekolah) + `p.portal-subtitle` (sub-judul, uppercase). Kelas lama `.pn/.ps` masih dipakai `portal_pegawai.js` — jangan dihapus.
+Sub-judul memakai `.portal-subtitle` (font 11,5px, letter-spacing .12em, turun ke 10,5px di ≤620px) agar tidak merusak layout HP.
+
+### Gotcha
+- `routes/portal.js` kini menerima `saas` (didaftarkan di `server.js`) untuk membaca default teks.
+- Kartu pratinjau memakai `data-pv-*`; jangan menaruh input `[data-pv-title]` di luar form pratinjau (JS mencari dalam `form` terdekat).
+- Uji portal publik dari sisi pengunjung **tanpa cookie** (sesi sekolah juga diperiksa terpisah, tapi `page.request` Playwright membawa cookie → bisa menyesatkan).
+
+### Tes
+```bash
+node dev-tests/round28.js     # 71 cek: kartu publikasi & teks portal (3 sakelar), validasi 60 karakter, sakelar per portal (503),
+                              # portal pegawai tetap hidup, halaman Super Admin, status aktif/nonaktif(404)/private(403),
+                              # banner dashboard, ubah slug, hapus halaman publik, default dari branding, RBAC staff
+node dev-tests/ui-round28.js  # 43 cek Playwright: 3 sakelar & pratinjau live, tab browser portal, banner, mobile 390px,
+                              # tabel Super Admin, dropdown status, modal slug, tanpa error JS
+```
+
+---
+
+## Ronde 29 — Zona waktu aplikasi WIB (Asia/Jakarta)
+
+### 1. Modul baru `tz.js` (dimuat paling awal)
+- `tz.apply(raw)` menyetel `process.env.TZ` + `process.env.APP_TIMEZONE`, menerima alias (`WIB`, `gmt+7`, `jakarta`, `wita`, `wit`, `utc`); nilai tak dikenal → kembali `Asia/Jakarta` + `tz.warning`.
+- API: `TZ`, `partsOf(date)`, `offsetMinutes()`, `offsetLabel()` (`+07:00`), `label()` (`WIB`), `info()`, `startupLine()`.
+- **Dimuat oleh `env.js` SETELAH `.env` dibaca** → `APP_TIMEZONE` di `.env`/shell langsung berlaku untuk `Date`, pustaka native (SQLite `localtime`), worker WA, penjadwalan pengingat, backup otomatis. Tidak perlu mengubah kode lain.
+
+### 2. `lib.js` — helper WIB
+`tzLabel()`, `tzOffset()`, `stampID(v)` → **`04-11-2026 12:05:31 WIB`**, `stampShort(v)` → `04-11-2026 12:05`, `plusMinutesStamp(m)`, `plusDaysStamp(d)`.
+`nowStamp()`/`todayISO()` tetap `YYYY-MM-DD HH:mm:ss` (WIB) — **disimpan** dalam format terurut supaya `ORDER BY`/perbandingan teks tetap benar; format `DD-MM-YYYY … WIB` dipakai saat **ditampilkan**.
+`db.js`: `dateOffsetISO(days)` (mis. -1 = kemarin WIB) — jangan memakai `new Date().toISOString()` untuk tanggal.
+
+### 3. SQL
+- `CURRENT_TIMESTAMP`/`NOW()` di SQLite **selalu UTC** → tidak dipakai.
+- Setiap koneksi (`rootDb`, kontrol plane, tiap tenant, demo) diberi fungsi `now_wib()` dan `today_wib()` (`registerTimeFns()`), mis. `SELECT now_wib()`.
+- `datetime('now','localtime')` juga WIB karena TZ proses disetel sebelum koneksi dibuka.
+
+### 4. Migrasi stempel waktu lama (`mig_tz_wib_v1`)
+Server lama (UTC) menulis kolom `*_at` 7 jam lebih awal. `dbm.migrateLegacyTimestamps(conn, 'settings')` menggeser **hanya nilai berpola `YYYY-MM-DD HH:MM:SS` (19 karakter)** sebanyak `+7` jam, sekali saja (flag `mig_tz_wib_v1`):
+- dijalankan di `bootstrap()` **sebelum seed**, dan **dilewati bila database masih baru** (data seed sudah WIB);
+- dijalankan juga untuk control plane (`saas_settings`) dan setiap DB tenant saat koneksi pertama dibuka, plus **setelah restore backup** (backup lama belum punya flag → ikut digeser; backup baru membawa flag → tidak dobel);
+- tabel `sessions` & `saas_jobs` dilewati; kolom tanggal murni (`tanggal`, `periode`, `tenants.expires_at`) tidak tersentuh karena tidak cocok pola;
+- bisa dimatikan: `TZ_SHIFT_LEGACY=0` (mis. bila server memang sudah WIB sejak awal).
+
+### 5. Perbaikan bug waktu yang ikut ditemukan
+- `otp_code.expires_at` & `sessions.expires_at` dulu dibuat dengan `toISOString()` (UTC) lalu dibandingkan dengan `nowStamp()` (jam lokal) → OTP **selalu** dianggap kedaluwarsa bila server UTC. Sekarang memakai `lib.plusMinutesStamp/plusDaysStamp` (jam WIB yang sama) dan perbandingan string.
+- `saas.regStatus()` (rate limit pendaftaran), nama berkas invoice/backup, stempel berkas `storage.js`, "kemarin" pada antrean iuran & notifikasi dashboard, dan tanggal tanda tangan laporan kini memakai WIB (bukan `toISOString()`).
+- Tampilan: halaman Audit Logs, riwayat pengingat WA, waktu pengajuan approval, dan kolom `created_at`/`deleted_at`/`posted_at` memakai `lib.stampID`/`stampShort` → berakhiran **WIB**. Footer sidebar menampilkan `WIB · GMT+07:00`.
+- Log startup: `[tz] Asia/Jakarta (WIB +07:00) — sekarang 04-11-2026 12:05:31 WIB`.
+
+### 6. Konfigurasi
+`.env` (dan `.env.example`): `APP_TIMEZONE=Asia/Jakarta` (default), `TZ_SHIFT_LEGACY=1`. Kartu **Konfigurasi Lingkungan (.env)** di `/super-admin/backup` menampilkan `APP_TIMEZONE` + label & offset aktif.
+
+### Tes
+```bash
+node dev-tests/round29.js   # 46 cek: TZ proses & lib, now_wib()/today_wib(), audit & transaksi berjam WIB,
+                            # format tampilan "DD-MM-YYYY HH:mm:ss WIB", sesi & OTP tidak langsung kedaluwarsa,
+                            # penjadwalan pengingat memakai jam WIB (bukan UTC), migrasi +7 jam idempoten,
+                            # TZ_SHIFT_LEGACY=0, APP_TIMEZONE=Asia/Makassar (WITA) & nilai tak dikenal
+```
+**Catatan tes**: semua `dev-tests/*.js` kini menyetel `process.env.TZ='Asia/Jakarta'` di baris awal supaya jam test = jam aplikasi (sebelumnya test menghitung jam UTC dan gagal pada round27).
+
+---
+
+## Ronde 30 — Setelah daftar: langsung masuk dashboard + kredensial tampil sekali
+
+### Alur baru `POST /register` (`routes/auth.js`)
+Dulu berakhir di `GET /login?ok=…&kode=…`; sekarang **auto-login** lalu langsung ke dashboard:
+1. `saas.createTenant(...)` membuat sekolah + admin (`users.role='super_admin'`).
+2. Admin diambil dari DB tenant, lalu `setSession(admin.id, tenant.id, 0, welcomeJSON)` membuat sesi login dan cookie `simkeu_sid` (14 hari) — sama seperti `POST /login`.
+3. Redirect **`base + '/?welcome=1'`** (dashboard sekolah baru).
+4. Bila pembuatan sesi gagal → fallback `GET /daftar/sukses?t=<token>`.
+
+### Kredensial disimpan di baris sesi (bukan URL)
+- Kolom baru `sessions.welcome TEXT` (control plane; ALTER otomatis di `saas.js`).
+- `saas.createSession({…, welcome})` + `saas.takeWelcome(token)` (mengembalikan `{kode, sekolah, username, nama, password, at}` lalu **mengosongkan kolom** → sekali tampil).
+- Isi: **Kode Sekolah 4 karakter** (`tenants.school_code`), **Username** (`users.username` = bagian depan email), **Password** (yang baru diketik saat daftar).
+- Password **tidak pernah** masuk URL/riwayat browser; ditampilkan tersamar (`data-pw`) dengan tombol **Lihat** & **Salin**.
+
+### Dashboard (`routes/dashboard.js`)
+Kartu `#welcomeKredensial` (kelas `.welcome-card`/`.cred-grid`/`.cred-cell`) dirender paling atas bila `saas.takeWelcome(req.sessionRow.token)` mengembalikan data:
+tiga sel (Kode Sekolah besar + badge "4 karakter", Username, Password) dengan tombol salin, tombol "Mengerti, lanjut ke dashboard" (`data-close-welcome`), dan catatan "password hanya ditampilkan sekali".
+
+### Halaman sukses fallback `GET /daftar/sukses`
+Publik (`isPublicPath` menerima `/daftar/sukses`), memakai `authShell`. Sumber data: `?t=<token sekali pakai>` (Map di memori, TTL 30 menit) atau `?kode=..&u=..` (tanpa password). Menampilkan kartu kredensial + tombol **Masuk ke Dashboard Sekolah** (`/login?kode=…`). Tanpa keduanya → redirect `/login?err=…`.
+
+### Klien (`public/app.js`)
+Blok "kredensial pendaftaran": `[data-copy]` (clipboard + fallback `execCommand`), `[data-pw-toggle]` (Lihat/Sembunyikan), `[data-close-welcome]` (hapus kartu). Ikon baru `ui.icon('login')` & `ui.icon('copy')`.
+
+### Catatan
+- Audit baru `DAFTAR` di DB sekolah: `Pendaftaran sekolah <nama> (<kode>) — admin <email> langsung masuk ke dashboard`.
+- Halaman login tetap tersedia untuk kunjungan berikutnya; kartu kredensial tidak pernah muncul lagi (kolom `welcome` sudah NULL).
+- Tes lama yang menyesuaikan perilaku **disengaja**: `round24.js` (redirect `/register` → `/?welcome=1`), `round26.js` (ambang ukuran `app.js` minified 72.000 → 80.000 byte).
+
+### Tes
+```bash
+node dev-tests/round30.js     # 46 cek: redirect dashboard, sesi otomatis, kartu kredensial (kode/username/password),
+                              # sekali tampil, kredensial bisa dipakai login (username & email), audit DAFTAR,
+                              # isolasi tenant, halaman sukses fallback, gagal daftar tidak membuat sesi
+node dev-tests/ui-round30.js  # 22 cek Playwright: alur daftar di browser, Lihat password, Salin ke clipboard,
+                              # mobile 390px (1 kolom), tutup kartu & tidak muncul lagi, login ulang
+```

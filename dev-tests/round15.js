@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 15 — portal piutang lainnya, bulk unassign, orientasi & desain cetak,
    template SPP per bulan, instant search, beasiswa enforcement, sorting TA,
    laporan per bulan + multi BKU, reset TA, audit orphan. */

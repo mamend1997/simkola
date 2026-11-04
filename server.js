@@ -2,6 +2,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const perf = require('./perf');
 const { URL } = require('url');
 
 const envCfg = require('./env');
@@ -151,8 +152,8 @@ function permissionMatrix() {
 }
 
 /* ---------------- sesi login (control plane, multi-tenant) ---------------- */
-function setSession(userId, tenantId, alertPending) {
-  const t = saas.createSession({ userId, tenantId, kind: 'tenant', alertPending: alertPending || 0 });
+function setSession(userId, tenantId, alertPending, welcome) {
+  const t = saas.createSession({ userId, tenantId, kind: 'tenant', alertPending: alertPending || 0, welcome });
   dbm.openTenantConn(tenantId, (saas.tenantById(tenantId) || {}).db_file)
     .prepare('UPDATE users SET last_login=? WHERE id=?').run(lib.nowStamp(), userId);
   return t;
@@ -242,12 +243,13 @@ function page(req, res, { title, sub = '', active, content }) {
     logoStamp: c.settings.sekolah_logo || '',
     taList: c.taList, taId: c.taId, path: req.url,
     // tampilan global (tema, nama & logo aplikasi, penataan menu) selalu dari database sekolah aktif
-    navHidden: dbm.mainSetting('nav_hidden', ''),
-    navCfg: dbm.navUiGlobal(),
+    navHidden: String(c.settings.nav_hidden || ''),
+    navCfg: dbm.navUi(),
     tema: dbm.temaWarnaGlobal(),
     appName: dbm.appNamaGlobal(),
     appLogo: dbm.appLogoGlobal(),
-    demoMode: !!(req.user && req.user.role === 'demo'),
+    appLogoSmall: dbm.mainSetting('app_logo_small', ''),
+    mode: String(c.settings.mode_tema || 'light') === 'dark' ? 'dark' : 'light',
     // multi-tenant: fitur yang aktif untuk sekolah ini + penanda mode bantuan super admin
     features: saas.enabledKeys(tenant),
     tenantInfo: tenant ? { nama: tenant.nama, kode: tenant.school_code, status: st, paket: tenant.paket } : null,
@@ -375,16 +377,17 @@ require('./routes/beasiswa')({ get, post, dbm, lib, ui, page, ctx, guard, can, f
 require('./routes/tutup')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/bku_detail')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/import')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
-require('./routes/laporan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/laporan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas });
 require('./routes/sistem')({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMatrix, uploadMedia, flashUrl });
 require('./routes/desain')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/akademik')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/kelas_tingkat')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/iuran')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/reminder')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/ekskul')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/trash')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
-require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl });
+require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl, saas });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
 require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/panduan')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl, saas });
@@ -392,6 +395,7 @@ require('./routes/layanan')({ get, post, dbm, lib, ui, page, ctx, guard, uploadM
 require('./routes/backup_tg')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas });
 require('./routes/tiket')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas, uploadMedia });
 require('./routes/superadmin')({ get, post, dbm, lib, ui, saas, queue, uploadMedia, renderError, refreshPortalMap: portalMapRebuild });
+require('./routes/superadmin_db')({ get, post, dbm, lib, ui, saas });
 
 /* ---------------- halaman status (suspend / fitur nonaktif) ---------------- */
 function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {
@@ -485,7 +489,9 @@ function portalMapRebuild() { return portalSlugMap(true); }
 
 const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/login'];
 function isPublicPath(pathname) {
-  return ['/login', '/register', '/daftar', '/logout'].includes(pathname);
+  if (['/login', '/register', '/daftar', '/logout'].includes(pathname)) return true;
+  // halaman sukses pendaftaran (kredensial) — tanpa sesi, token sekali pakai
+  return pathname === '/daftar/sukses';
 }
 
 /* ---------------- server ---------------- */
@@ -503,6 +509,53 @@ function notFoundSchool(base, host) {
 </div></body></html>`;
 }
 
+/* ---------------- halaman status portal publik (akses ditolak) ---------------- */
+function portalAccessPage({ base, tenant, access }) {
+  const t = tenant || {};
+  let logo = '', nama = t.nama || 'Sekolah';
+  try {
+    const conn = dbm.openTenantConn(t.id, t.db_file);
+    const rows = conn.prepare("SELECT k,v FROM settings WHERE k IN ('sekolah_logo','sekolah_nama')").all();
+    const g = k => String(((rows.find(x => x.k === k) || {}).v) || '');
+    logo = g('sekolah_logo'); if (g('sekolah_nama')) nama = g('sekolah_nama');
+  } catch (e) { }
+  const INFO = {
+    hidden: {
+      badge: '404', title: 'Halaman Tidak Ditemukan',
+      desc: 'Halaman portal publik sekolah ini sedang <b>disembunyikan</b> oleh Administrator Pusat, sehingga tidak dapat diakses umum.'
+    },
+    deleted: {
+      badge: '404', title: 'Halaman Publik Tidak Tersedia',
+      desc: 'Alamat portal publik sekolah ini sudah <b>dihapus</b>. Silakan hubungi petugas sekolah untuk informasi tagihan.'
+    },
+    private: {
+      badge: '403', title: 'Halaman Publik Bersifat Private',
+      desc: 'Halaman portal sekolah ini ditetapkan <b>Private</b> oleh Administrator Pusat — hanya untuk kalangan internal sekolah.'
+    },
+    unpublished: {
+      badge: '503', title: 'Portal Sementara Ditutup',
+      desc: 'Pengelola sekolah menonaktifkan halaman portal publik. Silakan hubungi bendahara sekolah untuk informasi tagihan.'
+    }
+  };
+  const info = INFO[access.mode] || INFO.hidden;
+  const mark = logo
+    ? `<img src="${lib.esc(logo)}" alt="Logo" width="64" height="64" style="max-width:64px;max-height:64px;object-fit:contain">`
+    : `<div style="width:58px;height:58px;border-radius:18px;margin:0 auto;display:grid;place-items:center;background:#FFF1E6;color:#EA580C;font-size:24px;font-weight:800">${lib.esc(String(nama).charAt(0))}</div>`;
+  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${lib.esc(info.title)} · ${lib.esc(nama)}</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}"><link rel="icon" href="${base}/favicon.ico">
+</head><body style="display:grid;place-items:center;min-height:100vh;margin:0;padding:24px">
+<div class="card" style="max-width:540px;width:100%;padding:34px;text-align:center">
+  ${mark}
+  <div style="font-weight:800;letter-spacing:-.02em;margin-top:12px">${lib.esc(nama)}</div>
+  <div style="font-size:52px;font-weight:800;color:var(--o-500);line-height:1;letter-spacing:-.05em;margin:14px 0 6px">${lib.esc(info.badge)}</div>
+  <h2 style="margin:0 0 8px;font-size:21px">${lib.esc(info.title)}</h2>
+  <p class="muted" style="line-height:1.7;margin:0 auto 18px;max-width:400px">${info.desc}</p>
+  <a class="btn btn-primary" href="${base}/login">Halaman Masuk Sekolah</a>
+</div></body></html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   const base = String(req.headers['x-public-base-path'] || '').replace(/\/$/, '');
   req.BASE = base;
@@ -512,6 +565,7 @@ const server = http.createServer(async (req, res) => {
   req.query = url.searchParams;
 
   // ---- static assets (tidak bergantung tenant) ----
+  // Minifikasi + kompresi (gzip/brotli) + Cache-Control immutable bila URL memakai ?v=<versi>
   if (pathname0.startsWith('/assets/')) {
     const name = pathname0.slice('/assets/'.length).replace(/[^a-zA-Z0-9._-]/g, '');
     const fp = path.join(PUBLIC_DIR, name);
@@ -519,7 +573,12 @@ const server = http.createServer(async (req, res) => {
       const mime = name.endsWith('.css') ? 'text/css; charset=utf-8'
         : name.endsWith('.js') ? 'application/javascript; charset=utf-8'
           : name.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=3600' });
+      const versioned = url.searchParams.has('v');
+      if (perf.sendAsset(req, res, fp, mime, versioned)) return;
+      res.writeHead(200, {
+        'Content-Type': mime, 'Cache-Control': perf.cacheControl(versioned),
+        'Vary': 'Accept-Encoding'
+      });
       return fs.createReadStream(fp).pipe(res);
     }
     res.writeHead(404); return res.end('not found');
@@ -615,7 +674,8 @@ const server = http.createServer(async (req, res) => {
         const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
           : ext === '.webp' ? 'image/webp' : ext === '.pdf' ? 'application/pdf'
             : ext === '.svg' ? 'image/svg+xml' : 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
+        // nama berkas unik per unggahan → aman di-cache selamanya
+        res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=31536000, immutable' });
         return fs.createReadStream(fp).pipe(res);
       }
     }
@@ -693,6 +753,9 @@ const server = http.createServer(async (req, res) => {
       if (portalPath) {
         const t = tByCode || portalTenant || saas.tenantById(1);
         if (!t) return R.html(renderError(503, 'Belum ada sekolah', 'Belum ada sekolah yang terdaftar pada layanan ini.'), 503);
+        /* ---- validasi akses halaman publik (Super Admin override + sakelar sekolah) ---- */
+        const access = (() => { try { return saas.portalAccess(t, portalPath); } catch (e) { return { ok: true }; } })();
+        if (!access.ok) return R.html(portalAccessPage({ base, tenant: t, access }), access.status);
         return await dbm.runAsTenant(t, async () => {
           req.tenant = t;
           req.TA = null; req.taId = null;
@@ -762,6 +825,12 @@ const server = http.createServer(async (req, res) => {
             }), 403);
           }
 
+          // ---- halaman publik yang diblokir/dihapus Super Admin tetap tertutup (termasuk sesi sekolah) ----
+          if (/^\/(portal|portal-pegawai|portal-slip)(\/|$)/.test(pathname)) {
+            const acc = (() => { try { return saas.portalAccess(tenant, pathname); } catch (e) { return { ok: true }; } })();
+            if (!acc.ok) return R.html(portalAccessPage({ base, tenant, access: acc }), acc.status);
+          }
+
           const demoMode = u.role === 'demo';
           const run = async () => {
             if (demoMode) {
@@ -792,6 +861,12 @@ try {
   require('./backup_tg').registerJobs(dbm, saas, queue);
 } catch (e) { console.error('[queue-init]', e.message); }
 
+/* pengingat tagihan WhatsApp: worker antrean (jeda acak 2–5 detik) + penjadwalan otomatis */
+try {
+  require('./reminder').startWorker(dbm, saas);
+  require('./reminder').startScheduler(dbm, saas);
+} catch (e) { console.error('[wa-reminder-start]', e.message); }
+
 try {
   const admin = saas.ensureBootstrap();
   if (admin && admin.created) {
@@ -800,6 +875,9 @@ try {
 } catch (e) { console.error('[saas]', e.message); }
 
 server.listen(PORT, () => {
+  // zona waktu proses (WIB) — dipakai Date, SQLite localtime, worker WA & penjadwalan
+  console.log(require('./tz').startupLine());
+  if (require('./tz').warning) console.warn('[tz] ' + require('./tz').warning);
   console.log('SIMKEU Sekolah listening on ' + PORT + (process.env.APP_BASE_URL ? ' · base ' + process.env.APP_BASE_URL : ''));
 });
 

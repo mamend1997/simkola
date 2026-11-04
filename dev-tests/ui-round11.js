@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI ronde 11: leger payroll (ceklis, sertifikasi jam, salin bulan, simpan draf anti-stuck),
    halaman Nominal Tunjangan & Honor, portal publik piutang (agregat) & slip */
 const { spawn } = require('child_process');

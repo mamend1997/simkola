@@ -14,22 +14,25 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
 
   const JENIS_LABEL = { piutang: 'Cek Piutang Pegawai', slip: 'Slip Gaji Pegawai' };
-  /** ujung alamat portal dapat diubah di menu Identitas Sekolah (default: portal-pegawai / portal-slip) */
+  /** ujung alamat portal dapat diubah di menu Portal Publik (default: portal-pegawai / portal-slip) */
   const pgUrl = (base, sub = '') => `${base}/${dbm.portalSlugs().pegawai}${sub}`;
   const slipUrl = (base, sub = '') => `${base}/${dbm.portalSlugs().slip}${sub}`;
   const kindUrl = (base, isSlip, sub = '') => isSlip ? slipUrl(base, sub) : pgUrl(base, sub);
 
   function shell({ base, settings, content, title, aktif = 'piutang' }) {
     const logo = settings.sekolah_logo
-      ? `<img src="${esc(settings.sekolah_logo)}" alt="Logo">`
+      ? `<img src="${esc(settings.sekolah_logo)}"${ui.logoSrcset(settings, "52px")} alt="Logo" width="52" height="52" fetchpriority="high" decoding="async">`
       : `<div class="p-logo-ph">${esc((settings.sekolah_nama || 'S').charAt(0))}</div>`;
     const lainnya = aktif === 'piutang'
       ? `<a class="btn btn-sm portal-login" href="${slipUrl(base)}">Slip Gaji Pegawai</a>`
       : `<a class="btn btn-sm portal-login" href="${pgUrl(base)}">Cek Piutang Pegawai</a>`;
-    return `<!DOCTYPE html><html lang="id"><head>
+    const footerId = ui.identitasFooter(settings);
+    return `<!DOCTYPE html><html lang="id" data-mode="${ui.modeOf(settings)}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(settings.sekolah_nama || 'Sekolah')}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+${ui.fontLinks()}
+${ui.logoPreconnect([settings.sekolah_logo])}
+${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.sekolah_logo)}" fetchpriority="high">` : ''}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}">
 <link rel="icon" type="image/png" href="${base}/favicon.ico">
 <link rel="apple-touch-icon" href="${base}/favicon.ico">
@@ -45,9 +48,9 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
     ${lainnya}
   </header>
   ${content}
-  <footer class="portal-foot">© ${new Date().getFullYear()} ${esc(settings.sekolah_nama || '')} · Data hanya ditampilkan setelah verifikasi OTP WhatsApp.</footer>
+  <footer class="portal-foot">© ${new Date().getFullYear()} ${esc(settings.sekolah_nama || '')}${footerId ? ' · ' + esc(footerId) : ''}<br>Data hanya ditampilkan setelah verifikasi OTP WhatsApp.</footer>
 </div>
-<script src="${base}/assets/app.js?v=${ui.ASSET_V}"></script>
+<script src="${base}/assets/app.js?v=${ui.ASSET_V}" defer></script>
 </body></html>`;
   }
 
@@ -191,7 +194,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
       ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
       ${list.length ? `<div class="portal-note-list">${list.map(x => `<div class="pn-item">
-        <div class="pn-meta">${esc(String(x.created_at || '').slice(0, 16))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div>
+        <div class="pn-meta">${esc(lib.stampShort(x.created_at))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div>
         <div class="pn-body">${esc(x.pesan)}</div></div>`).join('')}</div>` : ''}
       <form method="post" action="${kindUrl(base, isSlip, '/pesan')}">
         <input type="hidden" name="token" value="${esc(token || '')}">
@@ -640,7 +643,7 @@ module.exports = ({ get, post, dbm, lib, ui }) => {
     const recCetak = slipRowOf(pg.nama, periodeAktif);
     const rows = recCetak ? [{ ...recCetak, ...dbm.payrollCalc(recCetak) }] : [];
     const money = v => (Number(v) ? num(v) : '');
-    const logo = settings.sekolah_logo ? `<img src="${esc(settings.sekolah_logo)}" alt="Logo">` : `<div class="ph">${esc((settings.sekolah_nama || 'S').charAt(0))}</div>`;
+    const logo = settings.sekolah_logo ? `<img src="${esc(settings.sekolah_logo)}" alt="Logo" width="48" height="48" decoding="async">` : `<div class="ph">${esc((settings.sekolah_nama || 'S').charAt(0))}</div>`;
     const alamat = String(settings.sekolah_alamat || '').split('\n')[0];
     const body = rows.length ? rows.map(r => {
       const ekskul = db.prepare(`SELECT COALESCE(SUM(ROUND(kehadiran*harga_satuan)),0) s FROM ekskul_honor WHERE periode=? AND lower(nama_pembina)=lower(?)`).get(r.periode, r.nama).s;

@@ -48,6 +48,13 @@ function load(file = ENV_FILE) {
 
 const loaded = load();
 
+/**
+ * Zona waktu proses — diterapkan SETELAH .env dibaca (APP_TIMEZONE) dan
+ * SEBELUM modul lain memakai Date/SQLite. Default Asia/Jakarta (WIB, GMT+7).
+ */
+const tz = require('./tz');
+const TZ = tz.apply(env('APP_TIMEZONE', process.env.TZ || tz.DEFAULT_TZ));
+
 /** ambil nilai env dengan default */
 function env(key, def = '') {
   const v = process.env[key];
@@ -70,7 +77,9 @@ function describe() {
     if (s.length <= 6) return '••••';
     return s.slice(0, 3) + '•'.repeat(Math.min(10, s.length - 6)) + s.slice(-3);
   };
+  const ti = tz.info();
   return [
+    { key: 'APP_TIMEZONE', value: `${TZ} (${ti.label} ${ti.offset})`, fromEnv: process.env.APP_TIMEZONE !== undefined, secret: false, note: 'zona waktu proses, worker WA & penjadwalan' },
     { key: 'PORT', value: env('PORT', '3120'), fromEnv: process.env.PORT !== undefined, secret: false, note: 'port HTTP aplikasi' },
     { key: 'DB_PATH', value: env('DB_PATH', path.join(__dirname, 'data', 'keuangan.sqlite')), fromEnv: process.env.DB_PATH !== undefined, secret: false, note: 'lokasi berkas SQLite' },
     { key: 'APP_BASE_URL', value: baseUrl() || '(belum diatur)', fromEnv: !!baseUrl(), secret: false, note: 'alamat domain publik untuk tautan di WhatsApp' },
@@ -83,4 +92,4 @@ function describe() {
   ];
 }
 
-module.exports = { load, env, envBool, baseUrl, describe, ENV_FILE, loaded };
+module.exports = { load, env, envBool, baseUrl, describe, ENV_FILE, loaded, tz, TZ };

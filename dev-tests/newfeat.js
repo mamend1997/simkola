@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Smoke test modul baru: akademik, iuran, ekskul, trash, mutasi kas, portal, rekonsiliasi kas */
 const { spawn } = require('child_process');
 const path = require('path');
@@ -202,7 +204,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   // ==== kop surat ====
   const sek = await req('GET', '/sekolah');
   ok('kop default tampil', /PERWAKILAN YAYASAN PEMBINA LEMBAGA PENDIDIKAN/.test(sek.text));
-  r = await req('POST', '/sekolah', { kop_baris: 'BARIS A\nBARIS B\nBARIS C\nSEKOLAH UJI\nAKREDITASI A\nALAMAT UJI', kop_font: '11', kop_font_besar: '18', sertifikasi_per_jam: '12500', portal_aktif: '1' });
+  r = await req('POST', '/desain-cetak', { kop_baris: 'BARIS A\nBARIS B\nBARIS C\nSEKOLAH UJI\nAKREDITASI A\nALAMAT UJI', kop_font: '11', kop_font_besar: '18', print_tempat: 'Cikoneng' });
   ok('simpan kop', r.status === 303);
   const print = await req('GET', '/ekskul/cetak?periode=' + PERIODE_EK + '');
   ok('kop kustom tercetak', /SEKOLAH UJI/.test(print.text));

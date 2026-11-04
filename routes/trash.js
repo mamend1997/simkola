@@ -50,7 +50,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td>${ui.badge(dbm.TRASH_LABEL[r.tabel] || r.tabel, 'gray', 'plain')}<div class="t-sub mono">#${r.row_id}</div></td>
         <td><div class="t-strong">${esc(r.label || '-')}</div>
           <div class="t-sub">${esc(row.uraian || row.nama || row.nama_pegawai || row.nama_pembina || row.keterangan || '')} ${jumlah ? '· ' + jumlah : ''}</div></td>
-        <td class="nowrap">${esc(String(r.deleted_at || '').slice(0, 16))}</td>
+        <td class="nowrap">${esc(lib.stampShort(r.deleted_at))}</td>
         <td>${esc(r.user_nama || '-')}</td>
         <td class="t-sub">${esc(r.alasan || '-')}</td>
         <td class="num">${daysLeft(r.expired_at)} hari</td>

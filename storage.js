@@ -33,7 +33,9 @@ function safeName(raw) {
 /** nama berkas terisolasi tenant + stempel waktu + acak (anti tabrakan) */
 function buildName(tenantId, jenis, original) {
   const j = JENIS.has(String(jenis)) ? String(jenis) : 'lain';
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  const d = new Date();
+  const p2 = n => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
   const rand = Math.random().toString(36).slice(2, 8);
   return `t${Number(tenantId) || 1}-${j}-${stamp}-${rand}-${safeName(original)}`;
 }

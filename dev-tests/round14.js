@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 14 — perbaikan iuran & pembersihan data:
    1. Isolasi ketat data iuran per tahun pelajaran (daftar & detail siswa)
    2. Instant live search pada filter Data Iuran / Transaksi Iuran

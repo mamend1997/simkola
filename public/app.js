@@ -3,6 +3,49 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
+  /* ===== optimasi gambar unggahan: konversi WebP + perkecil dimensi ===== */
+  const canWebp = (() => {
+    try {
+      const cv = document.createElement('canvas'); cv.width = cv.height = 1;
+      return cv.toDataURL('image/webp').indexOf('data:image/webp') === 0;
+    } catch (e) { return false; }
+  })();
+  /** kembalikan dataURL WebP teroptimasi, atau null bila berkas bukan gambar raster / gagal */
+  function optimizeImage(file, opts) {
+    const o = opts || {};
+    const max = Number(o.max || 1600);
+    const quality = Number(o.quality || 0.86);
+    return new Promise(resolve => {
+      if (!file || !/^image\//.test(file.type || '')) return resolve(null);
+      if (/svg/i.test(file.type) || /gif/i.test(file.type)) return resolve(null);   // vektor / animasi dibiarkan
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      const done = v => { try { URL.revokeObjectURL(url); } catch (e) { } resolve(v); };
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+          if (!w || !h) return done(null);
+          const scale = Math.min(1, max / Math.max(w, h));
+          const cv = document.createElement('canvas');
+          cv.width = Math.max(1, Math.round(w * scale));
+          cv.height = Math.max(1, Math.round(h * scale));
+          const ctx = cv.getContext('2d');
+          const out = canWebp
+            ? (ctx.drawImage(img, 0, 0, cv.width, cv.height), cv.toDataURL('image/webp', quality))
+            : (file.type === 'image/png'
+              ? (ctx.drawImage(img, 0, 0, cv.width, cv.height), cv.toDataURL('image/png'))
+              : (ctx.fillStyle = '#fff', ctx.fillRect(0, 0, cv.width, cv.height), ctx.drawImage(img, 0, 0, cv.width, cv.height), cv.toDataURL('image/jpeg', quality)));
+          if (!out || out.indexOf('data:image/') !== 0) return done(null);
+          // hanya pakai hasil optimasi bila benar-benar lebih kecil dari aslinya
+          const kb = Math.round(out.length * 0.75 / 1024);
+          return done(out.length < file.size * 1.25 ? { dataUrl: out, kb, w: cv.width, h: cv.height } : null);
+        } catch (e) { done(null); }
+      };
+      img.onerror = () => done(null);
+      img.src = url;
+    });
+  }
+
   /* ===== formatter nominal: pemisah ribuan otomatis (4.500.000) ===== */
   const digitsOf = v => String(v === undefined || v === null ? '' : v).replace(/[^\d]/g, '');
   const moneyVal = el => { const d = digitsOf(el && el.value); return d ? Number(d) : 0; };
@@ -152,12 +195,16 @@
       if (f.size > maxMB * 1024 * 1024) { alert('Ukuran berkas melebihi ' + maxMB + ' MB.'); inp.value = ''; return; }
       const nameTarget = inp.dataset.filename ? document.getElementById(inp.dataset.filename) : null;
       if (nameTarget) nameTarget.value = f.name;
-      const rd = new FileReader();
-      rd.onload = () => {
-        target.value = rd.result;
-        if (info) info.innerHTML = '<span class="badge green plain">✓ ' + f.name + ' (' + (f.size / 1024 / 1024).toFixed(2) + ' MB)</span>';
+      const finish = (dataUrl, extra) => {
+        target.value = dataUrl;
+        if (info) {
+          const sizeTxt = extra && extra.kb
+            ? '<span class="badge green plain">✓ ' + f.name + ' · WebP ' + extra.kb + ' KB (' + extra.w + '×' + extra.h + ')</span>'
+            : '<span class="badge green plain">✓ ' + f.name + ' (' + (f.size / 1024 / 1024).toFixed(2) + ' MB)</span>';
+          info.innerHTML = sizeTxt;
+        }
         const pv = document.getElementById(inp.dataset.b64 + '-preview');
-        if (pv && f.type.startsWith('image/')) pv.src = rd.result;
+        if (pv && /^image\//.test(f.type || '')) pv.src = dataUrl;
         if (inp.form) {
           const btn = inp.form.querySelector('[type=submit]');
           if (btn) { btn.disabled = false; }
@@ -165,7 +212,18 @@
         const submitBtn = inp.closest('form') ? inp.closest('form').querySelector('button[type=submit]') : null;
         if (submitBtn && submitBtn.dataset.locked) { submitBtn.disabled = false; submitBtn.dataset.locked = ''; }
       };
-      rd.readAsDataURL(f);
+      // gambar raster otomatis dikonversi ke WebP (lebih kecil & modern), selain itu apa adanya
+      optimizeImage(f, { max: 1600 }).then(opt => {
+        if (opt) return finish(opt.dataUrl, opt);
+        const rd = new FileReader();
+        rd.onload = () => finish(rd.result, null);
+        rd.readAsDataURL(f);
+      });
+      // varian kecil (96 px) untuk srcset gambar responsif — hanya bila form menyediakannya
+      if (inp.dataset.thumb) {
+        const small = document.getElementById(target.id + '_small');
+        if (small) optimizeImage(f, { max: 96, quality: 0.8 }).then(o => { small.value = o ? o.dataUrl : ''; });
+      }
     });
   });
 
@@ -204,7 +262,7 @@
       const sx = (iw - side) / 2;
       const sy = (ih - side) * pos;
       ctx.drawImage(srcImg, sx, sy, side, side, 0, 0, W, W);
-      const dataUrl = cv.toDataURL('image/jpeg', 0.9);
+      const dataUrl = canWebp ? cv.toDataURL('image/webp', 0.92) : cv.toDataURL('image/jpeg', 0.9);
       hidden.value = dataUrl;
       previews.forEach(el => {
         const t = targetOf(el);
@@ -223,7 +281,7 @@
         const kb = Math.round(dataUrl.length * 0.75 / 1024);
         const fname = (inp.files && inp.files[0]) ? inp.files[0].name : '';
         info.innerHTML = '<span class="badge green plain">✓ Siap disimpan</span> <span class="small muted">' +
-          (fname ? fname + ' · ' : '') + 'avatar ' + kb + ' KB (512×512)</span>';
+          (fname ? fname + ' · ' : '') + 'avatar ' + kb + ' KB (512×512' + (canWebp ? ' WebP' : '') + ')</span>';
       }
     }
 
@@ -1519,3 +1577,249 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     qsa('input[name="' + name + '"]', scope).forEach(function (i) { if (!i.disabled) i.checked = on; });
   });
 });
+
+/* =====================================================================
+   PENGINGAT TAGIHAN WHATSAPP — modal kirim, pratinjau & tag dinamis
+   (dipakai halaman /iuran/data dan /iuran/pengingat)
+   ===================================================================== */
+(function waReminderUI() {
+  const q = (s, r) => (r || document).querySelector(s);
+  const qa = (s, r) => Array.prototype.slice.call((r || document).querySelectorAll(s));
+  if (!q) return;
+
+  const openModal = id => { const m = document.getElementById(id); if (m) m.classList.add('show'); };
+  const closeModal = id => { const m = document.getElementById(id); if (m) m.classList.remove('show'); };
+
+  /* ---- helper: isi variabel {tag} pada template ---- */
+  function fillTags(tpl, vars) {
+    return String(tpl == null ? '' : tpl).replace(/\{([a-z_]+)\}/gi, (m, k) => {
+      const v = vars && vars[String(k).toLowerCase()];
+      return v === undefined ? m : String(v);
+    });
+  }
+  const tplBank = () => {
+    const el = q('script[data-wa-templates]');
+    if (!el) return [];
+    try { return JSON.parse(el.textContent || '[]') || []; } catch (e) { return []; }
+  };
+  const previewUrl = () => {
+    const el = q('[data-wa-preview-url]');
+    return el ? el.getAttribute('data-wa-preview-url') : '';
+  };
+  const defaultPesan = () => {
+    const el = q('[data-wa-default-pesan]');
+    return el ? el.getAttribute('data-wa-default-pesan') : '';
+  };
+  function templateText(id) {
+    const row = tplBank().find(t => String(t.id) === String(id));
+    return row ? row.isi : defaultPesan();
+  }
+
+  /* ================= modal kirim per siswa ================= */
+  const mSatu = document.getElementById('mWaSatu');
+  if (mSatu) {
+    const info = () => document.getElementById('waSatuInfo');
+    const ta = document.getElementById('waSatuPesan');
+    const pv = document.getElementById('waSatuPreview');
+    const selTpl = document.getElementById('waSatuTpl');
+    const hid = document.getElementById('waSatuSiswa');
+    let vars = null;
+
+    function renderPrev() { if (pv) pv.textContent = fillTags(ta ? ta.value : '', vars || {}); }
+
+    function fillInfo(d) {
+      const el = info();
+      if (!el) return;
+      if (!d || !d.ok) {
+        el.innerHTML = '<div class="alert err">' + ((d && d.error) || 'Gagal memuat data siswa.') + '</div>';
+        return;
+      }
+      el.innerHTML = '<dt>Nama Siswa</dt><dd>' + (d.nama || '-') + '</dd>'
+        + '<dt>Kelas</dt><dd>' + (d.kelas || '-') + '</dd>'
+        + '<dt>Nomor Tujuan</dt><dd>' + (d.phone_display || '<span style="color:var(--red)">belum diisi</span>') + '</dd>'
+        + '<dt>Tunggakan</dt><dd>' + (d.nominal_text || '-') + ' <span class="t-sub">(' + (d.items || 0) + ' tagihan)</span></dd>';
+      if (!d.phone_display) {
+        el.insertAdjacentHTML('beforeend', '<div class="alert err" style="grid-column:1/-1">Nomor HP/WA orang tua belum diisi. Lengkapi di menu <b>Data Siswa</b> sebelum mengirim pengingat.</div>');
+      }
+    }
+
+    qa('[data-wa-single]').forEach(btn => btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-wa-single');
+      if (hid) hid.value = id;
+      if (info()) info().innerHTML = '<div class="help">Memuat data siswa…</div>';
+      if (ta) ta.value = defaultPesan();
+      if (pv) pv.textContent = 'Memuat pratinjau…';
+      if (selTpl) selTpl.value = '0';
+      openModal('mWaSatu');
+      try {
+        const r = await fetch(previewUrl() + '?siswa_id=' + encodeURIComponent(id), { headers: { 'Accept': 'application/json' } });
+        const d = await r.json();
+        vars = d && d.vars;
+        fillInfo(d);
+        if (ta && d && d.pesan) ta.value = defaultPesan();
+        renderPrev();
+      } catch (e) {
+        if (info()) info().innerHTML = '<div class="alert err">Gagal memuat pratinjau: ' + e.message + '</div>';
+      }
+    }));
+
+    if (selTpl) selTpl.addEventListener('change', () => {
+      if (ta) ta.value = templateText(selTpl.value);
+      renderPrev();
+    });
+    if (ta) ta.addEventListener('input', renderPrev);
+    const formSatu = document.getElementById('fWaSatu');
+    if (formSatu) formSatu.addEventListener('submit', e => {
+      if (!hid || !hid.value) { e.preventDefault(); alert('Siswa belum dipilih.'); return; }
+      if (ta && !ta.value.trim()) { e.preventDefault(); alert('Isi pesan tidak boleh kosong.'); return; }
+    });
+  }
+
+  /* ================= modal kirim massal ================= */
+  const mMassal = document.getElementById('mWaMassal');
+  if (mMassal) {
+    const form = document.getElementById('fWaMassal');
+    const ta = document.getElementById('waMassalPesan');
+    const selTpl = document.getElementById('waMassalTpl');
+    const countEl = () => q('[data-wa-count]', mMassal);
+    const labelEl = () => q('[data-wa-count-label]', mMassal);
+    const checkedIds = () => qa('input[name="siswa"]:checked').map(i => i.value);
+
+    function refreshCount() {
+      const n = checkedIds().length;
+      const c = countEl(), l = labelEl();
+      if (c) c.textContent = String(n);
+      if (l) l.textContent = n
+        ? 'Orang Tua Siswa Terpilih (centang manual)'
+        : 'Siswa — gunakan filter kelas/tingkat di bawah (semua siswa bertunggakan)';
+    }
+
+    qa('[data-open="mWaMassal"]').forEach(btn => btn.addEventListener('click', () => {
+      if (ta && !ta.value.trim()) ta.value = templateText(selTpl ? selTpl.value : '0');
+      refreshCount();
+      setTimeout(refreshCount, 50);
+    }));
+    document.addEventListener('change', e => {
+      if (e.target && e.target.name === 'siswa' && mMassal.classList.contains('show')) refreshCount();
+    });
+    if (selTpl) selTpl.addEventListener('change', () => {
+      if (ta) ta.value = templateText(selTpl.value);
+    });
+    if (form) form.addEventListener('submit', () => {
+      // salin ceklis siswa (dari form export) menjadi hidden input form massal
+      qa('input[type="hidden"][data-wa-pick]', form).forEach(el => el.remove());
+      checkedIds().forEach(id => {
+        const h = document.createElement('input');
+        h.type = 'hidden'; h.name = 'siswa'; h.value = id; h.setAttribute('data-wa-pick', '1');
+        form.appendChild(h);
+      });
+      if (ta && !ta.value.trim()) ta.value = templateText(selTpl ? selTpl.value : '0');
+    });
+  }
+
+  /* ================= halaman jadwal pengingat ================= */
+  /* sisipkan tag variabel ke textarea template */
+  const tags = qa('[data-tpl-tag]');
+  const tplArea = document.getElementById('tplIsi');
+  if (tags.length && tplArea) {
+    tags.forEach(b => b.addEventListener('click', () => {
+      const tag = b.getAttribute('data-tpl-tag');
+      const start = tplArea.selectionStart || tplArea.value.length;
+      const end = tplArea.selectionEnd === undefined ? tplArea.value.length : tplArea.selectionEnd;
+      tplArea.value = tplArea.value.slice(0, start) + tag + tplArea.value.slice(end);
+      const pos = start + tag.length;
+      tplArea.focus();
+      try { tplArea.setSelectionRange(pos, pos); } catch (e) { }
+      tplArea.dispatchEvent(new Event('input'));
+    }));
+  }
+  const varsHost = q('[data-wa-tpl-vars]');
+  if (tplArea && varsHost) {
+    let vars = {};
+    try { vars = JSON.parse(varsHost.getAttribute('data-wa-tpl-vars') || '{}') || {}; } catch (e) { vars = {}; }
+    const pv = q('[data-tpl-preview]');
+    const render = () => { if (pv) pv.textContent = fillTags(tplArea.value, vars); };
+    tplArea.addEventListener('input', render);
+    render();
+    // muat template tersimpan ke editor
+    qa('[data-tpl-load]').forEach(btn => btn.addEventListener('click', () => {
+      tplArea.value = btn.getAttribute('data-tpl-load') || '';
+      render();
+      tplArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }));
+  }
+  /* lihat isi pesan pada riwayat */
+  qa('[data-wa-view]').forEach(btn => btn.addEventListener('click', () => {
+    const body = q('[data-wa-view-body]');
+    if (body) body.textContent = btn.getAttribute('data-wa-view') || '';
+    openModal('mWaViewTx');
+  }));
+
+
+  /* ================= kredensial pendaftaran: salin & lihat password ================= */
+  qa('[data-copy]').forEach(btn => btn.addEventListener('click', async () => {
+    const text = btn.getAttribute('data-copy') || '';
+    const old = btn.innerHTML;
+    const done = () => {
+      btn.classList.add('copied'); btn.innerHTML = '✓ Tersalin';
+      setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = old; }, 1600);
+    };
+    try { await navigator.clipboard.writeText(text); done(); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (err) { }
+      ta.remove();
+    }
+  }));
+  qa('[data-pw-toggle]').forEach(btn => btn.addEventListener('click', () => {
+    const host = btn.closest('.cred-cell, .cred-row') || document;
+    const el = host.querySelector('[data-pw]');
+    if (!el) return;
+    const real = el.getAttribute('data-pw') || '';
+    const shown = el.getAttribute('data-shown') === '1';
+    if (shown) { el.textContent = '•'.repeat(real.length); el.setAttribute('data-shown', '0'); btn.innerHTML = btn.innerHTML.replace('Sembunyikan', 'Lihat'); }
+    else { el.textContent = real; el.setAttribute('data-shown', '1'); btn.innerHTML = btn.innerHTML.replace('Lihat', 'Sembunyikan'); }
+  }));
+  /* tutup kartu sambutan pendaftaran (sekali tampil, tidak muncul lagi) */
+  const closeWelcome = q('[data-close-welcome]');
+  if (closeWelcome) closeWelcome.addEventListener('click', () => {
+    const card = document.getElementById('welcomeKredensial');
+    if (card) card.remove();
+    const hero = q('.card.hero');
+    if (hero) hero.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  /* ================= halaman publik: sakelar & pratinjau teks portal ================= */
+  /* sakelar ON/OFF generik (.sw) — label status ikut berubah */
+  qa('.sw input[type=checkbox]').forEach(chk => {
+    const host = chk.closest('.sw');
+    const state = host ? host.querySelector('.sw-state') : null;
+    if (!state) return;
+    const sync = () => { state.textContent = chk.checked ? 'ON' : 'OFF'; };
+    chk.addEventListener('change', sync);
+    sync();
+  });
+  /* pratinjau langsung judul tab browser + sub-judul banner portal */
+  qa('[data-portal-preview]').forEach(pv => {
+    const scope = pv.closest('form') || document;
+    const inTitle = scope.querySelector('[data-pv-title]');
+    const inSub = scope.querySelector('[data-pv-sub]');
+    const tab = pv.querySelector('[data-pv-tab]');
+    const sub = pv.querySelector('[data-pv-subtitle]');
+    const hint = scope.querySelector('[data-pv-tabhint]');
+    const defTitle = pv.getAttribute('data-def-title') || 'Cek Tagihan';
+    const defSub = pv.getAttribute('data-def-sub') || '';
+    const school = pv.getAttribute('data-school') || '';
+    const render = () => {
+      const t = ((inTitle && inTitle.value.trim()) || defTitle);
+      const s = ((inSub && inSub.value.trim()) || defSub);
+      if (tab) tab.textContent = `${t} · ${school}`;
+      if (sub) sub.textContent = s;
+      if (hint) hint.textContent = `${t} · ${school}`;
+    };
+    [inTitle, inSub].forEach(el => { if (el) el.addEventListener('input', render); });
+    render();
+  });
+})();

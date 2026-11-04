@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI test ronde 9 (Playwright): sidebar collapse, filter metode dashboard, modal bayar item terpilih,
    autocomplete + datepicker portal, OTP portal pegawai/slip, kalkulator beasiswa, mobile & tanpa error JS */
 const { spawn } = require('child_process');

@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 7: iuran per bulan, kwitansi 1 TTD, CoA antrean, cascade delete, filter multi,
    export per bulan, piutang tanpa BKU, payroll review, rekon semua BKU, ekskul jenis,
    CoA pengeluaran (pajak/mutasi), buku pembantu mutasi + filter BKU, chart SPP, TA salin + kelulusan */

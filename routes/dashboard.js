@@ -94,7 +94,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       : lib.fileSize(store.sisa);
 
     // notifikasi antrean posting: iuran hari kemarin/belum diposting + honor ekskul tertunda
-    const yr = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yr = dbm.dateOffsetISO(-1);   // kemarin menurut jam WIB
     const iuranPendingRows = dbm.iuranBayarRows({ taId: ta ? ta.id : null, status: 'pending' });
     const iuranLate = iuranPendingRows.filter(b => String(b.tanggal) <= yr);
     const iuranLateGroups = new Set(iuranLate.map(b => (b.grup_id || 0) + '|' + String(b.tanggal).slice(0, 10))).size;
@@ -117,7 +117,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         <div class="toolbar"><a class="btn btn-sm" href="${c.base}/catatan-orangtua">${ui.icon('inbox')}Rekap Catatan Orang Tua</a></div></div>
       ${pesanList.length ? `<div class="table-wrap"><table><thead><tr><th>Waktu</th><th>Siswa</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${pesanList.map(x => `<tr>
-          <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
+          <td class="nowrap t-sub">${esc(lib.stampShort(x.created_at))}</td>
           <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${x.sumber === 'slip-pegawai' ? 'Slip Pegawai' : x.sumber === 'piutang-pegawai' ? 'Piutang Pegawai' : 'Tagihan Siswa'}</div></td>
           <td style="max-width:420px">${esc(x.pesan)}</td>
           <td class="t-sub">${esc(x.kontak || '-')}</td>
@@ -139,7 +139,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         <div class="toolbar"><a class="btn btn-sm" href="${c.base}/catatan-pegawai">${ui.icon('inbox')}Buka Catatan</a></div></div>
       ${catatanList.length ? `<div class="table-wrap"><table><thead><tr><th>Waktu</th><th>Pegawai</th><th>Terkait</th><th>Catatan</th><th>Status</th></tr></thead><tbody>
         ${catatanList.map(x => `<tr>
-          <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
+          <td class="nowrap t-sub">${esc(lib.stampShort(x.created_at))}</td>
           <td class="t-strong">${esc(x.nama)}${x.jabatan ? `<div class="t-sub">${esc(x.jabatan)}</div>` : ''}</td>
           <td class="t-sub">${esc(x.terkait || 'umum')}${x.periode ? ` · ${esc(dbm.periodeLabel(x.periode))}` : ''}</td>
           <td style="max-width:420px">${esc(String(x.pesan).slice(0, 220))}</td>
@@ -246,6 +246,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     /* kartu Info Layanan (multi-tenant): status langganan sekolah ini */
     const ten = req.tenant || null;
     const tenStatus = ten && saas ? saas.statusOf(ten) : null;
+    /* peringatan: halaman portal publik diblokir Super Admin Pusat */
+    const portalSt = (ten && saas && saas.portalStatusOf) ? saas.portalStatusOf(ten) : 'aktif';
+    const portalBanner = (() => {
+      if (portalSt === 'aktif' || !c.can('sekolah', 'view')) return '';
+      const info = (saas.portalStatusInfo ? saas.portalStatusInfo(ten) : { label: 'Non-Aktif', color: 'red' });
+      return `<div class="alert err mb-3" id="bannerPortalPublik">${ui.icon('lock')}<div>
+        <b>Halaman portal publik Anda sedang dinonaktifkan oleh Administrator Pusat.</b><br>
+        Status: ${ui.badge(info.label, info.color)}
+        ${ten.portal_note ? ` · Catatan: <i>${esc(ten.portal_note)}</i>` : ''}
+        <div class="small" style="margin-top:4px">Orang tua/wali tidak dapat membuka portal cek tagihan sampai halaman diaktifkan kembali.
+          Hubungi Super Admin Pusat, atau buka menu <a href="${c.base}/portal-publik">Portal Publik</a> untuk melihat detail.</div>
+      </div></div>`;
+    })();
     // kartu Info Layanan RINGKAS (satu baris, kecil) di atas KPI
     const layananCard = (ten && tenStatus) ? (() => {
       const pkg = (saas.packageByKode && saas.packageByKode(ten.paket)) || null;
@@ -268,7 +281,47 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       </div>`;
     })() : '';
 
+    /* ---------- sambutan pendaftaran: kredensial login ditampilkan SEKALI ---------- */
+    const welcome = (() => {
+      try { return req.sessionRow ? saas.takeWelcome(req.sessionRow.token) : null; } catch (e) { return null; }
+    })();
+    const welcomeCard = welcome ? `<div class="card mb-3 welcome-card" id="welcomeKredensial">
+      <div class="welcome-head">
+        <div class="welcome-ico">${ui.icon('check')}</div>
+        <div>
+          <h3>Pendaftaran berhasil — selamat datang, ${esc(welcome.nama || 'Administrator')}!</h3>
+          <div class="sub">Sekolah <b>${esc(welcome.sekolah || c.settings.sekolah_nama || '')}</b> sudah aktif.
+            Simpan kredensial berikut untuk masuk kembali kapan saja.</div>
+        </div>
+      </div>
+      <div class="cred-grid">
+        <div class="cred-cell">
+          <div class="cred-lbl">Kode Sekolah ${ui.badge('4 karakter', 'blue')}</div>
+          <div class="cred-val mono cred-big" data-cred="kode">${esc(welcome.kode || '')}</div>
+          <button type="button" class="btn btn-sm" data-copy="${esc(welcome.kode || '')}">${ui.icon('copy')}Salin kode</button>
+        </div>
+        <div class="cred-cell">
+          <div class="cred-lbl">Username</div>
+          <div class="cred-val mono" data-cred="user">${esc(welcome.username || '')}</div>
+          <button type="button" class="btn btn-sm" data-copy="${esc(welcome.username || '')}">${ui.icon('copy')}Salin username</button>
+        </div>
+        <div class="cred-cell">
+          <div class="cred-lbl">Password</div>
+          <div class="cred-val mono" data-cred="pwd" data-pw="${esc(welcome.password || '')}">${welcome.password ? '•'.repeat(String(welcome.password).length) : '(password pilihan Anda)'}</div>
+          ${welcome.password ? `<div class="flex" style="gap:6px">
+            <button type="button" class="btn btn-sm" data-pw-toggle>${ui.icon('eye')}Lihat</button>
+            <button type="button" class="btn btn-sm" data-copy="${esc(welcome.password)}">${ui.icon('copy')}Salin password</button>
+          </div>` : ''}
+        </div>
+      </div>
+      <div class="welcome-foot">
+        <span class="small muted">${ui.icon('shield', 'i-sm')} Password hanya ditampilkan sekali di halaman ini. Catat atau salin sekarang.</span>
+        <button type="button" class="btn btn-sm btn-primary" data-close-welcome>${ui.icon('check')}Mengerti, lanjut ke dashboard</button>
+      </div>
+    </div>` : '';
+
     const content = `
+    ${welcomeCard}
     <div class="card hero mb-3" style="padding:26px 28px">
       <div style="position:relative;z-index:1" class="between">
         <div>
@@ -290,6 +343,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     </div>
 
     ${layananCard}
+    ${portalBanner}
 
     ${queueAlerts.length ? `<div class="alert warn mb-3">${ui.icon('bell')}<div><b>Notifikasi Antrean Posting.</b><ul style="margin:6px 0 0 16px;padding:0">${queueAlerts.map(x => `<li>${x}</li>`).join('')}</ul></div></div>` : ''}
 
@@ -499,13 +553,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         ? `<a href="${c.base}/iuran/data/${Number(x.siswa_id) || 0}">buka data iuran</a>`
         : `<a href="${c.base}/pegawai">data pegawai</a>`;
       return `<tr>
-          <td class="nowrap t-sub">${esc(String(x.created_at || '').slice(0, 16))}</td>
+          <td class="nowrap t-sub">${esc(lib.stampShort(x.created_at))}</td>
           <td>${sumberBadge}</td>
           <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${tautan}</div></td>
           <td style="max-width:520px">${esc(x.pesan)}</td>
           <td class="t-sub">${esc(x.kontak || '-')}</td>
           <td>${x.status === 'selesai' ? ui.badge('Selesai Ditindaklanjuti', 'green') : ui.badge('Baru', 'amber')}
-            ${x.status === 'selesai' ? `<div class="t-sub">${esc(String(x.selesai_at || '').slice(0, 16))} · ${esc(x.selesai_by || '')}</div>` : ''}</td>
+            ${x.status === 'selesai' ? `<div class="t-sub">${esc(lib.stampShort(x.selesai_at))} · ${esc(x.selesai_by || '')}</div>` : ''}</td>
           <td class="right nowrap">
             ${x.status === 'selesai' ? '' : `<form method="post" action="${c.base}/pesan-orangtua/selesai" style="display:inline"><input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="${esc(qs())}"><button class="btn btn-sm btn-green">${ui.icon('check')}Tandai Selesai</button></form>`}
             ${c.can('dashboard', 'delete') || c.can('catatan', 'delete') ? `<form method="post" action="${c.base}/catatan-orangtua/delete" style="display:inline" data-confirm="Hapus catatan dari ${esc(x.nama || 'pengirim')} ini? Catatan akan hilang permanen.">
@@ -515,7 +569,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         </tr>`;
     }).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada catatan orang tua', 'Catatan orang tua/wali dari portal publik akan tampil di sini.')}
-      <p class="help mt-2">Portal publik (alamat dapat diubah di menu <a href="${c.base}/sekolah">Identitas Sekolah</a>):
+      <p class="help mt-2">Portal publik (alamat dapat diubah di menu <a href="${c.base}/portal-publik">Portal Publik</a>):
         <a href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank">tagihan siswa</a> ·
         <a href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank">piutang pegawai</a> ·
         <a href="${c.base}/${dbm.portalSlugs().slip}" target="_blank">slip gaji pegawai</a>

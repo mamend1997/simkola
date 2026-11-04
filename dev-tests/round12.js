@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 12:
    1. Hapus & edit riwayat pembayaran piutang umum
    2. Hapus & edit riwayat pembayaran piutang sertifikasi

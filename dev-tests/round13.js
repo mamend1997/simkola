@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 13:
    1. Mutasi kelas LINTAS tahun pelajaran tidak menghapus data tahun asal
       (tabel siswa_penempatan + backfill riwayat dari siswa_mutasi)

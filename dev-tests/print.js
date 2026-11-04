@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test cetak kwitansi (rondе 14):
    1. Kwitansi transaksi 210 × 99 mm: kop ringkas ada, spasi rapat, PDF = 1 halaman
    2. Kwitansi iuran (Bukti Pembayaran Siswa): PDF = 1 halaman, isi tidak terpotong

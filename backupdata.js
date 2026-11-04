@@ -12,7 +12,8 @@ const TABLES = ['settings', 'users', 'permissions', 'tahun_ajaran', 'bku', 'bku_
   'bku_import', 'audit', 'pegawai', 'payroll', 'payroll_post', 'payroll_draft', 'beasiswa', 'piutang_lain', 'piutang_lain_bayar',
   'trash', 'program_keahlian', 'kelas', 'siswa', 'siswa_mutasi', 'siswa_penempatan', 'iuran_grup', 'iuran_nominal', 'iuran_tagihan',
   'iuran_bayar', 'ekskul_honor', 'mutasi_kas', 'piutang_kategori', 'piutang_lainnya', 'piutang_lainnya_bayar',
-  'catatan_pegawai', 'portal_pesan', 'otp_code', 'cloud_backup', 'beasiswa_grup', 'beasiswa_siswa', 'panduan'];
+  'catatan_pegawai', 'portal_pesan', 'otp_code', 'cloud_backup', 'beasiswa_grup', 'beasiswa_siswa', 'panduan',
+  'wa_template', 'wa_reminder_log'];
 
 function dumpAll(db) {
   const dump = { app: 'simkeu-sekolah', version: 2, created_at: lib.nowStamp(), tables: {} };

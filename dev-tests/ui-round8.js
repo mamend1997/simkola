@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI test ronde 8 (Playwright): menu akordeon + pengaturan tampilan menu, ceklis item iuran,
    grid honor ekskul (tambah baris), layout mobile, tanpa error JS */
 const { spawn } = require('child_process');

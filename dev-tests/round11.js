@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 11:
    1. Sertifikasi = INPUT JAM × tarif pengaturan (default 12.500) + halaman "Nominal Tunjangan & Honor"
    2. Kasbon hanya pencatatan (fitur potong otomatis dihapus, tanpa toggle & tanpa tombol)

@@ -1,7 +1,7 @@
 'use strict';
 const printcfg = require('../printcfg');
 
-module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
+module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, todayISO, num, xlsxBuffer, BULAN } = lib;
 
@@ -197,6 +197,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
   }
 
   /** 5 buku pembantu/rekap: hanya menerima rekapan otomatis dari transaksi */
+  /* ----- kontrol fitur paket: setiap buku pembantu dapat dimatikan sendiri ----- */
+  const PEMBANTU_FEATURE = {
+    tunai: 'pembantu_kas', bank: 'pembantu_bank', pajak: 'pembantu_pajak',
+    bhp: 'pembantu_bhp', modal: 'pembantu_modal'
+  };
+  function featuresOf(req) {
+    try { return saas ? saas.enabledKeys(req.tenant || null) : null; } catch (e) { return null; }
+  }
+  function pembantuAllowed(req, key) {
+    const f = featuresOf(req);
+    if (!f) return true;
+    return f.includes(PEMBANTU_FEATURE[key] || 'pembantu_kas');
+  }
   const PEMBANTU = [
     { key: 'tunai', label: 'Buku Pembantu Tunai', desc: 'Seluruh transaksi kas tunai', where: "t.metode='tunai'" },
     { key: 'bank', label: 'Buku Pembantu Bank', desc: 'Seluruh transaksi transfer bank', where: "t.metode='transfer'" },
@@ -451,7 +464,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     // filter "Rincian Per Bulan" selalu menampilkan rincian transaksi aktual (bukan rekapan)
     const modeQ = ['hari', 'bulan', 'tahun'].includes(req.query.get('mode') || '') ? req.query.get('mode') : 'detail';
     const mode = bulanSel ? 'detail' : modeQ;
-    const pKey = PEMBANTU.some(p => p.key === req.query.get('p')) ? req.query.get('p') : 'tunai';
+    const pBooks = PEMBANTU.filter(x => pembantuAllowed(req, x.key));
+    const pReq = PEMBANTU.some(p => p.key === req.query.get('p')) ? req.query.get('p') : '';
+    const pKey = (pReq && pembantuAllowed(req, pReq)) ? pReq : ((pBooks[0] || {}).key || 'tunai');
     const pbku = (req.query.getAll ? req.query.getAll('bku') : []).map(Number).filter(Boolean);
     const pMode = ['detail', 'tanggal'].includes(req.query.get('pmode') || '') ? req.query.get('pmode') : 'orang';
 
@@ -461,8 +476,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       ['tunggakan', 'Tunggakan per Tingkat'],
       ['sertifikasi', 'Piutang Sertifikasi'],
       ['lainnya', 'Piutang Lainnya'],
-      ['aruskas', 'Laporan Arus Kas'], ['pembantu', 'Buku Pembantu & Rekap']
-    ].map(([k, l]) => `<a href="${c.base}/laporan?r=${k}" class="${r === k ? 'on' : ''}">${l}</a>`).join('');
+      ['aruskas', 'Laporan Arus Kas']
+    ].concat(pBooks.length ? [['pembantu', 'Buku Pembantu & Rekap']] : [])
+      .map(([k, l]) => `<a href="${c.base}/laporan?r=${k}" class="${r === k ? 'on' : ''}">${l}</a>`).join('');
 
     const taSel = `<div class="field" style="min-width:180px"><label>Tahun Ajaran</label>
       <form method="get" action="${c.base}/laporan"><input type="hidden" name="r" value="${esc(r)}"><select name="ta" data-autosubmit>${taList.map(t => `<option value="${t.id}" ${String(t.id) === String(taId) ? 'selected' : ''}>${esc(t.nama)}</option>`).join('')}</select></form></div>`;
@@ -587,13 +603,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           <td class="num">${x.pagu ? ((x.realisasi / x.pagu) * 100).toFixed(1) : 0}%</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="2">TOTAL</td><td class="num">${rupiah(l.totalPagu)}</td><td class="num">${rupiah(l.totalReal)}</td><td class="num">${rupiah(l.totalPagu - l.totalReal)}</td>
         <td class="num">${l.totalPagu ? ((l.totalReal / l.totalPagu) * 100).toFixed(1) : 0}%</td></tr></tfoot></table></div>${detailHtml}`;
+    } else if (r === 'pembantu' && !pembantuAllowed(req, pKey)) {
+      preview = `<div class="card"><div class="alert err">${ui.icon('lock')}<div><b>Buku pembantu ini tidak termasuk paket langganan sekolah.</b>
+        Hubungi Super Admin Pusat untuk mengaktifkan fitur ini.</div></div></div>`;
     } else if (r === 'pembantu') {
       const pb = pembantuData(pKey, from, to, taId, pbku);
       const bkuQs = pbku.map(id => '&bku=' + id).join('');
       actions = `<a class="btn" target="_blank" href="${c.base}/cetak/pembantu?p=${pKey}&ta=${taId}&bulan=${encodeURIComponent(bulanSel)}&from=${esc(bulanSel ? '' : from0)}&to=${esc(bulanSel ? '' : to0)}${bkuQs}">${ui.icon('printer')}Cetak PDF</a>
         ${canExport ? `<a class="btn btn-primary" href="${c.base}/export/pembantu?p=${pKey}&ta=${taId}&bulan=${encodeURIComponent(bulanSel)}&from=${esc(bulanSel ? '' : from0)}&to=${esc(bulanSel ? '' : to0)}${bkuQs}">${ui.icon('download')}Export Excel</a>` : ''}`;
       preview = `<div class="pembantu-tabs">
-          ${PEMBANTU.map(x => `<a href="${c.base}/laporan?r=pembantu&p=${x.key}&ta=${taId}&bulan=${encodeURIComponent(bulanSel)}&from=${esc(bulanSel ? '' : from0)}&to=${esc(bulanSel ? '' : to0)}${bkuQs}" class="${pKey === x.key ? 'on' : ''}">${esc(x.label)}</a>`).join('')}
+          ${pBooks.map(x => `<a href="${c.base}/laporan?r=pembantu&p=${x.key}&ta=${taId}&bulan=${encodeURIComponent(bulanSel)}&from=${esc(bulanSel ? '' : from0)}&to=${esc(bulanSel ? '' : to0)}${bkuQs}" class="${pKey === x.key ? 'on' : ''}">${esc(x.label)}</a>`).join('')}
         </div>
         <div class="alert info">${ui.icon('info')}<div><b>${esc(pb.cfg.label)}</b> — ${esc(pb.cfg.desc)}.
           Buku pembantu ini <b>tidak diinput manual</b>: seluruh isinya terbentuk otomatis dari transaksi yang Anda catat${(pKey === 'bank' || pKey === 'tunai') ? ' <b>dan dari mutasi Bank &amp; Cash</b>' : ''}.</div></div>
@@ -916,6 +935,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     guard(req, res, 'laporan', 'view');
     const c = ctx(req);
     const key = PEMBANTU.some(p => p.key === req.query.get('p')) ? req.query.get('p') : 'tunai';
+    if (!pembantuAllowed(req, key)) return res.redirect(req.BASE + '/laporan?r=pembantu&err=' + encodeURIComponent('Buku pembantu ini tidak termasuk paket langganan sekolah.'));
     const taId = req.query.get('ta') || c.taId || (dbm.activeTahun() || {}).id;
     const ta = dbm.tahunById(taId) || {};
     const bulanSel = monthRange(ta, req.query.get('bulan') || '') ? req.query.get('bulan') : '';
@@ -1227,7 +1247,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           <td>${esc(x.kelas)}</td><td class="num">${x.siswa}</td><td class="num">${num(x.tagihan)}</td>
           <td class="num">${num(x.dibayar)}</td><td class="num">${num(x.sisa)}</td></tr>`).join('')}
       </tbody></table>
-      ${ui.signBlock(c.settings, { tanggal: tglID(new Date().toISOString().slice(0, 10)) })}`;
+      ${ui.signBlock(c.settings, { tanggal: tglID(lib.todayISO()) })}`;
     res.html(ui.printPage({
       settings: c.settings, base: c.base, title: 'Rekapitulasi Tunggakan per Tingkat',
       body, backHref: '/laporan?r=tunggakan&ta=' + (taId || ''), backLabel: 'Kembali ke Laporan',
@@ -1368,6 +1388,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     if (!guard(req, res, 'laporan', 'export')) return;
     const c = ctx(req);
     const key = PEMBANTU.some(p => p.key === req.query.get('p')) ? req.query.get('p') : 'tunai';
+    if (!pembantuAllowed(req, key)) return res.redirect(req.BASE + '/laporan?r=pembantu&err=' + encodeURIComponent('Buku pembantu ini tidak termasuk paket langganan sekolah.'));
     const taId = req.query.get('ta') || c.taId || (dbm.activeTahun() || {}).id;
     const ta = dbm.tahunById(taId) || {};
     const bulanSel = monthRange(ta, req.query.get('bulan') || '') ? req.query.get('bulan') : '';

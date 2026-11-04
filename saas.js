@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS tenants (
   features TEXT,
   trial INTEGER NOT NULL DEFAULT 0,
   catatan TEXT,
+  portal_status TEXT NOT NULL DEFAULT 'aktif',
+  portal_note TEXT, portal_locked_at TEXT, portal_locked_by TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS saas_users (
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT,
   ta_id INTEGER,
   alert_pending INTEGER NOT NULL DEFAULT 0,
+  welcome TEXT,
   imp_by INTEGER,
   created_at TEXT
 );
@@ -123,6 +126,16 @@ S.exec(SCHEMA);
   add('saas_payments', 'paket_tujuan', 'TEXT');
   add('saas_packages', 'self_trial', 'INTEGER NOT NULL DEFAULT 0');
   add('saas_packages', 'trial_hari', 'INTEGER');
+  add('tenants', 'npsn', 'TEXT');
+  add('tenants', 'server_ip', 'TEXT');
+  // halaman publik (portal) — status akses ditentukan Super Admin Pusat
+  add('tenants', 'portal_slug', 'TEXT');
+  add('tenants', 'portal_status', "TEXT NOT NULL DEFAULT 'aktif'");
+  add('tenants', 'portal_note', 'TEXT');
+  add('tenants', 'portal_locked_at', 'TEXT');
+  add('tenants', 'portal_locked_by', 'TEXT');
+  // kredensial awal hasil pendaftaran — ditampilkan SEKALI di dashboard sekolah baru
+  add('sessions', 'welcome', 'TEXT');
 })();
 
 /**
@@ -212,6 +225,10 @@ function initSettings() {
 }
 initSettings();
 
+/* stempel waktu lama pada control plane (audit Super Admin, log backup, dsb.)
+   digeser ke WIB sekali saja — tabel `sessions` dilewati (umurnya pendek). */
+try { dbm.migrateLegacyTimestamps(S, 'saas_settings'); } catch (e) { console.error('[tz-migrasi]', e.message); }
+
 function appName() { return String(get('saas_nama', 'SIMKEU Cloud') || 'SIMKEU Cloud').trim(); }
 function appLogo() { return String(get('saas_logo', '') || '').trim(); }
 function tema() { return String(get('saas_tema', '#4F46E5') || '#4F46E5').trim(); }
@@ -229,7 +246,13 @@ const FEATURES = [
   { key: 'mutasi_kas', label: 'Mutasi Bank & Cash', std: 1 },
   { key: 'tutup_bulanan', label: 'Tutup BKU Bulanan', std: 1 },
   { key: 'piutang', label: 'Piutang Pegawai & SPP', std: 1 },
-  { key: 'bku', label: 'Master BKU & Buku Pembantu', std: 1 },
+  { key: 'bku', label: 'Master BKU (Buku Kas Umum)', std: 1 },
+  // ---- buku pembantu dipisah agar dapat dikontrol satu per satu ----
+  { key: 'pembantu_kas', label: 'Buku Pembantu Kas / Tunai', std: 1 },
+  { key: 'pembantu_bank', label: 'Buku Pembantu Bank', std: 1 },
+  { key: 'pembantu_pajak', label: 'Buku Pembantu Pajak', std: 1 },
+  { key: 'pembantu_bhp', label: 'Rekapitulasi Barang Habis Pakai (BHP)', std: 1 },
+  { key: 'pembantu_modal', label: 'Rekapitulasi Barang Modal', std: 1 },
   { key: 'coa', label: 'Kode Rekening (CoA)', std: 1 },
   { key: 'anggaran', label: 'Anggaran RAPBS', std: 1 },
   { key: 'saldo_awal', label: 'Saldo Awal', std: 1 },
@@ -238,7 +261,11 @@ const FEATURES = [
   { key: 'tahun_ajaran', label: 'Tahun Pelajaran & Rollover', std: 1 },
   { key: 'laporan', label: 'Laporan & Export', std: 1 },
   { key: 'pengguna', label: 'Pengguna & Hak Akses', std: 1 },
-  { key: 'sekolah', label: 'Identitas, Tema & Desain Cetak', std: 1 },
+  // ---- kontrol tampilan & identitas dipisah satu per satu (ronde 26) ----
+  { key: 'identitas', label: 'Identitas Sekolah (NPSN, kontak & legalitas)', std: 1 },
+  { key: 'portal_publik', label: 'Portal Publik (slug, subdomain & custom domain)', std: 1 },
+  { key: 'tema', label: 'Tema & Branding (warna, logo, mode gelap)', std: 1 },
+  { key: 'desain_cetak', label: 'Desain Templat Cetak (kop surat & ukuran kuitansi)', std: 1 },
   { key: 'trash', label: 'Kotak Sampah', std: 1 },
   { key: 'audit', label: 'Audit Log', std: 1 },
   { key: 'backup', label: 'Backup & Restore Manual', std: 1 },
@@ -261,6 +288,14 @@ const FEATURES = [
   { key: 'backup_cloud', label: 'Auto-Backup Cloud & Email', std: 0 }
 ];
 const FEATURE_MAP = FEATURES.reduce((m, f) => { m[f.key] = f; return m; }, {});
+/**
+ * Fitur baru yang "mewarisi" nilai fitur lama saat paket/tenant belum memiliki kuncinya.
+ * Contoh: paket lama hanya punya `sekolah` → identitas/tema/desain_cetak/portal_publik ikut nilainya.
+ */
+const FEATURE_PARENT = {
+  identitas: 'sekolah', portal_publik: 'sekolah', tema: 'sekolah', desain_cetak: 'sekolah',
+  pembantu_kas: 'bku', pembantu_bank: 'bku', pembantu_pajak: 'bku', pembantu_bhp: 'bku', pembantu_modal: 'bku'
+};
 
 /**
  * Pemetaan alamat URL → fitur. Dipakai untuk MEMBLOKIR akses langsung
@@ -286,7 +321,9 @@ const PATH_FEATURES = [
   ['/tahun-ajaran', 'tahun_ajaran'],
   ['/laporan', 'laporan'], ['/cetak', 'laporan'], ['/export', 'laporan'],
   ['/pengguna', 'pengguna'], ['/audit', 'audit'], ['/trash', 'trash'],
-  ['/sekolah', 'sekolah'], ['/tema', 'sekolah'], ['/desain-cetak', 'sekolah'],
+  ['/sekolah/domain', 'portal_publik'], ['/sekolah/portal', 'portal_publik'],
+  ['/portal-publik', 'portal_publik'],
+  ['/desain-cetak', 'desain_cetak'], ['/tema', 'tema'], ['/sekolah', 'identitas'],
   ['/tampilan-menu', 'pengguna'], ['/petunjuk', 'panduan'],
   ['/piutang', 'piutang']
 ];
@@ -301,7 +338,12 @@ function parseFeatures(raw, paket) {
   let obj = {};
   try { obj = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {}); } catch (e) { obj = {}; }
   const out = {};
-  for (const f of FEATURES) out[f.key] = (obj[f.key] === undefined) ? base[f.key] : (Number(obj[f.key]) ? 1 : 0);
+  for (const f of FEATURES) {
+    let v = obj[f.key];
+    const parent = FEATURE_PARENT[f.key];
+    if (v === undefined && parent && obj[parent] !== undefined) v = obj[parent];
+    out[f.key] = (v === undefined) ? base[f.key] : (Number(v) ? 1 : 0);
+  }
   return out;
 }
 function tenantFeatures(t) {
@@ -335,7 +377,9 @@ const DEFAULT_PACKAGES = [
     ket: 'BKU, transaksi, laporan, piutang, aset, backup',
     fitur: ['dashboard', 'transaksi', 'rekon', 'mutasi_kas', 'tutup_bulanan', 'piutang', 'bku', 'coa',
       'anggaran', 'saldo_awal', 'aset', 'import', 'tahun_ajaran', 'laporan', 'pengguna', 'sekolah',
-      'trash', 'audit', 'backup', 'panduan', 'siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran']
+      'trash', 'audit', 'backup', 'panduan', 'siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran',
+      'identitas', 'portal_publik', 'tema', 'desain_cetak',
+      'pembantu_kas', 'pembantu_bank', 'pembantu_pajak', 'pembantu_bhp', 'pembantu_modal']
   },
   {
     kode: 'standard', nama: 'Standard', bulan: 150000, tahun: 1500000, default: 0, selfTrial: 0,
@@ -343,7 +387,9 @@ const DEFAULT_PACKAGES = [
     fitur: ['dashboard', 'transaksi', 'rekon', 'mutasi_kas', 'tutup_bulanan', 'piutang', 'bku', 'coa',
       'anggaran', 'saldo_awal', 'aset', 'import', 'tahun_ajaran', 'laporan', 'pengguna', 'sekolah',
       'trash', 'audit', 'backup', 'panduan', 'siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran',
-      'pegawai', 'piutang_lain', 'piutang_lainnya', 'catatan', 'tarif_honor']
+      'pegawai', 'piutang_lain', 'piutang_lainnya', 'catatan', 'tarif_honor',
+      'identitas', 'portal_publik', 'tema', 'desain_cetak',
+      'pembantu_kas', 'pembantu_bank', 'pembantu_pajak', 'pembantu_bhp', 'pembantu_modal']
   },
   {
     kode: 'pro', nama: 'Pro', bulan: 250000, tahun: 2500000, default: 0, selfTrial: 0,
@@ -378,7 +424,10 @@ function packageFeatureMap(pkg, kodeFallback) {
   if (Array.isArray(obj) && obj.length) {
     const set = new Set(obj.map(x => String(x)));
     const out = {};
-    for (const f of FEATURES) out[f.key] = set.has(f.key) ? 1 : 0;
+    for (const f of FEATURES) {
+      const parent = FEATURE_PARENT[f.key];
+      out[f.key] = set.has(f.key) ? 1 : (parent && set.has(parent) ? 1 : 0);
+    }
     return out;
   }
   if (obj && typeof obj === 'object' && Object.keys(obj).length) {
@@ -534,7 +583,7 @@ function regStatus(ip) {
     const until = at + lim.blockHours * 3600 * 1000;
     if (now < until) return { blocked: true, until, retryMin: Math.ceil((until - now) / 60000), count: rows.length };
   }
-  const hourAgo = new Date(now - 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const hourAgo = lib.plusMinutesStamp(-60);   // jam WIB, sama dengan created_at
   const count = S.prepare("SELECT COUNT(*) c FROM reg_attempts WHERE ip=? AND created_at>=? AND hasil IN ('sukses','gagal')").get(String(ip || ''), hourAgo).c;
   return { blocked: false, count, limit: lim.perHour };
 }
@@ -740,6 +789,17 @@ function createTenant(input = {}) {
     app_nama: String(input.app_nama || ''),
     tema: String(input.tema || '')
   });
+  // preset tampilan menu default dari Super Admin (menu yang tampil, urutan & judul)
+  try {
+    let tpl = {};
+    try { tpl = JSON.parse(get('school_menu_default', '{}') || '{}') || {}; } catch (e) { tpl = {}; }
+    if (tpl && (Array.isArray(tpl.hidden) || tpl.navUi)) {
+      dbm.runAsTenant(tenant, () => {
+        dbm.setSetting('nav_hidden', (Array.isArray(tpl.hidden) ? tpl.hidden : []).join(','));
+        dbm.setNavUi(tpl.navUi || {});
+      });
+    }
+  } catch (e) { console.error('[menu-default]', e.message); }
   logSaas(input.user, 'TAMBAH SEKOLAH', 'tenant', `Sekolah ${nama} (${code}) paket ${PAKET[paket]}${lifetime ? ' · LIFETIME' : ' · s.d. ' + expires}`, id);
   return tenant;
 }
@@ -857,7 +917,7 @@ function latestRejected(tenantId) {
   return S.prepare("SELECT * FROM saas_payments WHERE tenant_id=? AND status='rejected' ORDER BY id DESC LIMIT 1").get(Number(tenantId) || 0) || null;
 }
 function invoiceNo(id) {
-  return 'INV-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(id).padStart(4, '0');
+  return 'INV-' + todayISO().replace(/-/g, '') + '-' + String(id).padStart(4, '0');
 }
 
 /** pengajuan perpanjangan dari sisi sekolah (QRIS manual) */
@@ -954,18 +1014,35 @@ function runDailyJobs() {
 
 /* ---------------- sesi login (control plane) ---------------- */
 const SESSION_DAYS = 14;
-function createSession({ userId, tenantId, kind, alertPending }) {
+function createSession({ userId, tenantId, kind, alertPending, welcome }) {
   const token = lib.token(24);
-  const exp = new Date(Date.now() + SESSION_DAYS * 86400000).toISOString().replace('T', ' ').slice(0, 19);
-  S.prepare('INSERT INTO sessions (token,user_id,tenant_id,kind,expires_at,alert_pending,ta_id,created_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(token, userId || null, tenantId || null, kind || 'tenant', exp, alertPending || 0, null, lib.nowStamp());
+  /* kedaluwarsa memakai jam WIB yang sama dengan nowStamp() saat pemeriksaan */
+  const exp = lib.plusDaysStamp(SESSION_DAYS);
+  S.prepare('INSERT INTO sessions (token,user_id,tenant_id,kind,expires_at,alert_pending,ta_id,created_at,welcome) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(token, userId || null, tenantId || null, kind || 'tenant', exp, alertPending || 0, null, lib.nowStamp(),
+      welcome ? String(welcome) : null);
   return token;
+}
+/**
+ * Kredensial awal pendaftaran (kode sekolah / username / password) disimpan pada
+ * baris sesi, BUKAN di URL, lalu diambil SEKALI untuk ditampilkan di dashboard.
+ * Mengembalikan objek { kode, sekolah, username, password, nama, at } atau null.
+ */
+function takeWelcome(token) {
+  if (!token) return null;
+  let row = null;
+  try { row = S.prepare('SELECT welcome FROM sessions WHERE token=?').get(String(token)); } catch (e) { return null; }
+  if (!row || !row.welcome) return null;
+  let out = null;
+  try { out = JSON.parse(String(row.welcome)); } catch (e) { out = null; }
+  try { S.prepare('UPDATE sessions SET welcome=NULL WHERE token=?').run(String(token)); } catch (e) { }
+  return out;
 }
 function getSession(token) {
   if (!token) return null;
   const s = S.prepare('SELECT * FROM sessions WHERE token=?').get(token);
   if (!s) return null;
-  if (new Date(String(s.expires_at).replace(' ', 'T')) < new Date()) {
+  if (String(s.expires_at || '') < lib.nowStamp()) {
     S.prepare('DELETE FROM sessions WHERE token=?').run(token);
     return null;
   }
@@ -1067,7 +1144,7 @@ module.exports = {
   statusOf, isBlocked, todayISO, addDays, daysBetween, logSaas,
   paymentsOf, paymentsAll, paymentById, pendingPayment, latestRejected, submitPayment,
   approvePayment, rejectPayment, runDailyJobs, stats, invoiceNo,
-  createSession, getSession, destroySession, updateSession,
+  createSession, getSession, destroySession, updateSession, takeWelcome,
   ensureAdmin, findAdmin, adminById, setAdminPassword,
   ensureBootstrap
 };

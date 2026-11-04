@@ -1034,7 +1034,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     let rows = dbm.payrollRows(periode);
     if (onlyId) rows = rows.filter(r => Number(r.id) === onlyId);
     const logo = c.settings.sekolah_logo
-      ? `<img src="${esc(c.settings.sekolah_logo)}" alt="Logo">`
+      ? `<img src="${esc(c.settings.sekolah_logo)}" alt="Logo" width="48" height="48" decoding="async">`
       : `<div class="ph">${esc((c.settings.sekolah_nama || 'S').trim().charAt(0).toUpperCase())}</div>`;
     const alamat = String(c.settings.sekolah_alamat || '').split('\n')[0];
     const money = v => (Number(v) ? num(v) : '');

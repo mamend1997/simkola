@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 9: kwitansi per-transaksi, bayar item terpilih (per item + non-BKU), rekap & bayar gabungan
    piutang sertifikasi, counter transaksi tanpa batas 300, portal publik (autocomplete, datepicker, OTP,
    feedback orang tua), beasiswa baru, kertas kwitansi transaksi, bukti piutang, ekskul per jenis,
@@ -311,14 +313,18 @@ const periode = today.slice(0, 7);
 
   /* ===== 15. identitas sekolah: urutan & sidebar collapse ===== */
   r = await req('GET', '/sekolah');
-  const iNama = r.text.indexOf('1. Nama Sekolah');
-  const iAlamat = r.text.indexOf('2. Alamat Sekolah');
-  const iKepala = r.text.indexOf('3. Nama Kepala Sekolah');
-  const iNipK = r.text.indexOf('4. NIP / NUPTK Kepala Sekolah');
-  const iBen = r.text.indexOf('5. Nama Bendahara');
-  const iNipB = r.text.indexOf('6. NIP / NUPTK Bendahara');
-  ok('urutan form identitas sekolah benar', iNama > 0 && iNama < iAlamat && iAlamat < iKepala && iKepala < iNipK && iNipK < iBen && iBen < iNipB,
-    [iNama, iAlamat, iKepala, iNipK, iBen, iNipB].join(','));
+  // form identitas (ronde 26) dikelompokkan: Informasi Umum & Kontak → Legalitas & Status
+  const iNama = r.text.indexOf('Nama Sekolah<');
+  const iNpsn = r.text.indexOf('NPSN (Nomor Pokok Sekolah Nasional)');
+  const iTelp = r.text.indexOf('No. Telepon / WhatsApp Sekolah');
+  const iEmail = r.text.indexOf('Email Resmi Sekolah');
+  const iWeb = r.text.indexOf('Website Sekolah');
+  const iAlamat = r.text.indexOf('Alamat Lengkap Sekolah');
+  const iLegal = r.text.indexOf('Legalitas &amp; Status');
+  const iBentuk = r.text.indexOf('Bentuk Pendidikan');
+  ok('urutan form identitas sekolah benar', iNama > 0 && iNama < iNpsn && iNpsn < iTelp && iTelp < iEmail && iEmail < iWeb
+    && iWeb < iAlamat && iAlamat < iLegal && iLegal < iBentuk,
+    [iNama, iNpsn, iTelp, iEmail, iWeb, iAlamat, iLegal, iBentuk].join(','));
   r = await req('GET', '/');
   ok('tombol collapse sidebar ada', /id="navCollapse"/.test(r.text));
 

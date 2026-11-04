@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 19 —
    1. Kwitansi pengeluaran: label "Telah diterima dari" + isi "Bendahara <sekolah>"
    2. Baris "Tempat, tanggal transaksi" seragam di semua cetakan + teks tempat dapat diedit

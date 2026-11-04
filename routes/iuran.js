@@ -659,6 +659,71 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       </details></div>`;
   }
 
+  /* ================= modal kirim WA (per siswa & massal) ================= */
+  /** template tersimpan + template default untuk pilihan di modal */
+  function waTemplates() {
+    const reminder = require('../reminder');
+    const rows = reminder.templateRows(dbm);
+    return rows.length ? rows : [{ id: 0, nama: 'Template bawaan', isi: reminder.DEFAULT_TEMPLATE }];
+  }
+  function waModals(c, d, kelasAll) {
+    const reminder = require('../reminder');
+    const tpls = waTemplates();
+    const cfg = reminder.config(dbm);
+    const tplOpts = `<option value="0">— Pesan bawaan (jadwal pengingat) —</option>`
+      + tpls.map(t => `<option value="${t.id}" data-isi="${esc(t.isi)}">${esc(t.nama)}</option>`).join('');
+    const tplData = JSON.stringify(tpls.map(t => ({ id: t.id, nama: t.nama, isi: t.isi })));
+    const kelasOpts = kelasAll.map(k => `<option value="${k.id}">${esc(k.nama)}</option>`).join('');
+    const tingkatOpts = dbm.tingkatAktif().map(t => `<option value="${esc(t)}">${esc(dbm.tingkatLabel(t))} (${esc(t)})</option>`).join('');
+    const backTo = `/iuran/data?ta=${d.taId || ''}`;
+    return `
+    <div data-wa-preview-url="${c.base}/iuran/wa/preview" data-wa-default-pesan="${esc(cfg.template)}" style="display:none"></div>
+    <script type="application/json" data-wa-templates>${tplData.replace(/</g, '\\u003c')}</script>
+    ${ui.modal('mWaSatu', {
+      title: 'Kirim WhatsApp ke Orang Tua',
+      body: `<div class="alert info">${ui.icon('whatsapp')}<div>Pesan akan dimasukkan ke <b>antrean pengiriman</b> dan dikirim oleh worker latar
+          (jeda acak 2–5 detik antar nomor agar aman dari pemblokiran WhatsApp).</div></div>
+        <div id="waSatuInfo" class="wa-modal-info"></div>
+        <form method="post" action="${c.base}/iuran/wa/satu" id="fWaSatu">
+          <input type="hidden" name="siswa_id" id="waSatuSiswa" value="">
+          <input type="hidden" name="back" value="${esc(backTo)}">
+          <div class="field"><label>Template Pesan</label>
+            <select name="template_id" id="waSatuTpl" data-wa-template-select>${tplOpts}</select></div>
+          <div class="field"><label>Isi Pesan (dapat diubah)</label>
+            <textarea name="pesan" id="waSatuPesan" rows="9" style="font-size:12.5px;line-height:1.55"></textarea></div>
+          <div class="t-sub">Pratinjau pesan final ditampilkan di kotak di bawah ini.</div>
+          <div class="wa-bubble mt-1" id="waSatuPreview">—</div>
+        </form>`,
+      footer: `<button class="btn" data-close="mWaSatu">Batal</button>
+        <button class="btn btn-primary" form="fWaSatu">${ui.icon('send')}Masukkan ke Antrean Kirim</button>`
+    })}
+    ${ui.modal('mWaMassal', {
+      title: 'Kirim WhatsApp Massal', wide: true,
+      body: `<form method="post" action="${c.base}/iuran/wa/massal" id="fWaMassal">
+        <input type="hidden" name="back" value="${esc(backTo)}">
+        <div class="alert info">${ui.icon('whatsapp')}<div>Pilih penerima lewat <b>ceklis siswa</b> pada tabel, atau gunakan <b>filter kelas/tingkat</b> di bawah.
+          Hanya siswa dengan <b>tunggakan aktif</b> dan <b>nomor HP orang tua</b> yang akan dikirimi pesan. Proses berjalan di latar (antrean) sehingga halaman tidak macet.</div></div>
+        <div class="field"><label>Template Pesan</label>
+          <select name="template_id" id="waMassalTpl" data-wa-template-select>${tplOpts}</select>
+          <div class="hint">Template dapat diubah/ditambah di menu <a href="${c.base}/iuran/pengingat">Jadwal Pengingat Tagihan</a>.</div></div>
+        <div class="row2">
+          <div class="field"><label>Filter Kelas (bila tidak ada ceklis)</label>
+            <select name="kelas" multiple size="5">${kelasOpts}</select>
+            <div class="hint">Tekan Ctrl/Cmd untuk memilih beberapa kelas.</div></div>
+          <div class="field"><label>Filter Tingkat (bila tidak ada ceklis)</label>
+            <select name="tingkat" multiple size="5">${tingkatOpts}</select></div>
+        </div>
+        <div class="field"><label>Isi Pesan (dapat diubah)</label>
+          <textarea name="pesan" id="waMassalPesan" rows="8" style="font-size:12.5px;line-height:1.55"></textarea>
+          <div class="hint">Variabel <code>{nama_siswa}</code> <code>{kelas}</code> <code>{nominal_tunggakan}</code>
+            <code>{rincian_tagihan}</code> <code>{link_portal}</code> <code>{nama_sekolah}</code> diisi otomatis per siswa.</div></div>
+        <div class="wa-preview-row"><b data-wa-count>0</b> <span data-wa-count-label>Orang Tua Siswa Terpilih</span></div>
+      </form>`,
+      footer: `<button class="btn" data-close="mWaMassal">Batal</button>
+        <button class="btn btn-primary" form="fWaMassal">${ui.icon('send')}Proses &amp; Kirim Sekarang</button>`
+    })}`;
+  }
+
   get('/iuran/data', (req, res) => {
     guard(req, res, 'iuran', 'view');
     const c = ctx(req);
@@ -683,10 +748,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="sub">${d.rekap.length} siswa · total tagihan ${rupiah(totalTagih)} · sudah dibayar ${rupiah(totalBayar)}</div></div>
         <div class="toolbar">
           <a class="btn btn-sm" href="${c.base}/iuran/bulanan?ta=${d.taId || ''}">${ui.icon('calendar')}Rincian Bulanan</a>
+          <a class="btn btn-sm wa-icon-btn" href="${c.base}/iuran/pengingat">${ui.icon('whatsapp')}Jadwal Pengingat</a>
           ${canExport ? `<form method="get" action="${c.base}/iuran/export" id="fExpIuran" style="display:inline-flex;gap:6px">${keepHidden}
             <button class="btn btn-sm" name="format" value="xlsx">${ui.icon('download')}Export Excel</button>
             <button class="btn btn-sm" name="format" value="pdf" formtarget="_blank">${ui.icon('printer')}Export PDF</button>
           </form>` : ''}
+          ${editable ? `<button type="button" class="btn btn-sm wa-icon-btn" data-open="mWaMassal">${ui.icon('whatsapp')}Kirim WA Massal</button>` : ''}
           ${editable ? `<button class="btn btn-sm" data-open="mImportIuran">${ui.icon('upload')}Import Data Iuran</button>
           <a class="btn btn-sm" href="${c.base}/iuran/import/template?ta=${d.taId}">${ui.icon('download')}Download Template Excel</a>` : ''}
         </div></div>
@@ -714,12 +781,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       ${d.rekap.map((r, i) => `<tr>
         <td><input type="checkbox" form="fExpIuran" name="siswa" value="${r.siswa_id}"></td>
         <td class="num">${i + 1}</td>
-        <td><a class="link-strong" href="${c.base}/iuran/data/${r.siswa_id}?ta=${d.taId || ''}">${esc(r.nama)}</a><div class="t-sub mono">${esc(r.nisn || '')}</div></td>
+        <td><a class="link-strong" href="${c.base}/iuran/data/${r.siswa_id}?ta=${d.taId || ''}">${esc(r.nama)}</a>
+          <div class="t-sub mono">${esc(r.nisn || '')}${r.parent_phone ? ' · ' + esc(lib.phoneDisplay(r.parent_phone)) : ' · <span title="Nomor HP orang tua belum diisi">tanpa no. HP</span>'}</div></td>
         <td>${esc(r.kelas || '-')}</td>
         <td class="num">${rupiah(r.tagihan)}</td><td class="num" style="color:var(--green)">${rupiah(r.terbayar)}</td>
         <td class="num">${rupiah(r.potongan)}</td>
         <td class="num" style="color:${r.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(r.sisa)}</td>
-        <td class="right"><a class="btn btn-sm" href="${c.base}/iuran/data/${r.siswa_id}?ta=${d.taId || ''}">${ui.icon('eye')}Detail</a></td>
+        <td class="right nowrap">
+          <a class="btn btn-sm" href="${c.base}/iuran/data/${r.siswa_id}?ta=${d.taId || ''}">${ui.icon('eye')}Detail</a>
+          ${editable && r.sisa > 0 ? `<button type="button" class="btn btn-sm wa-icon-btn" data-wa-single="${r.siswa_id}"
+            data-wa-nama="${esc(r.nama)}" data-wa-kelas="${esc(r.kelas || '')}"
+            title="${r.parent_phone ? 'Kirim WA pengingat ke orang tua' : 'Nomor HP orang tua belum diisi'}">${ui.icon('whatsapp')}WA</button>` : ''}
+        </td>
       </tr>`).join('')}
       </tbody><tfoot><tr><td colspan="4">TOTAL</td>
         <td class="num">${rupiah(totalTagih)}</td>
@@ -744,7 +817,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       footer: `<a class="btn" href="${c.base}/iuran/import/template?ta=${d.taId}">${ui.icon('download')}Template Excel</a>
         <button class="btn" data-close="mImportIuran">Batal</button>
         <button class="btn btn-primary" form="fImportIuran">${ui.icon('upload')}Import Sekarang</button>`
-    }) : ''}`;
+    }) : ''}
+    ${editable ? waModals(c, d, kelasAll) : ''}`;
     page(req, res, { title: 'Data Iuran', sub: 'Rekapitulasi tagihan & pembayaran iuran siswa', active: 'iuran_data', content: content + impErrorBlock(req) });
   });
 
@@ -1846,7 +1920,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const editable = c.can('iuran', 'edit');
     const coaDef = coaIuran();
     const coaDefId = coaDef ? coaDef.id : '';
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yesterday = dbm.dateOffsetISO(-1);   // kemarin menurut jam WIB
     const late = modalCollector();
     /** modal edit satu penerimaan: ubah nominal / tanggal / atau ubah status menjadi Non-BKU */
     function editModal(b) {

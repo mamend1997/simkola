@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI ronde 19 (Playwright): kwitansi pengeluaran (label & isi & tempat-tanggal), ikon portal slip
    proporsional, urutan tahun pelajaran portal, kolom Tempat di Desain Cetak, mobile 390px. */
 const { spawn } = require('child_process');

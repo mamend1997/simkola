@@ -53,7 +53,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
         </div>
         <div class="flex" style="gap:18px;align-items:center;margin-bottom:10px">
           <div style="width:64px;height:64px;border-radius:18px;overflow:hidden;background:#fff;border:1px solid var(--line);display:grid;place-items:center">
-            ${logo ? `<img src="${esc(logo)}" alt="Logo" style="width:100%;height:100%;object-fit:contain">` : ui.icon('school')}
+            ${logo ? `<img src="${esc(logo)}" alt="Logo" width="46" height="46" decoding="async" style="width:100%;height:100%;object-fit:contain">` : ui.icon('school')}
           </div>
           <div>
             <div style="font-size:19px;font-weight:800;letter-spacing:-.02em">${esc(t.nama)}</div>
@@ -193,7 +193,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
           <div class="card-head"><div><h3>Pembayaran QRIS / DANA</h3><div class="sub">Scan atau simpan gambar berikut</div></div></div>
           ${qris
         ? `<div style="text-align:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
-                 <img src="${esc(qris)}" alt="QRIS" style="max-width:100%;max-height:340px;object-fit:contain">
+                 <img src="${esc(qris)}" alt="QRIS" loading="lazy" decoding="async" style="max-width:100%;max-height:340px;object-fit:contain">
                </div>
                <a class="btn btn-block mt-2" href="${c.base}/perpanjang/qris-unduh">${ui.icon('download')}Unduh QRIS</a>`
         : `<div class="alert warn">${ui.icon('alert')}<div>Gambar QRIS belum diunggah Super Admin. Hubungi layanan dukungan untuk instruksi pembayaran manual.</div></div>`}

@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 15 (UI) — instant search realtime, design center, toggle orientasi cetak,
    filter beasiswa, dan bulk unassign (Playwright). */
 const { spawn } = require('child_process');

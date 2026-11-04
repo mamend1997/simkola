@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 21 —
    1. Grafik SPP tunggal & tersinkron data iuran + rekap per grup terisi semua grup
    2. Hapus masal antrean posting & rekap transaksi iuran
@@ -229,48 +231,16 @@ const textOf = html => String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '
   r = await req('GET', '/petunjuk');
   ok('halaman petunjuk tampil read-only', r.status === 200 && !/Tambah Petunjuk Pengguna/.test(r.text));
 
-  /* ================= 7. AKUN DEMO ================= */
-  // buat akun demo lewat form pengguna
+  /* ================= 7. ROLE DEMO DIHAPUS TOTAL ================= */
+  r = await req('GET', '/pengguna');
+  ok('pilihan role demo TIDAK ada lagi di form pengguna', !/value="demo"/.test(r.text) && !/Akun Demo \(Sandbox\)/.test(r.text));
   r = await req('POST', '/pengguna/save', {
     nama: 'Akun Demo Sekolah', email: 'demo@sekolah.sch.id', role: 'demo', jabatan: 'Demo', password: 'demo123', aktif: '1'
   });
-  ok('akun demo dibuat', r.status === 303 && !!db.prepare("SELECT * FROM users WHERE email='demo@sekolah.sch.id'").get());
-  const demoId = db.prepare("SELECT id FROM users WHERE email='demo@sekolah.sch.id'").get().id;
-  ok('permission default demo memblokir pengguna', db.prepare("SELECT allowed FROM permissions WHERE role='demo' AND module='pengguna' AND action='view'").get()?.allowed === 0);
-  ok('permission default demo mengizinkan iuran', db.prepare("SELECT allowed FROM permissions WHERE role='demo' AND module='iuran' AND action='view'").get()?.allowed === 1);
-
-  let demoCookie = '';
-  r = await req('POST', '/login', { email: 'demo@sekolah.sch.id', password: 'demo123' }, { cookie: '' });
-  ok('login akun demo', r.status === 303, r.status);
-  demoCookie = (r.setCookie || '').split(';')[0];
-  const mainTrx = db.prepare('SELECT COUNT(*) c FROM transaksi').get().c;
-  const mainBayar = db.prepare('SELECT COUNT(*) c FROM iuran_bayar').get().c;
-  r = await req('GET', '/transaksi', null, { cookie: demoCookie });
-  ok('demo bisa membuka transaksi', r.status === 200);
-  r = await req('GET', '/pengguna', null, { cookie: demoCookie });
-  ok('demo DILARANG membuka pengguna (403)', r.status === 403, r.status);
-  // buat transaksi di sesi demo
-  r = await req('POST', '/transaksi/save', {
-    bku_id: bku.id, tanggal: today, jenis: 'pemasukan', metode: 'tunai', nominal: '777000', uraian: 'Uji Isolasi Demo', nama_pihak: 'DEMO'
-  }, { cookie: demoCookie });
-  ok('demo mencatat transaksi', r.status === 303, r.status);
-  await sleep(300);
-  ok('data sekolah TIDAK terpengaruh transaksi demo', db.prepare('SELECT COUNT(*) c FROM transaksi').get().c === mainTrx);
-  ok('iuran sekolah tidak berubah', db.prepare('SELECT COUNT(*) c FROM iuran_bayar').get().c === mainBayar);
-  ok('database demo terpisah dibuat', fs.existsSync(DEMO_DB));
-  const ddb = new Database(DEMO_DB, { readonly: true });
-  ok('transaksi demo tercatat di database dummy', ddb.prepare("SELECT COUNT(*) c FROM transaksi WHERE uraian='Uji Isolasi Demo'").get().c === 1);
-  ddb.close();
-  // password demo tidak boleh diubah sendiri
-  r = await req('POST', '/akun', { nama: 'Akun Demo Sekolah', email: 'demo@sekolah.sch.id', password: 'baru123', password2: 'baru123' }, { cookie: demoCookie });
-  ok('demo ditolak mengubah password sendiri', r.status === 303 && /err=/.test(r.loc), r.loc);
-  ok('password demo tidak berubah', (() => {
-    const lib = require('../lib');
-    return lib.verifyPassword('demo123', db.prepare('SELECT password FROM users WHERE id=?').get(demoId).password);
-  })());
-  // admin tetap bisa mengatur password demo
-  r = await req('POST', '/pengguna/save', { id: demoId, nama: 'Akun Demo Sekolah', email: 'demo@sekolah.sch.id', role: 'demo', jabatan: 'Demo', password: 'demo456', aktif: '1' });
-  ok('admin dapat mengubah password demo', r.status === 303 && (() => { const lib = require('../lib'); return lib.verifyPassword('demo456', db.prepare('SELECT password FROM users WHERE id=?').get(demoId).password); })());
+  ok('role demo ditolak saat simpan pengguna', r.status === 303 && /err=/.test(r.loc || ''), r.loc);
+  ok('pengguna role demo tidak dibuat', !db.prepare("SELECT id FROM users WHERE email='demo@sekolah.sch.id'").get());
+  ok('baris permission role demo dibersihkan', db.prepare("SELECT COUNT(*) c FROM permissions WHERE role='demo'").get().c === 0);
+  ok('matrix permission hanya menampilkan Kepala Sekolah & Staff', !/Akun Demo \(Sandbox\)/.test(r.text || ''));
 
   /* ================= ringkasan ================= */
   const pass = results.filter(x => x.ok).length;

@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* =====================================================================
    TES RONDE 23 — pembersihan backup lama + fitur SaaS lanjutan
    1. Backup email (SMTP) & Google Drive sudah dihapus (kode, route, UI)
@@ -380,9 +382,10 @@ const cookieOf = sc => String(sc || '').split(';')[0];
   ok('super admin dapat menghapus domain', r.status === 303 && !sdb.prepare('SELECT custom_domain FROM tenants WHERE id=1').get().custom_domain);
 
   // form sisi sekolah
-  r = await req('GET', '/sekolah', null, { cookie: cTenant2 });
-  ok('form URL portal tersedia untuk sekolah', /Custom URL Portal Publik/.test(r.text) && /sekolah\/portal/.test(r.text));
-  ok('petunjuk DNS CNAME ditampilkan', /CNAME Record/.test(r.text));
+  // form pindah ke menu Portal Publik (ronde 26)
+  r = await req('GET', '/portal-publik', null, { cookie: cTenant2 });
+  ok('form URL portal tersedia di menu Portal Publik', /Custom URL Slug/.test(r.text) && /sekolah\/portal/.test(r.text));
+  ok('petunjuk DNS CNAME & A Record ditampilkan', /CNAME Record/.test(r.text) && /A Record/.test(r.text));
   r = await req('POST', '/sekolah/portal', { portal_slug: 'Transaksi' }, { cookie: cTenant2 });
   ok('slug menabrak halaman aplikasi ditolak', r.status === 303 && /err=/.test(r.loc), r.loc);
   // login sekolah kedua (SDN) — dipakai juga untuk uji isolasi sesi/data

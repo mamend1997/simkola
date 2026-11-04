@@ -39,7 +39,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
             <dt>Penerima</dt><dd>${esc(t.nama_pihak || '-')}</dd>
             <dt>Metode</dt><dd>${t.metode === 'transfer' ? 'Transfer / Bank' : 'Tunai'}</dd>
             <dt>Diajukan oleh</dt><dd>${esc(t.pembuat || '-')}${t.pembuat_jabatan ? ` · ${esc(t.pembuat_jabatan)}` : ''}</dd>
-            <dt>Waktu pengajuan</dt><dd>${esc(t.created_at || '-')}</dd>
+            <dt>Waktu pengajuan</dt><dd>${esc(lib.stampID(t.created_at))}</dd>
           </div>
         </div>
         <div style="flex:0 0 210px;width:210px">
@@ -47,7 +47,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           ${t.nota_url
         ? (/\.pdf($|\?)/i.test(t.nota_url)
           ? `<a class="btn btn-sm btn-block" href="${esc(t.nota_url)}" target="_blank">${ui.icon('file')}Buka Nota PDF</a>`
-          : `<a href="${esc(t.nota_url)}" target="_blank"><img src="${esc(t.nota_url)}" alt="Nota" style="width:100%;max-height:150px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>`)
+          : `<a href="${esc(t.nota_url)}" target="_blank"><img src="${esc(t.nota_url)}" alt="Nota" loading="lazy" decoding="async" style="width:100%;max-height:150px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>`)
         : `<div class="help" style="border:1px dashed var(--line-2);border-radius:10px;padding:18px;text-align:center">Tidak ada lampiran nota</div>`}
           <form method="post" action="${c.base}/approval/aksi" class="mt-2">
             <input type="hidden" name="id" value="${t.id}">

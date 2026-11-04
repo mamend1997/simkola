@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI ronde 18 (Playwright): rincian bulanan di portal publik, kolom catatan portal pegawai,
    pengaturan alamat portal, pemisahan kelompok posting ekskul, mobile 390px, tanpa error JS. */
 const { spawn } = require('child_process');
@@ -90,13 +92,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
   await page.fill('input[name=password]', 'admin123');
   await Promise.all([page.waitForNavigation(), page.click('button[type=submit]')]);
-  await page.goto(base + '/sekolah');
+  // pengaturan alamat portal pindah ke menu Portal Publik (ronde 26)
+  await page.goto(base + '/portal-publik');
   ok('form alamat portal ada', await page.locator('input[name=portal_slip_slug]').count() === 1);
   ok('form URL portal publik (slug unik) ada', await page.locator('form[action$="/sekolah/portal"] input[name=portal_slug]').count() === 1);
   await page.fill('input[name=portal_slip_slug]', 'portal-slip-pegawai');
   await page.fill('input[name=portal_pegawai_slug]', 'piutang-pegawai');
-  await Promise.all([page.waitForNavigation(), page.click('button:has-text("Simpan Identitas")')]);
-  ok('simpan alamat portal berhasil', /berhasil disimpan/.test((await page.locator('main.content').innerText())));
+  await Promise.all([page.waitForNavigation(), page.click('button:has-text("Simpan Alamat Portal")')]);
+  ok('simpan alamat portal berhasil', /disimpan/.test((await page.locator('main.content').innerText())));
   const r2 = await fetch(base + '/portal-slip-pegawai', { redirect: 'manual' });
   ok('alamat baru portal slip dapat dibuka', r2.status === 200);
 

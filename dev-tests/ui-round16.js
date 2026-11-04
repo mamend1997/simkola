@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 16 (UI) — Portal Slip Gaji: dropdown periode auto-submit & tampilan mobile 390px. */
 const { spawn } = require('child_process');
 const path = require('path');

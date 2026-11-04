@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI Ronde 21 (Playwright) — tema, branding, manajer menu, beasiswa, petunjuk pengguna */
 const { spawn } = require('child_process');
 const path = require('path');

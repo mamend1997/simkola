@@ -1,11 +1,17 @@
 'use strict';
 /* Portal publik cek tagihan orang tua — tanpa login, verifikasi Nama + Tanggal Lahir */
-module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
+const reminder = require('../reminder');
+
+module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID } = lib;
-  /** alamat portal dapat diubah di menu Identitas Sekolah (default: portal) */
+  /** alamat portal dapat diubah di menu Portal Publik (default: portal) */
   const slug = () => dbm.portalSlugs().siswa;
   const url = (base, sub = '') => `${base}/${slug()}${sub}`;
+  /** teks portal (judul tab + sub-judul banner) — default dari Super Admin Pusat */
+  const textOf = settings => (saas && saas.portalText ? saas.portalText(settings) : {
+    title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA'
+  });
 
   const NAMA_BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
   const bulanNama = m => NAMA_BULAN[(Number(m) - 1 + 12) % 12] || '-';
@@ -29,12 +35,17 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
 
   function shell({ base, settings, content, title }) {
     const logo = settings.sekolah_logo
-      ? `<img src="${esc(settings.sekolah_logo)}" alt="Logo">`
+      ? `<img src="${esc(settings.sekolah_logo)}"${ui.logoSrcset(settings, "52px")} alt="Logo" width="52" height="52" fetchpriority="high" decoding="async">`
       : `<div class="p-logo-ph">${esc((settings.sekolah_nama || 'S').charAt(0))}</div>`;
-    return `<!DOCTYPE html><html lang="id"><head>
+    const footerId = ui.identitasFooter(settings);
+    const txt = textOf(settings);
+    const pageTitle = String(title || txt.title);
+    return `<!DOCTYPE html><html lang="id" data-mode="${ui.modeOf(settings)}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · ${esc(settings.sekolah_nama || 'Sekolah')}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<title>${esc(pageTitle)} · ${esc(settings.sekolah_nama || 'Sekolah')}</title>
+${ui.fontLinks()}
+${ui.logoPreconnect([settings.sekolah_logo])}
+${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.sekolah_logo)}" fetchpriority="high">` : ''}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}">
 <link rel="icon" href="${base}/favicon.ico">
 <meta name="theme-color" content="#F97316">
@@ -42,16 +53,15 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
 <div class="portal-wrap">
   <header class="portal-head">
     ${logo}
-    <div>
-      <div class="pn">${esc(settings.sekolah_nama || 'Sekolah')}</div>
-      <div class="ps">Portal Cek Tagihan Iuran Siswa</div>
+    <div class="banner-text">
+      <h1 class="school-title">${esc(settings.sekolah_nama || 'Sekolah')}</h1>
+      <p class="portal-subtitle">${esc(txt.subtitle)}</p>
     </div>
-
   </header>
   ${content}
-  <footer class="portal-foot">© ${new Date().getFullYear()} ${esc(settings.sekolah_nama || '')} · Portal ini hanya menampilkan ringkasan tagihan sesuai data yang cocok.</footer>
+  <footer class="portal-foot">© ${new Date().getFullYear()} ${esc(settings.sekolah_nama || '')}${footerId ? ' · ' + esc(footerId) : ''}<br>Portal ini hanya menampilkan ringkasan tagihan sesuai data yang cocok.</footer>
 </div>
-<script src="${base}/assets/app.js?v=${ui.ASSET_V}"></script>
+<script src="${base}/assets/app.js?v=${ui.ASSET_V}" defer></script>
 </body></html>`;
   }
 
@@ -180,7 +190,7 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
         Catatan akan masuk ke <b>Dashboard Bendahara</b> untuk ditindaklanjuti petugas.</p>
       ${pesanOk ? `<div class="alert ok">${ui.icon('check')}<div>${esc(pesanOk)}</div></div>` : ''}
       ${pesanErr ? `<div class="alert err">${ui.icon('alert')}<div>${esc(pesanErr)}</div></div>` : ''}
-      ${others.length ? `<div class="portal-note-list">${others.map(x => `<div class="pn-item"><div class="pn-meta">${esc(String(x.created_at || '').slice(0, 16))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div><div class="pn-body">${esc(x.pesan)}</div></div>`).join('')}</div>` : ''}
+      ${others.length ? `<div class="portal-note-list">${others.map(x => `<div class="pn-item"><div class="pn-meta">${esc(lib.stampShort(x.created_at))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div><div class="pn-body">${esc(x.pesan)}</div></div>`).join('')}</div>` : ''}
       <form method="post" action="${url(base, '/pesan')}">
         <input type="hidden" name="siswa_id" value="${esc(s.id || '')}">
         <div class="field"><label>Nama Siswa</label><input value="${esc(s.nama || '')}" readonly></div>
@@ -197,16 +207,36 @@ module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl }) => {
     const base = req.BASE;
     const settings = dbm.settingsAll();
     if (dbm.getSetting('portal_aktif', '1') !== '1') {
-      return res.html(shell({ base, settings, title: 'Portal Ditutup', content: `<div class="portal-card"><h2>Portal sementara ditutup</h2><p class="muted">Pengelola sekolah menonaktifkan portal cek tagihan. Silakan hubungi bendahara sekolah.</p></div>` }));
+      return res.html(shell({
+        base, settings, content: `<div class="portal-card"><h2>Portal sementara ditutup</h2><p class="muted">Pengelola sekolah menonaktifkan portal cek tagihan. Silakan hubungi bendahara sekolah.</p></div>`
+      }), 503);
     }
     const nama = String(req.query.get('nama') || '').trim();
     const lahirRaw = String(req.query.get('lahir') || '').trim();
     const pesanOk = String(req.query.get('ok') || '').trim();
     const pesanErr = String(req.query.get('err') || '').trim();
-    if (!nama && !lahirRaw) return res.html(shell({ base, settings, title: 'Cek Tagihan', content: searchForm({ settings, base, err: pesanErr, ok: pesanOk }) }));
+    /* ---- tautan langsung dari pesan pengingat WhatsApp: /portal?token=<tanda tangan> ---- */
+    const tokenRaw = String(req.query.get('token') || '').trim();
+    if (tokenRaw) {
+      const siswaId = reminder.verifyPortalToken(dbm, tokenRaw);
+      const s = siswaId ? db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id WHERE s.id=?`).get(siswaId) : null;
+      if (!s) {
+        return res.html(shell({
+          base, settings, title: 'Tautan Tidak Valid',
+          content: searchForm({ settings, base, err: 'Tautan tagihan tidak valid atau sudah tidak berlaku. Silakan cari data dengan nama dan tanggal lahir siswa.' })
+        }));
+      }
+      const students = [{ ...s, tags: dbm.iuranTagihanRows({ siswaId: s.id }) }];
+      return res.html(shell({
+        base, settings, title: 'Tagihan Siswa',
+        content: `<div class="alert ok">${ui.icon('check')}<div>Tautan pribadi terverifikasi — menampilkan tagihan <b>${esc(s.nama)}</b> (${esc(s.kelas_nama || '-')}).</div></div>`
+          + renderResults({ settings, base, students, pesanOk, pesanErr })
+      }));
+    }
+    if (!nama && !lahirRaw) return res.html(shell({ base, settings, content: searchForm({ settings, base, err: pesanErr, ok: pesanOk }) }));
     const lahir = normalizeDate(lahirRaw) || (/^\d{4}-\d{2}-\d{2}$/.test(lahirRaw) ? lahirRaw : null);
     if (!nama || !lahir) {
-      return res.html(shell({ base, settings, title: 'Cek Tagihan', content: searchForm({ settings, base, nama, lahir: lahirRaw, err: 'Nama dan tanggal lahir wajib diisi dengan benar.' }) }));
+      return res.html(shell({ base, settings, content: searchForm({ settings, base, nama, lahir: lahirRaw, err: 'Nama dan tanggal lahir wajib diisi dengan benar.' }) }));
     }
     const cands = db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id
       WHERE lower(trim(s.nama))=lower(?) AND s.tanggal_lahir=?`).all(nama, lahir);

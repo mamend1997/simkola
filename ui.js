@@ -13,6 +13,93 @@ const ASSET_V = (() => {
   } catch (e) { return '1'; }
 })();
 
+/* ---------- identitas resmi sekolah: variabel dinamis untuk kop/kwitansi/portal ---------- */
+const BENTUK_LABEL = {
+  SMK: 'Sekolah Menengah Kejuruan (SMK)', SMA: 'Sekolah Menengah Atas (SMA)',
+  MA: 'Madrasah Aliyah (MA)', SMP: 'Sekolah Menengah Pertama (SMP)',
+  MTS: 'Madrasah Tsanawiyah (MTs)', SD: 'Sekolah Dasar (SD)',
+  MI: 'Madrasah Ibtidaiyah (MI)', PAUD: 'PAUD / TK / RA', LAIN: 'Lainnya'
+};
+/** ganti {nama} {npsn} {telp} {email} {website} {bentuk} {status} {kepemilikan} … pada teks bebas */
+function fillIdentitas(text, settings) {
+  const s = settings || {};
+  const nama = String(s.sekolah_nama || '').trim();
+  const map = {
+    sekolah: nama, nama, sekolah_nama: nama,
+    npsn: String(s.sekolah_npsn || '').trim(),
+    bentuk: BENTUK_LABEL[String(s.sekolah_bentuk || '').trim()] || String(s.sekolah_bentuk || '').trim(),
+    bentuk_kode: String(s.sekolah_bentuk || '').trim(),
+    status: String(s.sekolah_status || '').trim(),
+    kepemilikan: String(s.sekolah_kepemilikan || '').trim(),
+    alamat: String(s.sekolah_alamat || '').replace(/[\r\n]+/g, ' ').trim(),
+    telp: String(s.sekolah_telp || '').trim(),
+    email: String(s.sekolah_email || '').trim(),
+    website: String(s.sekolah_website || '').trim(),
+    kepala: String(s.sekolah_kepala || '').trim(),
+    bendahara: String(s.sekolah_bendahara || '').trim(),
+    nip_kepala: String(s.sekolah_nip_kepala || '').trim(),
+    nip_bendahara: String(s.sekolah_nip_bendahara || '').trim()
+  };
+  return String(text == null ? '' : text).replace(/\{([a-z_]+)\}/gi, (m, key) => {
+    const v = map[String(key).toLowerCase()];
+    return v === undefined ? m : v;
+  });
+}
+/** baris kontak ringkas: "NPSN 20211525 • Telp. (0265) … • Email: … • https://…" */
+function identitasKontak(settings, sep = ' • ') {
+  const s = settings || {};
+  const parts = [];
+  if (String(s.sekolah_npsn || '').trim()) parts.push('NPSN ' + String(s.sekolah_npsn).trim());
+  if (String(s.sekolah_telp || '').trim()) parts.push('Telp. ' + String(s.sekolah_telp).trim());
+  if (String(s.sekolah_email || '').trim()) parts.push('Email: ' + String(s.sekolah_email).trim());
+  if (String(s.sekolah_website || '').trim()) parts.push(String(s.sekolah_website).trim());
+  return parts.join(sep);
+}
+/** daftar baris identitas untuk footer portal publik */
+function identitasFooter(settings) {
+  const s = settings || {};
+  const parts = [];
+  const bentuk = BENTUK_LABEL[String(s.sekolah_bentuk || '').trim()] || '';
+  if (bentuk) parts.push(bentuk);
+  if (String(s.sekolah_status || '').trim()) parts.push('Status ' + String(s.sekolah_status).trim());
+  if (String(s.sekolah_npsn || '').trim()) parts.push('NPSN ' + String(s.sekolah_npsn).trim());
+  if (String(s.sekolah_telp || '').trim()) parts.push('Telp. ' + String(s.sekolah_telp).trim());
+  if (String(s.sekolah_email || '').trim()) parts.push(String(s.sekolah_email).trim());
+  if (String(s.sekolah_website || '').trim()) parts.push(String(s.sekolah_website).trim());
+  return parts.join(' • ');
+}
+/** URL Google Fonts (Inter) dimuat non-blocking: preload → stylesheet saat selesai */
+const FONT_HREF = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap';
+function fontLinks() {
+  return `<link rel="preconnect" href="https://fonts.googleapis.com">`
+    + `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`
+    + `<link rel="dns-prefetch" href="https://fonts.googleapis.com"><link rel="dns-prefetch" href="https://fonts.gstatic.com">`
+    + `<link rel="preload" as="style" href="${FONT_HREF}" onload="this.onload=null;this.rel='stylesheet'">`
+    + `<noscript><link rel="stylesheet" href="${FONT_HREF}"></noscript>`;
+}
+/** preconnect ke host CDN logo/gambar (mempercepat LCP) */
+function originOf(url) {
+  const m = /^(https?:)\/\/([^/]+)/i.exec(String(url || ''));
+  return m ? m[1] + '//' + m[2] : '';
+}
+function logoPreconnect(urls) {
+  const seen = new Set();
+  return [].concat(urls || []).map(originOf).filter(o => o && !seen.has(o) && (seen.add(o) || true))
+    .map(o => `<link rel="preconnect" href="${esc(o)}" crossorigin><link rel="dns-prefetch" href="${esc(o)}">`).join('');
+}
+/** atribut srcset/sizes untuk logo (bila varian kecil 96 px tersedia) */
+function logoSrcset(settings, sizes) {
+  const s = settings || {};
+  const full = String(s.sekolah_logo || '').trim();
+  const small = String(s.sekolah_logo_small || '').trim();
+  if (!full || !small) return '';
+  return ` srcset="${esc(small)} 96w, ${esc(full)} 512w" sizes="${esc(sizes || '(max-width:600px) 64px, 96px')}"`;
+}
+/** mode tampilan (terang/gelap) — dibaca dari setting mode_tema */
+function modeOf(settings) {
+  return String((settings && settings.mode_tema) || 'light').toLowerCase() === 'dark' ? 'dark' : 'light';
+}
+
 const ICONS = {
   dashboard: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/>',
   users: '<path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 20v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13A4 4 0 0 1 16 11"/>',
@@ -29,6 +116,8 @@ const ICONS = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
   database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17-5-5 5-5"/><path d="M3 12h12"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4Z"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 15H6L5 6"/><path d="M10 11v6M14 11v6"/>',
@@ -59,7 +148,11 @@ const ICONS = {
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
   link: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
   coins: '<ellipse cx="9" cy="6" rx="6" ry="3"/><path d="M3 6v5c0 1.7 2.7 3 6 3s6-1.3 6-3V6"/><path d="M3 11v5c0 1.7 2.7 3 6 3"/><ellipse cx="16" cy="15" rx="5" ry="2.5"/><path d="M11 15v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/>',
-  swap: '<path d="M7 4 3 8l4 4"/><path d="M3 8h13a4 4 0 0 1 0 8h-1"/><path d="m17 20 4-4-4-4"/>'
+  swap: '<path d="M7 4 3 8l4 4"/><path d="M3 8h13a4 4 0 0 1 0 8h-1"/><path d="m17 20 4-4-4-4"/>',
+  whatsapp: '<path d="M12 21a9 9 0 1 0-7.8-4.5L3 21l4.6-1.2A9 9 0 0 0 12 21Z"/><path d="M8.8 8.4c.3-.7.6-.7.9-.7h.6c.2 0 .5 0 .7.5l.7 1.6c.1.2.1.4 0 .6l-.5.6c-.1.2-.2.3 0 .6.5.9 1.3 1.7 2.2 2.2.3.2.4.1.6 0l.6-.6c.2-.2.4-.1.6 0l1.6.8c.4.2.4.4.4.6v.5c0 .4-.3 1-.8 1.3-.5.4-1.2.6-2 .4-1.3-.3-2.6-1-3.7-2.1-1.1-1.1-1.8-2.4-2.1-3.7-.2-.8 0-1.5.4-2Z"/>',
+  send: '<path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4Z"/>',
+  play: '<path d="m6 3 14 9-14 9Z"/>',
+  calendar_clock: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><circle cx="15" cy="15" r="1.2"/><path d="M15 12.5V15l1.8 1"/>'
 };
 function icon(name, cls = '') {
   const p = ICONS[name] || ICONS.info;
@@ -109,6 +202,7 @@ const NAV = [
       { href: '/iuran/bulanan', key: 'iuran', activeKey: 'iuran_bulanan', label: 'Rincian Iuran Bulanan', icon: 'calendar' },
       { href: '/iuran/transaksi', key: 'iuran', activeKey: 'iuran_trx', label: 'Transaksi Iuran', icon: 'receipt' },
       { href: '/iuran/antrean', key: 'iuran', activeKey: 'iuran_queue', label: 'Antrean Posting Iuran', icon: 'clock' },
+      { href: '/iuran/pengingat', key: 'iuran', activeKey: 'iuran_pengingat', label: 'Jadwal Pengingat Tagihan', icon: 'whatsapp' },
       // SPP dipisahkan dari menu Piutang dan diletakkan paling bawah pada kelompok Grup Iuran
       { href: '/spp', key: 'piutang', activeKey: 'spp', label: 'SPP', icon: 'target' }
     ]
@@ -144,16 +238,17 @@ const NAV = [
   {
     id: 'sistem', group: 'Laporan & Sistem', icon: 'settings', items: [
       { href: '/laporan', key: 'laporan', label: 'Laporan & Export', icon: 'file' },
-      { href: '/sekolah', key: 'sekolah', label: 'Identitas & Tampilan', icon: 'school' },
-      { href: '/tema', key: 'sekolah', activeKey: 'tema', label: 'Tema & Branding Aplikasi', icon: 'chart' },
+      { href: '/sekolah', key: 'identitas', label: 'Identitas Sekolah', icon: 'school' },
+      { href: '/portal-publik', key: 'portal_publik', label: 'Portal Publik', icon: 'link' },
+      { href: '/tema', key: 'tema', label: 'Tema & Branding Aplikasi', icon: 'chart' },
       { href: '/tarif-honor', key: 'tarif_honor', label: 'Nominal Tunjangan & Honor', icon: 'wallet' },
       { href: '/pengguna', key: 'pengguna', label: 'Pengguna & Hak Akses', icon: 'users' },
       { href: '/tampilan-menu', key: 'pengguna', activeKey: 'tampilan_menu', label: 'Pengaturan Tampilan Menu', icon: 'menu' },
-      { href: '/desain-cetak', key: 'sekolah', activeKey: 'desain_cetak', label: 'Desain Templat Cetak', icon: 'printer' },
+      { href: '/desain-cetak', key: 'desain_cetak', label: 'Desain Templat Cetak', icon: 'printer' },
       { href: '/trash', key: 'trash', label: 'Kotak Sampah', icon: 'inbox' },
       { href: '/audit', key: 'audit', label: 'Audit Log', icon: 'shield' },
-      { href: '/audit-orphan', key: 'sekolah', activeKey: 'audit_orphan', label: 'Audit Data Tersembunyi', icon: 'search' },
-      { href: '/reset-tahun', key: 'sekolah', activeKey: 'reset_tahun', label: 'Reset Data Tahun Ajaran', icon: 'refresh' },
+      { href: '/audit-orphan', key: 'identitas', activeKey: 'audit_orphan', label: 'Audit Data Tersembunyi', icon: 'search' },
+      { href: '/reset-tahun', key: 'identitas', activeKey: 'reset_tahun', label: 'Reset Data Tahun Ajaran', icon: 'refresh' },
       { href: '/backup', key: 'backup', label: 'Backup & Restore', icon: 'database' },
       { href: '/pengaturan-backup', key: 'backup', action: 'create', activeKey: 'backup_cloud', label: 'Pengaturan Auto-Backup', icon: 'cloud' },
       { href: '/info-layanan', key: 'layanan', label: 'Info Layanan & Perpanjangan', icon: 'shield' }
@@ -258,14 +353,14 @@ function navOrdered(cfg) {
   return groups;
 }
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', demoMode = false, features = null, tenantInfo = null, impersonate = null, announcements = null }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light' }) {
   const initials = (user?.nama || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
   const hidden = navVisibility(navHidden);
   const linkOf = (i) => {
     const showPill = (i.key === 'transaksi' || i.activeKey === 'approval') && pendingCount;
     const pill = showPill ? `<span class="pill">${pendingCount}</span>` : '';
     const ico = i.iconUrl
-      ? `<img src="${esc(i.iconUrl)}" alt="" class="nav-ico-img" onerror="this.remove()">`
+      ? `<img src="${esc(i.iconUrl)}" alt="" class="nav-ico-img" width="17" height="17" loading="lazy" decoding="async" onerror="this.remove()">`
       : icon(i.icon);
     return `<a href="${base}${i.href}" class="${active === (i.activeKey || i.key) ? 'active' : ''}" data-nav-href="${esc(i.href)}">${ico}<span>${esc(i.label)}</span>${pill}</a>`;
   };
@@ -290,14 +385,15 @@ function layout({ title, sub = '', user, active, base = '', content, query, role
   }
   if (!nav) nav = '<div class="nav-empty">Semua menu sedang disembunyikan. Buka <b>Pengaturan Tampilan Menu</b> untuk menampilkannya kembali.</div>';
   const brandMark = appLogo
-    ? `<img src="${esc(appLogo)}" alt="Logo" style="width:40px;height:40px;border-radius:12px;object-fit:contain;background:#fff;padding:3px;flex:0 0 40px" onerror="this.remove()">`
+    ? `<img src="${esc(appLogo)}"${appLogoSmall ? ` srcset="${esc(appLogoSmall)} 96w, ${esc(appLogo)} 512w" sizes="40px"` : ''} alt="Logo" width="40" height="40" fetchpriority="high" decoding="async" style="width:40px;height:40px;border-radius:12px;object-fit:contain;background:#fff;padding:3px;flex:0 0 40px" onerror="this.remove()">`
     : `<div class="brand-mark">${icon('wallet')}</div>`;
   return `<!DOCTYPE html>
-<html lang="id"><head>
+<html lang="id" data-mode="${mode === 'dark' ? 'dark' : 'light'}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(appName)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+${fontLinks()}
+${logoPreconnect([appLogo])}
+${appLogo ? `<link rel="preload" as="image" href="${esc(appLogo)}" fetchpriority="high">` : ''}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ASSET_V}">
 ${themeCss(tema)}
 <link rel="icon" type="image/png" href="${base}/favicon.ico?v=${encodeURIComponent((logoStamp||'').slice(-24))}">
@@ -310,10 +406,10 @@ ${themeCss(tema)}
       ${brandMark}
       <div><div class="brand-name">${esc(appName)}</div><div class="brand-sub">Sistem Keuangan</div></div>
     </div>
-    ${demoMode ? `<div class="demo-chip" title="Akun demo memakai database dummy terpisah">${icon('info', 'i-sm')} Mode Demo · data dummy</div>` : ''}
     ${impersonate ? `<div class="demo-chip" style="background:#EEF2FF;color:#4338CA;border-color:#C7D2FE">${icon('shield', 'i-sm')} Mode bantuan Super Admin</div>` : ''}
     <nav class="nav">${nav}</nav>
-    <div class="side-foot">v1.0 · ${new Date().getFullYear()} © ${esc(appName.slice(0, 18))}</div>
+    <div class="side-foot">v1.0 · ${new Date().getFullYear()} © ${esc(appName.slice(0, 18))}
+      <div class="t-sub" style="margin-top:2px">${esc(require('./tz').label())} · GMT${esc(require('./tz').offsetLabel())}</div></div>
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="main">
@@ -359,7 +455,7 @@ ${Array.isArray(announcements) ? announcements.filter(a => a.tipe === 'popup').m
     <p class="help">Pengumuman resmi dari Super Admin Pusat.</p>`,
   footer: `<button class="btn" data-close="mAnn${a.id}" data-dismiss-auto>Mengerti</button>`
 })).join('') : ''}
-<script src="${base}/assets/app.js?v=${ASSET_V}"></script>
+<script src="${base}/assets/app.js?v=${ASSET_V}" defer></script>
 </body></html>`;
 }
 
@@ -520,12 +616,15 @@ function chartLineSPP(rows, opts = {}) {
 }
 
 function kop(settings) {
-  const logo = settings.sekolah_logo
-    ? `<img src="${esc(settings.sekolah_logo)}" alt="Logo">`
-    : `<div class="kop-logo-ph">${esc((settings.sekolah_nama || 'S').trim().charAt(0))}</div>`;
-  const lines = String(settings.kop_baris || '').split('\n').map(s => s.trim()).filter(Boolean);
-  const f = Number(settings.kop_font || 10) || 10;
-  const fb = Number(settings.kop_font_besar || 15) || 15;
+  const s = settings || {};
+  const logo = s.sekolah_logo
+    ? `<img src="${esc(s.sekolah_logo)}" alt="Logo" width="64" height="64" decoding="async"${logoSrcset(s, '(max-width:600px) 56px, 72px')}>`
+    : `<div class="kop-logo-ph">${esc((s.sekolah_nama || 'S').trim().charAt(0))}</div>`;
+  // baris kop boleh memakai variabel dinamis: {npsn}, {telp}, {email}, {website}, {bentuk}, {status}, {kepemilikan}
+  const lines = String(s.kop_baris || '').split('\n').map(x => fillIdentitas(x, s).trim()).filter(Boolean);
+  const f = Number(s.kop_font || 10) || 10;
+  const fb = Number(s.kop_font_besar || 15) || 15;
+  const kontak = identitasKontak(s);
   if (lines.length) {
     // baris ke-4 = nama sekolah (paling besar & tebal); sisanya mengikuti font size kecil
     const txt = lines.map((l, i) => i === 3
@@ -533,10 +632,11 @@ function kop(settings) {
       : `<div class="l1" style="font-size:${f}pt">${esc(l)}</div>`).join('');
     return `<div class="kop">${logo}<div class="kop-txt">${txt}</div></div>`;
   }
-  const alamat = esc(settings.sekolah_alamat || '').replace(/\n/g, '<br>');
+  const alamat = esc(s.sekolah_alamat || '').replace(/\n/g, '<br>');
   return `<div class="kop">${logo}<div class="kop-txt">
-    <div class="l2">${esc(settings.sekolah_nama || 'NAMA SEKOLAH')}</div>
+    <div class="l2">${esc(s.sekolah_nama || 'NAMA SEKOLAH')}</div>
     <div class="l3">${alamat}</div>
+    ${kontak ? `<div class="l3">${esc(kontak)}</div>` : ''}
   </div></div>`;
 }
 /**
@@ -549,10 +649,10 @@ function kwitansiKop(settings) {
   const nama = String(s.sekolah_nama || 'NAMA SEKOLAH').trim();
   const inisial = (nama.replace(/^(SMA|SMK|SMP|SD|MA|MTs|S)\s+/i, '').charAt(0) || nama.charAt(0) || 'S').toUpperCase();
   const logo = s.sekolah_logo
-    ? `<img src="${esc(s.sekolah_logo)}" alt="Logo">`
+    ? `<img src="${esc(s.sekolah_logo)}" alt="Logo" width="34" height="34" decoding="async"${logoSrcset(s, '34px')}>`
     : `<div class="kwit-kop-ph">${esc(inisial)}</div>`;
-  const lines = String(s.kop_baris || '').split('\n').map(x => x.trim()).filter(Boolean);
-  const alamatSetting = String(s.sekolah_alamat || '').replace(/[\r\n]+/g, ' ').trim();
+  const lines = String(s.kop_baris || '').split('\n').map(x => fillIdentitas(x, s).trim()).filter(Boolean);
+  const alamatSetting = String(fillIdentitas(s.sekolah_alamat || '', s)).replace(/[\r\n]+/g, ' ').trim();
   let yayasan = '', namaBaris = '', alamat = '';
   if (lines.length >= 4) {
     yayasan = lines[0];
@@ -565,10 +665,12 @@ function kwitansiKop(settings) {
     namaBaris = nama;
     alamat = alamatSetting;
   }
+  const kontak = identitasKontak(s, ' · ');
+  const alamatBaris = [alamat, kontak].filter(Boolean).join(' · ');
   return `<div class="kwit-kop">${logo}<div class="kwit-kop-txt">
     ${yayasan ? `<div class="kwit-kop-y">${esc(yayasan)}</div>` : ''}
     <div class="kwit-kop-nama">${esc(namaBaris || nama)}</div>
-    ${alamat ? `<div class="kwit-kop-l">${esc(alamat)}</div>` : ''}
+    ${alamatBaris ? `<div class="kwit-kop-l">${esc(alamatBaris)}</div>` : ''}
   </div></div>`;
 }
 
@@ -605,7 +707,7 @@ function docPage({ settings, base, title, no = '', body, backHref = '/laporan', 
   return `<!DOCTYPE html><html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+${fontLinks()}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ASSET_V}">
 ${themeCss(settings && settings.tema_warna)}
 <style>@page{size:A4 ${o};margin:12mm 12mm}</style>
@@ -624,7 +726,7 @@ ${css ? `<style>${css}</style>` : ''}
   </div>
   <div class="doc-actions no-print"><span class="help">Gunakan tombol Cetak / Simpan PDF lalu pilih "Save as PDF" untuk menyimpan berkas.</span></div>
 </div>
-<script src="${base}/assets/app.js?v=${ASSET_V}"></script>
+<script src="${base}/assets/app.js?v=${ASSET_V}" defer></script>
 </body></html>`;
 }
 
@@ -633,7 +735,7 @@ function printPage({ settings, base, title, body, backHref = '/', pageCss = '', 
   return `<!DOCTYPE html><html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+${fontLinks()}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ASSET_V}">
 ${themeCss(settings && settings.tema_warna)}
 <style>${pageCss}</style>
@@ -737,4 +839,4 @@ function importErrorModal(errors, opts = {}) {
   }).replace(`class="modal" id="${id}"`, `class="modal show" id="${id}"`);
 }
 
-module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage };
+module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage, fillIdentitas, identitasKontak, identitasFooter, modeOf, BENTUK_LABEL, logoSrcset, fontLinks, logoPreconnect, originOf };

@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* =====================================================================
    TES SaaS MULTI-TENANT (Tahap 1–6)
    1. Migrasi tenant_id seluruh tabel + sekolah pertama (SK01, lifetime)

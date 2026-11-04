@@ -52,6 +52,35 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <b>Portrait / Landscape</b> di halaman cetak.</div></div>
         <form method="post" action="${c.base}/desain-cetak">
           <div class="card mb-3">
+            <div class="card-head"><div><h3>Kop Surat Resmi</h3>
+              <div class="sub">Teks &amp; ukuran font kop pada semua dokumen cetak</div></div>
+              ${ui.badge('semua cetakan', 'orange', 'plain')}</div>
+            <div class="field"><label>Teks Kop Surat (satu baris = satu baris kop)</label>
+              <textarea name="kop_baris" rows="7" style="font-family:ui-monospace,monospace;font-size:12px" ${ro ? 'readonly' : ''}>${esc(c.settings.kop_baris || '')}</textarea>
+              <div class="hint">Baris ke-4 otomatis ditampilkan paling besar &amp; tebal (nama sekolah). Variabel dinamis:
+                <code>{nama}</code> <code>{npsn}</code> <code>{bentuk}</code> <code>{status}</code> <code>{kepemilikan}</code>
+                <code>{alamat}</code> <code>{telp}</code> <code>{email}</code> <code>{website}</code>.</div></div>
+            <div class="row2">
+              <div class="field"><label>Ukuran Font Teks Kop (pt)</label><input type="number" step="0.5" min="6" max="24" name="kop_font" value="${esc(c.settings.kop_font || 10)}" ${ro ? 'readonly' : ''}></div>
+              <div class="field"><label>Ukuran Font Nama Sekolah (pt)</label><input type="number" step="0.5" min="8" max="36" name="kop_font_besar" value="${esc(c.settings.kop_font_besar || 15)}" ${ro ? 'readonly' : ''}></div>
+            </div>
+            <div class="doc" style="padding:12px;border:1px dashed var(--line-2);border-radius:12px;background:#fff">
+              ${ui.kop(c.settings)}
+            </div>
+          </div>
+          <div class="card mb-3">
+            <div class="card-head"><div><h3>Ukuran Kuitansi</h3>
+              <div class="sub">Kertas kwitansi transaksi &amp; bukti piutang (milimeter)</div></div>
+              ${ui.badge('1/3 F4 · 210 × 99 mm', 'gray', 'plain')}</div>
+            <div class="row3">
+              <div class="field"><label>Panjang (mm)</label><input type="number" step="0.5" min="60" name="kwitansi_w_mm" value="${esc(c.settings.kwitansi_w_mm || 210)}" ${ro ? 'readonly' : ''}></div>
+              <div class="field"><label>Tinggi (mm)</label><input type="number" step="0.5" min="30" name="kwitansi_h_mm" value="${esc(c.settings.kwitansi_h_mm || 99)}" ${ro ? 'readonly' : ''}></div>
+              <div class="field"><label>Margin (mm)</label><input type="number" step="0.5" min="0" name="kwitansi_margin_mm" value="${esc(c.settings.kwitansi_margin_mm || 6)}" ${ro ? 'readonly' : ''}></div>
+            </div>
+            <div class="hint">Ukuran di atas dipakai untuk kwitansi iuran. Kwitansi transaksi memiliki pengaturan margin sendiri
+              (<code>kw_trx_*</code>) dan dapat diubah lewat tautan <b>Ukuran Kertas</b> pada setiap kwitansi.</div>
+          </div>
+          <div class="card mb-3">
             <div class="card-head"><div><h3>Tempat pada Tanggal Cetak</h3>
               <div class="sub">Dipakai di semua dokumen: kwitansi, bukti piutang, laporan, berita acara, dll.</div></div>
               ${ui.badge('semua dokumen', 'orange', 'plain')}</div>
@@ -77,6 +106,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   post('/desain-cetak', (req, res) => {
     guard(req, res, 'sekolah', 'edit');
     printcfg.saveFromBody(dbm, req.body);
+    // kop surat & ukuran kuitansi (dipindah dari menu Identitas Sekolah)
+    if (req.body.kop_baris !== undefined) dbm.setSetting('kop_baris', String(req.body.kop_baris).replace(/\r/g, ''));
+    for (const k of ['kop_font', 'kop_font_besar', 'kwitansi_w_mm', 'kwitansi_h_mm', 'kwitansi_margin_mm']) {
+      if (req.body[k] === undefined) continue;
+      const v = Number(String(req.body[k]).replace(',', '.'));
+      if (Number.isFinite(v) && v > 0) dbm.setSetting(k, v);
+    }
     dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Memperbarui Pusat Desain & Orientasi Cetak');
     res.redirect(req.BASE + '/desain-cetak?ok=' + encodeURIComponent('Pengaturan desain templat cetak disimpan.'));
   });

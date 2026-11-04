@@ -35,9 +35,29 @@ rootDb.pragma('foreign_keys = ON');
 
 rootDb.__tenantId = 1;
 
+/* ---------------- zona waktu SQL: now_wib() / today_wib() ----------------
+   SQLite selalu mengembalikan UTC pada CURRENT_TIMESTAMP/NOW() dan tidak bisa
+   diubah per koneksi. Karena itu setiap koneksi diberi dua fungsi SQL yang
+   memakai jam WIB (Asia/Jakarta) dari proses ini:
+     SELECT now_wib();     → '2026-11-04 12:05:31'
+     SELECT today_wib();   → '2026-11-04'
+   Jangan memakai CURRENT_TIMESTAMP / datetime('now') di query baru.  */
+function registerTimeFns(conn) {
+  try {
+    if (!conn || typeof conn.function !== 'function') return conn;
+    if (conn.__tzFns) return conn;
+    conn.function('now_wib', () => nowStamp());
+    conn.function('today_wib', () => todayISO());
+    conn.__tzFns = true;
+  } catch (e) { console.error('[tz-sql]', e.message); }
+  return conn;
+}
+registerTimeFns(rootDb);
+
 const controlDb = new Database(SAAS_DB_PATH);
 controlDb.pragma('journal_mode = WAL');
 controlDb.pragma('foreign_keys = ON');
+registerTimeFns(controlDb);
 /* audit log lintas sekolah (dipakai panel Audit Logs Super Admin).
    Dibuat di sini (bukan di saas.js) supaya logAudit() selalu punya tabel tujuan. */
 controlDb.exec(`CREATE TABLE IF NOT EXISTS audit_log (
@@ -80,12 +100,71 @@ function demoHandle() {
     const conn = new Database(DEMO_DB_PATH);
     conn.pragma('journal_mode = WAL');
     conn.pragma('foreign_keys = ON');
+    registerTimeFns(conn);
     conn.__demoConn = true;
     demoConn = conn;
   }
   return demoConn;
 }
 function isDemoContext() { const c = dbStore.getStore(); return !!(c && c.__demoConn); }
+
+/* ==================================================================
+   MIGRASI ZONA WAKTU — stempel waktu lama digeser ke WIB
+   ------------------------------------------------------------------
+   Sebelum aplikasi disetel ke Asia/Jakarta, server (UTC) menulis kolom
+   *_at memakai jam UTC sehingga tampil 7 jam lebih awal daripada jam dinding
+   Jakarta. Migrasi ini menggeser nilai bertipe DATETIME ('YYYY-MM-DD HH:MM:SS')
+   sebanyak +7 jam SATU KALI (ditandai setting `mig_tz_wib_v1`).
+   Kolom tanggal murni (mis. `tanggal`, `periode`, `tenants.expires_at`) TIDAK
+   ikut karena tidak cocok pola panjang 19 karakter.
+   ================================================================== */
+const TZ_LEGACY_SHIFT_HOURS = 7;
+const TZ_SKIP_TABLES = new Set(['sessions', 'saas_jobs', 'sqlite_sequence']);
+function isDateTimeColumn(name) {
+  const n = String(name || '').toLowerCase();
+  if (n === 'last_login' || n === 'waktu') return true;
+  return n.endsWith('_at');
+}
+function migrateLegacyTimestamps(conn, settingsTable = 'settings') {
+  if (!conn) return { skipped: true };
+  if (String(process.env.TZ_SHIFT_LEGACY === undefined ? '1' : process.env.TZ_SHIFT_LEGACY) === '0') {
+    return { skipped: true, reason: 'TZ_SHIFT_LEGACY=0' };
+  }
+  try {
+    const settingsExists = !!conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(settingsTable);
+    if (settingsExists) {
+      const r = conn.prepare(`SELECT v FROM "${settingsTable}" WHERE k='mig_tz_wib_v1'`).get();
+      if (r && String(r.v || '').trim()) return { skipped: true, already: String(r.v) };
+    }
+    const tables = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name);
+    const job = conn.transaction(() => {
+      let total = 0; const detail = [];
+      for (const t of tables) {
+        if (TZ_SKIP_TABLES.has(t)) continue;
+        let cols = [];
+        try { cols = conn.prepare(`PRAGMA table_info("${t}")`).all().map(c => c.name).filter(isDateTimeColumn); } catch (e) { continue; }
+        for (const c of cols) {
+          const info = conn.prepare(`UPDATE "${t}" SET "${c}" = strftime('%Y-%m-%d %H:%M:%S', "${c}", '+${TZ_LEGACY_SHIFT_HOURS} hours')
+            WHERE typeof("${c}")='text' AND length("${c}")=19 AND "${c}" LIKE '____-__-__ __:__:__'`).run();
+          if (info.changes) { total += info.changes; detail.push(`${t}.${c}(${info.changes})`); }
+        }
+      }
+      if (settingsExists) {
+        conn.prepare(`INSERT INTO "${settingsTable}" (k,v) VALUES ('mig_tz_wib_v1',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).run(nowStamp());
+      }
+      return { total, detail };
+    });
+    const out = job();
+    if (out.total) {
+      console.log(`[tz-migrasi] ${out.total} stempel waktu lama digeser +${TZ_LEGACY_SHIFT_HOURS} jam ke WIB`
+        + ` (${out.detail.slice(0, 6).join(', ')}${out.detail.length > 6 ? ', …' : ''})`);
+    }
+    return out;
+  } catch (e) {
+    console.error('[tz-migrasi]', e.message);
+    return { error: e.message };
+  }
+}
 
 /* ---------------- koneksi per tenant ---------------- */
 const tenantConns = new Map();
@@ -102,8 +181,10 @@ function openTenantConn(id, file) {
   const conn = new Database(fp);
   conn.pragma('journal_mode = WAL');
   conn.pragma('foreign_keys = ON');
+  registerTimeFns(conn);
   conn.__tenantId = key;
   tenantConns.set(key, conn);
+  try { migrateLegacyTimestamps(conn, 'settings'); } catch (e) { }
   return conn;
 }
 /** jalankan fn di dalam konteks database satu sekolah */
@@ -396,7 +477,7 @@ CREATE TABLE IF NOT EXISTS siswa (
   id INTEGER PRIMARY KEY AUTOINCREMENT, nisn TEXT, nama TEXT NOT NULL,
   jenis_kelamin TEXT DEFAULT 'L', tanggal_lahir TEXT, kelas_id INTEGER,
   tahun_ajaran_id INTEGER, status TEXT NOT NULL DEFAULT 'aktif',
-  keterangan TEXT, created_at TEXT, updated_at TEXT
+  keterangan TEXT, parent_phone TEXT, created_at TEXT, updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_siswa_kelas ON siswa(kelas_id);
 CREATE INDEX IF NOT EXISTS idx_siswa_nama ON siswa(nama);
@@ -420,6 +501,19 @@ CREATE TABLE IF NOT EXISTS iuran_tagihan (
   tahun_ajaran_id INTEGER, nominal REAL NOT NULL DEFAULT 0, potongan REAL NOT NULL DEFAULT 0,
   keterangan TEXT, created_at TEXT, UNIQUE (grup_id, siswa_id)
 );
+/* ---------- pengingat tagihan via WhatsApp (broadcast scheduler) ---------- */
+CREATE TABLE IF NOT EXISTS wa_template (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT NOT NULL, isi TEXT NOT NULL,
+  urutan INTEGER NOT NULL DEFAULT 0, aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS wa_reminder_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, siswa_id INTEGER, nama TEXT, phone TEXT, kelas TEXT,
+  nominal REAL NOT NULL DEFAULT 0, pesan TEXT, status TEXT NOT NULL DEFAULT 'pending',
+  error TEXT, mode TEXT NOT NULL DEFAULT 'manual', pemicu TEXT, batch TEXT,
+  created_at TEXT, sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wa_log_status ON wa_reminder_log(status, id);
+CREATE INDEX IF NOT EXISTS idx_wa_log_created ON wa_reminder_log(created_at);
 CREATE TABLE IF NOT EXISTS iuran_bayar (
   id INTEGER PRIMARY KEY AUTOINCREMENT, tagihan_id INTEGER, siswa_id INTEGER,
   tanggal TEXT, jumlah REAL NOT NULL DEFAULT 0, potongan REAL NOT NULL DEFAULT 0,
@@ -551,10 +645,10 @@ const ACTIONS = ['view', 'create', 'edit', 'delete', 'approve', 'export'];
 const ROLE_LABEL = {
   super_admin: 'Super Admin / Bendahara Utama',
   kepala_sekolah: 'Kepala Sekolah',
-  staff: 'Staff / Staf Inputer',
-  demo: 'Akun Demo (Sandbox / Data Dummy)'
+  staff: 'Staff / Staf Inputer'
 };
-const ROLES = ['super_admin', 'kepala_sekolah', 'staff', 'demo'];
+/** role akun sekolah (role "demo" sudah dihapus total — lihat migrasi di bootstrap) */
+const ROLES = ['super_admin', 'kepala_sekolah', 'staff'];
 /** modul yang TIDAK boleh dibuka akun demo secara bawaan (bisa diubah admin lewat Permission Matrix) */
 const DEMO_BLOCKED = ['pengguna', 'sekolah', 'backup', 'trash', 'audit', 'tahun_ajaran', 'saldo_awal'];
 
@@ -639,6 +733,41 @@ const JENJANG = {
   'SMK': { label: 'SMK', preset: ['X', 'XI', 'XII'] },
   'KUSTOM': { label: 'Kustom (pilih sendiri)', preset: [] }
 };
+/* ---------------- identitas resmi sekolah (kolom legalitas) ---------------- */
+const BENTUK_PENDIDIKAN = [
+  ['SMK', 'Sekolah Menengah Kejuruan (SMK)'],
+  ['SMA', 'Sekolah Menengah Atas (SMA)'],
+  ['MA', 'Madrasah Aliyah (MA)'],
+  ['SMP', 'Sekolah Menengah Pertama (SMP)'],
+  ['MTS', 'Madrasah Tsanawiyah (MTs)'],
+  ['SD', 'Sekolah Dasar (SD)'],
+  ['MI', 'Madrasah Ibtidaiyah (MI)'],
+  ['PAUD', 'PAUD / TK / RA'],
+  ['LAIN', 'Lainnya / Custom']
+];
+const BENTUK_LABEL = BENTUK_PENDIDIKAN.reduce((m, [k, v]) => { m[k] = v; return m; }, {});
+const STATUS_SEKOLAH = ['Negeri', 'Swasta'];
+const KEPEMILIKAN_OPTIONS = ['Pemerintah Daerah', 'Yayasan', 'Kementerian Agama', 'Pemerintah Pusat', 'Perorangan', 'Lainnya'];
+/** data identitas resmi siap pakai (kop surat, kwitansi, footer portal) */
+function identitasSekolah() {
+  const s = settingsAll();
+  return {
+    nama: String(s.sekolah_nama || '').trim(),
+    npsn: String(s.sekolah_npsn || '').trim(),
+    bentuk: String(s.sekolah_bentuk || '').trim(),
+    bentuk_label: BENTUK_LABEL[String(s.sekolah_bentuk || '').trim()] || '',
+    status: String(s.sekolah_status || '').trim(),
+    kepemilikan: String(s.sekolah_kepemilikan || '').trim(),
+    alamat: String(s.sekolah_alamat || '').trim(),
+    telp: String(s.sekolah_telp || '').trim(),
+    email: String(s.sekolah_email || '').trim(),
+    website: String(s.sekolah_website || '').trim(),
+    kepala: String(s.sekolah_kepala || '').trim(),
+    nip_kepala: String(s.sekolah_nip_kepala || '').trim(),
+    bendahara: String(s.sekolah_bendahara || '').trim(),
+    nip_bendahara: String(s.sekolah_nip_bendahara || '').trim()
+  };
+}
 /** seluruh opsi tingkat standar: pra-sekolah, I..XII, angka 1..12 */
 const TINGKAT_MASTER = [
   { kode: 'KB', label: 'Kelompok Bermain' },
@@ -728,8 +857,23 @@ const BKU_AUTO_NAMES = ['Buku Kas Pembantu Bank', 'Buku Pembantu Pajak', 'Buku P
 const isAutoBkuNama = n => BKU_AUTO_NAMES.includes(String(n || ''));
 
 function bootstrap() {
+  /* database benar-benar baru (belum punya tabel) → semua data ditulis dengan
+     jam WIB sejak awal, jadi migrasi penggeseran stempel waktu dilewati. */
+  let brandNew = false;
+  try { brandNew = !db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table'").get().c; } catch (e) { brandNew = true; }
   db.transaction(() => {
     db.exec(SCHEMA);
+
+    /* ---------- geser stempel waktu lama ke WIB (sekali saja) ----------
+       Dijalankan SEBELUM seed supaya baris contoh yang baru dibuat (sudah WIB)
+       tidak ikut tergeser. Database baru langsung ditandai selesai. */
+    try {
+      if (brandNew) {
+        db.prepare("INSERT INTO settings (k,v) VALUES ('mig_tz_wib_v1',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run('database-baru:' + nowStamp());
+      } else {
+        migrateLegacyTimestamps(db, 'settings');
+      }
+    } catch (e) { console.error('[tz-migrasi]', e.message); }
 
     // settings
     const setif = db.prepare('INSERT OR IGNORE INTO settings (k,v) VALUES (?,?)');
@@ -740,6 +884,14 @@ function bootstrap() {
       sekolah_nip_kepala: '196804121994031005',
       sekolah_bendahara: 'Siti Nurhaliza, S.E.',
       sekolah_nip_bendahara: '198207152008012011',
+      // ---- identitas resmi & legalitas (menu Identitas Sekolah) ----
+      sekolah_npsn: '',
+      sekolah_bentuk: '',
+      sekolah_status: '',
+      sekolah_kepemilikan: '',
+      sekolah_telp: '',
+      sekolah_email: '',
+      sekolah_website: '',
       sekolah_logo: '',
       approval_threshold: '5000000',
       tampil_piutang_spp: '1',
@@ -763,6 +915,9 @@ function bootstrap() {
       portal_aktif: '1',
       portal_pegawai_aktif: '1',
       portal_slip_aktif: '1',
+      // teks halaman portal publik (kosong = memakai default Super Admin)
+      portal_page_title: '',
+      portal_subtitle: '',
       // alamat (slug) ujung URL portal publik — boleh diubah, default seperti di bawah
       portal_slug: 'portal',
       portal_pegawai_slug: 'portal-pegawai',
@@ -783,6 +938,8 @@ function bootstrap() {
       app_logo: '',
       // ---- tampilan: warna dasar aplikasi + penataan menu (drag & drop, label, ikon PNG) ----
       tema_warna: '#F97316',
+      // mode tampilan: 'light' (bawaan) atau 'dark'
+      mode_tema: 'light',
       nav_ui: '{}',
       // ---- akun demo (sandbox): keterangan & penanda reset ----
       demo_catatan: 'Akun ini memakai database DUMMY terpisah. Semua perubahan tidak memengaruhi data sekolah.',
@@ -797,11 +954,29 @@ function bootstrap() {
       // ---- domain khusus (custom domain) — nilai kanonik ada di control plane ----
       custom_domain: '',
       custom_domain_status: '',
+      // ---- Pengingat tagihan via WhatsApp (menu Jadwal Pengingat Tagihan) ----
+      reminder_aktif: '0',
+      reminder_mode: 'tanggal',            // tanggal | tempo | keduanya
+      reminder_tanggal: '5',               // tanggal kirim rutin bulanan (1-28)
+      reminder_tempo_hari: '3',            // H-X sebelum jatuh tempo
+      reminder_jam: '08:00',
+      reminder_template: 'Yth. Orang Tua dari {nama_siswa} ({kelas}),\n\nKami menginformasikan bahwa total tunggakan iuran sekolah sebesar {nominal_tunggakan}.\n\nRincian tagihan:\n{rincian_tagihan}\n\nRincian tagihan dan pembayaran dapat diakses melalui link: {link_portal}\n\nTerima kasih.\n{nama_sekolah}',
+      reminder_done: '[]',                 // slot jadwal yang sudah dijalankan (anti kirim ganda)
+      reminder_last: '',
+      reminder_base_url: '',               // alamat publik untuk {link_portal} (fallback APP_BASE_URL)
+      iuran_jatuh_tempo: '10',             // tanggal jatuh tempo bawaan (hari ke-1..28)
+      portal_token_secret: '',             // dibuat otomatis pada bootstrap
+      wa_log_retensi: '90',                // hari retensi riwayat pengiriman
       // ---- jenjang pendidikan & tingkat kelas aktif (preset otomatis) ----
       jenjang_pendidikan: 'SMP/MTs',
       tingkat_aktif: '["VII","VIII","IX"]'
     };
     for (const [k, v] of Object.entries(defaults)) setif.run(k, v);
+
+    // secret tautan portal per siswa (dipakai {link_portal} pada pengingat WhatsApp)
+    if (!String(getSetting('portal_token_secret', '') || '').trim()) {
+      setSetting('portal_token_secret', require('crypto').randomBytes(24).toString('hex'));
+    }
 
     // tebak JENJANG dari nama sekolah lama (hanya bila masih nilai bawaan)
     (function guessJenjang() {
@@ -826,6 +1001,23 @@ function bootstrap() {
       } catch (e) { }
     })();
 
+    // migrasi identitas resmi (ronde 26): isi bentuk pendidikan dari jenjang yang sudah ada,
+    // NPSN dari teks kop lama, dan status/kepemilikan dari nama sekolah — hanya bila masih kosong.
+    (function guessIdentitas() {
+      try {
+        const get = k => { const r = db.prepare('SELECT v FROM settings WHERE k=?').get(k); return r ? String(r.v || '') : ''; };
+        const setIfEmpty = (k, v) => { if (!get(k).trim() && v) setSetting(k, v); };
+        const map = { SMK: 'SMK', 'SMA/MA': 'SMA', 'SMP/MTs': 'SMP', 'SD/MI': 'SD', 'PAUD/TK': 'PAUD' };
+        setIfEmpty('sekolah_bentuk', map[get('jenjang_pendidikan')] || '');
+        const kop = get('kop_baris');
+        const mNpsn = /NPSN\s*[:.]?\s*(\d{8})/i.exec(kop);
+        if (mNpsn) setIfEmpty('sekolah_npsn', mNpsn[1]);
+        const nama = get('sekolah_nama').toUpperCase();
+        setIfEmpty('sekolah_status', /\bNEGERI\b/.test(nama) ? 'Negeri' : '');
+        setIfEmpty('sekolah_kepemilikan', /\bNEGERI\b/.test(nama) ? 'Pemerintah Daerah' : (/YAYASAN|PGRI/.test(nama) ? 'Yayasan' : ''));
+      } catch (e) { }
+    })();
+
     // migrasi identitas sekolah lama → SMK PGRI Cikoneng (hanya bila masih nilai bawaan)
     if (db.prepare("SELECT v FROM settings WHERE k='sekolah_nama'").get()?.v === 'SMA NEGERI 1 NUSANTARA') {
       setSetting('sekolah_nama', 'SMK PGRI Cikoneng');
@@ -838,13 +1030,23 @@ function bootstrap() {
     // permissions — INSERT OR IGNORE agar modul baru otomatis terisi tanpa menimpa kustomisasi
     {
       const ins = db.prepare('INSERT OR IGNORE INTO permissions (role,module,action,allowed) VALUES (?,?,?,?)');
-      for (const role of ['super_admin', 'kepala_sekolah', 'staff', 'demo']) {
+      for (const role of ['super_admin', 'kepala_sekolah', 'staff']) {
         for (const m of MODULES) {
           for (const a of ACTIONS) {
             ins.run(role, m.key, a, defaultAllowed(role, m.key, a));
           }
         }
       }
+    }
+
+    // role "Akun Demo" DIHAPUS TOTAL (ronde 26): akun demo lama dinonaktifkan & diubah ke staff,
+    // baris permission role demo dibersihkan. Tidak ada lagi pilihan role demo di seluruh modul.
+    {
+      const n = db.prepare("SELECT COUNT(*) c FROM users WHERE role='demo'").get();
+      if (n && n.c) {
+        db.prepare("UPDATE users SET role='staff', aktif=0 WHERE role='demo'").run();
+      }
+      db.prepare("DELETE FROM permissions WHERE role='demo'").run();
     }
 
     // coa (idempoten per kode, agar kode baru ikut masuk ke DB lama)
@@ -1007,7 +1209,9 @@ function bootstrap() {
     /* ---------- siswa: kolom tambahan ---------- */
     const sisCols = db.prepare('PRAGMA table_info(siswa)').all().map(c => c.name);
     for (const [col, ddl] of [
-      ['tanggal_lahir', 'TEXT'], ['keterangan', 'TEXT'], ['updated_at', 'TEXT']
+      ['tanggal_lahir', 'TEXT'], ['keterangan', 'TEXT'], ['updated_at', 'TEXT'],
+      // nomor HP/WhatsApp orang tua (dipakai pengingat tagihan) — disimpan ternormalisasi 62…
+      ['parent_phone', 'TEXT']
     ]) if (!sisCols.includes(col)) db.exec(`ALTER TABLE siswa ADD COLUMN ${col} ${ddl}`);
 
     /* ---------- penempatan kelas per tahun pelajaran (riwayat akademik) ----------
@@ -1049,6 +1253,19 @@ function bootstrap() {
     if (!ibCols3.includes('bulan')) db.exec('ALTER TABLE iuran_bayar ADD COLUMN bulan INTEGER');
     const igCols = db.prepare('PRAGMA table_info(iuran_grup)').all().map(c => c.name);
     if (!igCols.includes('coa_id')) db.exec('ALTER TABLE iuran_grup ADD COLUMN coa_id INTEGER');
+    // tanggal jatuh tempo (hari ke-1..28) per grup — dipakai mode pengingat "H-X sebelum jatuh tempo"
+    if (!igCols.includes('jatuh_tempo')) db.exec('ALTER TABLE iuran_grup ADD COLUMN jatuh_tempo INTEGER');
+
+    /* ---------- pengingat tagihan: template bawaan + setting ---------- */
+    if (!db.prepare('SELECT COUNT(*) c FROM wa_template').get().c) {
+      const insT = db.prepare('INSERT INTO wa_template (nama,isi,urutan,aktif,created_at) VALUES (?,?,?,1,?)');
+      insT.run('Template SPP Bulanan',
+        'Yth. Orang Tua dari {nama_siswa} ({kelas}),\n\nKami menginformasikan bahwa total tunggakan iuran sekolah sebesar {nominal_tunggakan}.\n\nRincian tagihan:\n{rincian_tagihan}\n\nRincian tagihan dan pembayaran dapat diakses melalui tautan berikut:\n{link_portal}\n\nTerima kasih.\n{nama_sekolah}', 1, nowStamp());
+      insT.run('Template Uang Kegiatan',
+        'Yth. Orang Tua/Wali dari {nama_siswa} ({kelas}),\n\nBersama pesan ini kami sampaikan tagihan kegiatan sekolah yang belum diselesaikan dengan total {nominal_tunggakan}.\n\nRincian:\n{rincian_tagihan}\n\nInformasi lengkap & pembayaran: {link_portal}\n\nTerima kasih atas perhatian Bapak/Ibu.\n{nama_sekolah}', 2, nowStamp());
+      insT.run('Template Penagihan Ujian',
+        'Yth. Orang Tua/Wali dari {nama_siswa} ({kelas}),\n\nMenjelang pelaksanaan ujian, kami mengingatkan tunggakan administrasi sebesar {nominal_tunggakan}:\n\n{rincian_tagihan}\n\nMohon melakukan penyelesaian melalui tautan {link_portal} agar siswa dapat mengikuti seluruh kegiatan ujian.\n\nTerima kasih.\n{nama_sekolah}', 3, nowStamp());
+    }
 
     /* ---------- beasiswa enforcement: pembayaran otomatis + status terkunci ----------
        'sumber' menandai pembayaran iuran yang dibuat otomatis oleh modul Beasiswa
@@ -1079,6 +1296,8 @@ function bootstrap() {
       setif2.run('portal_aktif', '1');
       setif2.run('portal_pegawai_aktif', '1');
       setif2.run('portal_slip_aktif', '1');
+      setif2.run('portal_page_title', '');
+      setif2.run('portal_subtitle', '');
       // alamat (slug) portal publik — dapat diubah di menu Identitas Sekolah
       setif2.run('portal_slug', 'portal');
       setif2.run('portal_pegawai_slug', 'portal-pegawai');
@@ -1361,6 +1580,8 @@ function portalSlugs() {
   portalSlugCache = out;
   return out;
 }
+/** kosongkan cache slug (dipakai saat slug diubah dari panel Super Admin) */
+function resetPortalSlugCache() { portalSlugCache = null; }
 /** true bila slug berbeda dari default (dipakai UI) */
 function portalSlugIsCustom(key) { return portalSlugs()[key] !== PORTAL_SLUG_DEFAULT[key]; }
 /**
@@ -2167,6 +2388,12 @@ function prevPeriode(p) {
   return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 }
 function currentPeriode() { return todayISO().slice(0, 7); }
+/** tanggal ISO dengan pergeseran hari menurut jam WIB (mis. -1 = kemarin) */
+function dateOffsetISO(days) {
+  const d = new Date(Date.now() + (Number(days) || 0) * 86400000);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 function periodeRow(bkuId, periode) {
   return db.prepare('SELECT * FROM bku_periode WHERE bku_id=? AND periode=?').get(bkuId, periode);
@@ -3458,7 +3685,7 @@ function iuranPaysMap(tagihanIds) {
 }
 /** tagihan + pembayaran (yang tidak di-void) */
 function iuranTagihanRows(opts = {}) {
-  let sql = `SELECT t.*, s.nama siswa_nama, s.nisn, k.nama kelas_nama, k.tingkat, g.nama grup_nama, g.jenis grup_jenis,
+  let sql = `SELECT t.*, s.nama siswa_nama, s.nisn, s.parent_phone, k.nama kelas_nama, k.tingkat, g.nama grup_nama, g.jenis grup_jenis,
       COALESCE((SELECT SUM(b.jumlah) FROM iuran_bayar b WHERE b.tagihan_id=t.id AND b.status<>'void'),0) terbayar,
       COALESCE((SELECT SUM(b.potongan) FROM iuran_bayar b WHERE b.tagihan_id=t.id AND b.status<>'void'),0) total_potongan,
       COALESCE((SELECT SUM(b.dibayar) FROM iuran_bayar b WHERE b.tagihan_id=t.id AND b.status<>'void'),0) kas_diterima,
@@ -3509,7 +3736,7 @@ function iuranRekapSiswa(rows) {
     let s = map.get(r.siswa_id);
     if (!s) {
       s = {
-        siswa_id: r.siswa_id, nama: r.siswa_nama, nisn: r.nisn, kelas: r.kelas_nama,
+        siswa_id: r.siswa_id, nama: r.siswa_nama, nisn: r.nisn, kelas: r.kelas_nama, parent_phone: r.parent_phone,
         tahun_ajaran_id: r.tahun_ajaran_id, tagihan: 0, terbayar: 0, potongan: 0, kas: 0, sisa: 0,
         items: []
       };
@@ -3730,7 +3957,8 @@ function sertifikasiRekap(taId, opts = {}) {
 function otpCreate(jenis, ref, phone, minutes = 10) {
   const token = require('./lib').token(24);
   const kode = String(Math.floor(1000 + Math.random() * 9000));
-  const exp = new Date(Date.now() + minutes * 60000).toISOString().replace('T', ' ').slice(0, 19);
+  /* masa berlaku memakai jam WIB yang sama dengan nowStamp() saat verifikasi */
+  const exp = require('./lib').plusMinutesStamp(minutes);
   db.prepare('DELETE FROM otp_code WHERE expires_at < ?').run(nowStamp());
   db.prepare('INSERT INTO otp_code (token,jenis,ref,phone,kode,expires_at,tries,verified,created_at) VALUES (?,?,?,?,?,?,0,0,?)')
     .run(token, jenis, String(ref || ''), String(phone || ''), kode, exp, nowStamp());
@@ -4052,6 +4280,7 @@ function beasiswaSyncAll() {
 module.exports = {
   db, mainDb, DB_PATH, SAAS_DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
   rootDb, controlDb, runWithMeta, currentMeta, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, ensureTenantUniqueIndexes, createTenantDatabase, DATA_DIR, tableNamesOf,
+  registerTimeFns, migrateLegacyTimestamps, TZ_LEGACY_SHIFT_HOURS, dateOffsetISO,
   getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, autoBku,
   bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
@@ -4083,13 +4312,15 @@ module.exports = {
   ekskulRows, ekskulPending, dedupeAset,
   // ronde 9: analitik iuran, rekap sertifikasi, OTP portal, pesan orang tua, beasiswa siswa
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
-  portalSlugs, portalSlugIsCustom, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
+  portalSlugs, portalSlugIsCustom, resetPortalSlugCache, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,
   beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData,
   // tampilan (tema, branding, penataan menu) + petunjuk pengguna
   temaWarna, appNama, appLogo, navUi, setNavUi, TEMA_DEFAULT,
+  // identitas resmi sekolah (NPSN, bentuk, status, kepemilikan, kontak)
+  BENTUK_PENDIDIKAN, BENTUK_LABEL, STATUS_SEKOLAH, KEPEMILIKAN_OPTIONS, identitasSekolah,
   mainSetting, setMainSetting, temaWarnaGlobal, appNamaGlobal, appLogoGlobal, navUiGlobal, setNavUiGlobal,
   panduanList, panduanById, panduanSave, panduanDelete, panduanUrutkan
 };

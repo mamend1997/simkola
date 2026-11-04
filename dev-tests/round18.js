@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 18 —
    1. Portal publik tagihan siswa: rincian per bulan (SPP - Juli … dst)
    2. Portal piutang pegawai & slip gaji: kolom catatan untuk bendahara
@@ -173,9 +175,10 @@ const today = new Date().toISOString().slice(0, 10);
   ok('ubah jenis item terposting ditolak', r.status === 303 && /err=/.test(r.loc) && /satu transaksi BKU = satu jenis/.test(decode(r.loc)), decode(r.loc).slice(0, 140));
 
   /* ================= 4. SLUG PORTAL DAPAT DIUBAH ================= */
-  r = await req('GET', '/sekolah');
-  ok('halaman identitas memuat pengaturan alamat portal', /Alamat \(URL\) Portal Publik/.test(r.text) && /name="portal_slip_slug"/.test(r.text));
-  r = await req('POST', '/sekolah', { sekolah_nama: 'SMK PGRI CIKONENG', portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai', portal_aktif: '1' });
+  // pengaturan alamat portal pindah ke menu Portal Publik (ronde 26)
+  r = await req('GET', '/portal-publik');
+  ok('halaman Portal Publik memuat pengaturan alamat portal', /Alamat \(URL\) Portal Publik/.test(r.text) && /name="portal_slip_slug"/.test(r.text));
+  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug portal tersimpan', r.status === 303 && /ok=/.test(r.loc), decode(r.loc).slice(0, 120));
   ok('setting tersimpan di DB', db.prepare("SELECT v FROM settings WHERE k='portal_slip_slug'").get().v === 'portal-slip-pegawai');
   for (const [u, label] of [['/tagihan-siswa', 'siswa'], ['/piutang-pegawai', 'pegawai'], ['/portal-slip-pegawai', 'slip']]) {
@@ -191,15 +194,15 @@ const today = new Date().toISOString().slice(0, 10);
   // alamat default tetap berfungsi (kompatibilitas)
   ok('alamat default /portal tetap dapat dibuka', (await req('GET', '/portal', null, { public: true })).status === 200);
   // validasi
-  r = await req('POST', '/sekolah', { sekolah_nama: 'SMK PGRI CIKONENG', portal_slug: 'transaksi' });
+  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'transaksi', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug yang menabrak halaman aplikasi ditolak', r.status === 303 && /err=/.test(r.loc) && /dipakai halaman lain/.test(decode(r.loc)), decode(r.loc).slice(0, 140));
   ok('slug ditolak tidak mengubah setting', db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get().v === 'tagihan-siswa');
-  r = await req('POST', '/sekolah', { sekolah_nama: 'SMK PGRI CIKONENG', portal_pegawai_slug: 'tagihan-siswa' });
+  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'tagihan-siswa', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug ganda antar portal ditolak', r.status === 303 && /err=/.test(r.loc), decode(r.loc).slice(0, 140));
-  r = await req('POST', '/sekolah', { sekolah_nama: 'SMK PGRI CIKONENG', portal_slug: 'Portal Tagihan Siswa!' });
+  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'Portal Tagihan Siswa!', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug dengan spasi/simbol dinormalkan atau ditolak', r.status === 303 && (db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get().v === 'tagihan-siswa' || /err=/.test(r.loc)));
   // kembalikan default + cek kolom catatan
-  await req('POST', '/sekolah', { sekolah_nama: 'SMK PGRI CIKONENG', portal_slug: 'portal', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip', portal_aktif: '1' });
+  await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip' });
   r = await req('GET', '/portal-pegawai', null, { public: true });
   ok('kembali ke alamat default berhasil', /action="\/portal-pegawai\/otp"/.test(r.text));
 

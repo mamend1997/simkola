@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI test Playwright untuk modul baru (tanpa error JS, modal, layout mobile) */
 const { spawn } = require('child_process');
 const path = require('path');

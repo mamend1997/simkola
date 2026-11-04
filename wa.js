@@ -10,28 +10,72 @@
  * perilaku ini dikendalikan setting `wa_demo_tampil`.
  */
 const dbm = require('./db');
+const lib = require('./lib');
 const env = require('./env');
 
+/** normalisasi nomor WhatsApp → 62xxxxxxxxxx (satu implementasi dengan lib.normPhone) */
 function normalizePhone(raw) {
-  let s = String(raw || '').replace(/[^\d+]/g, '');
-  if (!s) return '';
-  if (s.startsWith('+')) s = s.slice(1);
-  if (s.startsWith('0')) s = '62' + s.slice(1);
-  if (s.startsWith('8')) s = '62' + s;
-  return s;
+  return lib.normPhone(raw);
 }
 /**
  * Konfigurasi gateway: variabel lingkungan (.env) DIUTAMAKAN, lalu pengaturan
  * di menu Pengaturan Sistem. Dengan begitu kredensial API key tidak perlu
  * ditulis di kode maupun di database saat deploy ke hosting lain.
  */
+/**
+ * Gateway WhatsApp PUSAT (diatur Super Admin pada menu WA Gateway).
+ * Dipakai sebagai cadangan bila sekolah belum punya gateway sendiri.
+ */
+function pusatConfig() {
+  try {
+    const saas = require('./saas');
+    const url = String(saas.get('wa_api_url', '') || '').trim();
+    if (!url) return null;
+    return {
+      url,
+      token: String(saas.get('wa_api_token', '') || '').trim(),
+      payload: String(saas.get('wa_payload', 'form') || 'form').toLowerCase() === 'json' ? 'json' : 'form'
+    };
+  } catch (e) { return null; }
+}
+/**
+ * Konfigurasi gateway aktif.
+ * Urutan prioritas: variabel lingkungan (.env) → pengaturan sekolah → gateway PUSAT (Super Admin).
+ * `source` menunjukkan sumber yang dipakai ('env' | 'tenant' | 'pusat' | '').
+ */
 function waConfig() {
+  const tenantUrl = String(dbm.getSetting('wa_api_url', '') || '').trim();
+  const tenantToken = String(dbm.getSetting('wa_api_token', '') || '').trim();
+  const envUrl = String(process.env.WA_API_URL || '').trim();
+  const envToken = String(process.env.WA_API_TOKEN || '').trim();
+  const payloadTenant = String(dbm.getSetting('wa_api_payload', 'form') || 'form').toLowerCase();
+  if (envUrl || envToken) {
+    return {
+      url: envUrl || tenantUrl, token: envToken || tenantToken,
+      payload: String(process.env.WA_API_PAYLOAD || payloadTenant).toLowerCase(),
+      demo: dbm.getSetting('wa_demo_tampil', '1') === '1',
+      fromEnv: true, source: 'env'
+    };
+  }
+  if (tenantUrl) {
+    return {
+      url: tenantUrl, token: tenantToken, payload: payloadTenant,
+      demo: dbm.getSetting('wa_demo_tampil', '1') === '1',
+      fromEnv: false, source: 'tenant'
+    };
+  }
+  const pusat = pusatConfig();
+  if (pusat) {
+    return {
+      url: pusat.url, token: pusat.token, payload: pusat.payload,
+      demo: dbm.getSetting('wa_demo_tampil', '1') === '1',
+      fromEnv: false, source: 'pusat'
+    };
+  }
   return {
-    url: String(process.env.WA_API_URL || dbm.getSetting('wa_api_url', '') || '').trim(),
-    token: String(process.env.WA_API_TOKEN || dbm.getSetting('wa_api_token', '') || '').trim(),
-    payload: String(process.env.WA_API_PAYLOAD || dbm.getSetting('wa_api_payload', 'form') || 'form').toLowerCase(),
+    url: '', token: '', payload: payloadTenant,
     demo: dbm.getSetting('wa_demo_tampil', '1') === '1',
-    fromEnv: !!(process.env.WA_API_URL || process.env.WA_API_TOKEN)
+    fromEnv: false, source: ''
   };
 }
 async function sendWA(phone, message) {
@@ -71,4 +115,4 @@ function portalLink(pathname) {
   return b + (String(pathname || '').startsWith('/') ? pathname : '/' + pathname);
 }
 
-module.exports = { sendWA, otpMessage, waConfig, normalizePhone, portalLink };
+module.exports = { sendWA, otpMessage, waConfig, pusatConfig, normalizePhone, portalLink };

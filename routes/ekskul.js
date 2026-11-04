@@ -357,7 +357,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       const trx = r.transaksi_id ? db.prepare('SELECT * FROM transaksi WHERE id=?').get(r.transaksi_id) : null;
       return `<tr><td>${esc(dbm.periodeLabel(r.periode))}</td><td>${esc(r.jenis || '-')}</td><td class="t-strong">${esc(r.nama_pembina)}</td>
         <td class="num">${rupiah(r.jumlah)}</td><td class="mono t-sub">${esc(trx ? (trx.no_bukti || '#' + trx.id) : '-')}</td>
-        <td class="nowrap t-sub">${esc(String(r.posted_at || '').slice(0, 16))}</td><td>${esc(r.posted_by || '-')}</td>
+        <td class="nowrap t-sub">${esc(lib.stampShort(r.posted_at))}</td><td>${esc(r.posted_by || '-')}</td>
         <td class="right nowrap">${editable ? `<button class="btn btn-sm btn-icon" data-open="mQe${r.id}" title="Edit">${ui.icon('edit')}</button>
         <form method="post" action="${c.base}/ekskul/delete" style="display:inline" data-confirm="Hapus honor ${esc(r.nama_pembina)}? SELURUH item pada transaksi BKU yang sama ikut dihapus beserta transaksi BKU sasarannya."><input type="hidden" name="id" value="${r.id}"><input type="hidden" name="back" value="/ekskul/antrean"><button class="btn btn-sm btn-danger" title="Hapus tersinkron">${ui.icon('trash')}</button></form>` : ''}</td></tr>
         ${editable ? late('mQe' + r.id, {
@@ -390,7 +390,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (bku.status !== 'aktif') return res.redirect(back + '?err=' + encodeURIComponent('BKU tujuan sudah ditutup.'));
     const tanggal = String(periode) + '-01';
     const d = new Date(tanggal + 'T00:00:00');
-    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
+    const lastD = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    const last = `${lastD.getFullYear()}-${String(lastD.getMonth() + 1).padStart(2, '0')}-${String(lastD.getDate()).padStart(2, '0')}`;
     const lock = dbm.periodeLockError(bku.id, last);
     if (lock) return res.redirect(back + '?err=' + encodeURIComponent(lock));
     const total = rows.reduce((s, r) => s + jumlahOf(r), 0);

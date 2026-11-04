@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Regresi modul lama setelah penambahan fitur (transaksi, piutang, payroll, aset, tutup BKU, backup) */
 const { spawn } = require('child_process');
 const path = require('path');

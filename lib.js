@@ -60,6 +60,41 @@ function nowStamp() {
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+/* ---------------- zona waktu (WIB / Asia/Jakarta) ---------------- */
+const tz = require('./tz');
+/** label singkat zona aplikasi: 'WIB' */
+function tzLabel() { return tz.label(); }
+function tzOffset() { return tz.offsetLabel(); }
+/**
+ * Stempel waktu dapat dibaca: "04-11-2026 12:05:31 WIB".
+ * Dipakai untuk audit log, riwayat transaksi & dokumen (permintaan: DD-MM-YYYY HH:mm:ss WIB).
+ * Nilai yang tersimpan di database tetap "YYYY-MM-DD HH:mm:ss" (WIB) agar urutan teks = urutan waktu.
+ */
+function stampID(v) {
+  const s = String(v === undefined || v === null ? '' : v).trim();
+  if (!s) return '-';
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
+  if (!m) return s;
+  return `${m[3]}-${m[2]}-${m[1]} ${m[4]}:${m[5]}:${m[6] || '00'} ${tz.label()}`;
+}
+/** versi ringkas untuk kolom tabel: "04-11-2026 12:05" */
+function stampShort(v) {
+  const s = stampID(v);
+  if (s === '-' || s.length < 16) return s;
+  return s.slice(0, 16);
+}
+/** tanggal + jam tanpa detik, tanpa label: "04-11-2026 12:05" */
+function stampPlain(v) {
+  const s = stampID(v);
+  return s === '-' ? '-' : s.slice(0, 16);
+}
+/** stempel kedaluwarsa berbasis jam WIB (konsisten dengan nowStamp()) */
+function plusMinutesStamp(minutes) {
+  const d = new Date(Date.now() + (Number(minutes) || 0) * 60000);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function plusDaysStamp(days) { return plusMinutesStamp((Number(days) || 0) * 1440); }
 const SATUAN = ['', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
 function terbilang(n) {
   n = Math.floor(Math.abs(Number(n) || 0));
@@ -90,6 +125,29 @@ function fileSize(bytes) {
 }
 
 /* ---------------- passwords & tokens ---------------- */
+/**
+ * Normalisasi nomor telepon/WhatsApp Indonesia → format 62xxxxxxxxxx.
+ * Menerima "0812-3456-7890", "+62 812 3456 7890", "62812…", "812…", "(0812) …".
+ * Mengembalikan '' bila tidak ada digit yang bisa dipakai.
+ */
+function normPhone(raw) {
+  let s = String(raw === null || raw === undefined ? '' : raw).replace(/[^\d+]/g, '');
+  if (!s) return '';
+  if (s.startsWith('+')) s = s.slice(1);
+  if (s.startsWith('0')) s = '62' + s.slice(1);
+  else if (s.startsWith('8')) s = '62' + s;
+  // buang awalan ganda yang lazim (6262…, 620…)
+  s = s.replace(/^62{2,}/, '62').replace(/^6262/, '62');
+  if (s.startsWith('620')) s = '62' + s.slice(3);
+  if (!/^62\d{7,15}$/.test(s)) return '';
+  return s;
+}
+/** tampilan nomor untuk manusia: 62812… → 0812… */
+function phoneDisplay(raw) {
+  const n = String(raw || '');
+  if (/^62\d+$/.test(n)) return '0' + n.slice(2);
+  return n;
+}
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16).toString('hex');
   const h = crypto.scryptSync(String(pw), salt, 64).toString('hex');
@@ -248,6 +306,7 @@ function xlsxBuffer(sheetName, rows, widths) {
 
 module.exports = {
   esc, num, rupiah, rpShort, fileSize, tglID, todayISO, nowStamp, BULAN, terbilang, terbilangRupiah,
-  parseMoney, moneyInput,
+  tz, tzLabel, tzOffset, stampID, stampShort, stampPlain, plusMinutesStamp, plusDaysStamp,
+  parseMoney, moneyInput, normPhone, phoneDisplay,
   hashPassword, verifyPassword, token, xlsxBuffer, zip
 };

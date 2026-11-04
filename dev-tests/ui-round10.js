@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Screenshot & smoke UI ronde 10 (draf payroll, potongan kasbon, slip gaji, portal pegawai) */
 const { spawn } = require('child_process');
 const path = require('path');

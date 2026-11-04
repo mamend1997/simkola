@@ -1,6 +1,6 @@
 'use strict';
 
-module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, saas, refreshPortalMap }) => {
+module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, saas, refreshPortalMap, flashUrl }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
 
@@ -100,6 +100,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const tema = dbm.temaWarnaGlobal();
     const appNama = dbm.appNamaGlobal();
     const appLogo = dbm.appLogoGlobal();
+    const modeNow = String(dbm.getSetting('mode_tema', 'light')) === 'dark' ? 'dark' : 'light';
     const content = `<div class="split">
       <div class="card">
         <div class="card-head"><div><h3>Tema Warna Aplikasi</h3><div class="sub">Warna dasar tampilan (tombol, menu aktif, grafik &amp; aksen)</div></div>
@@ -116,6 +117,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
               ${PALET_TEMA.map(([hex, nm]) => `<button type="button" class="btn btn-sm" data-tema-set="${hex}" title="${esc(nm)}" ${ro ? 'disabled' : ''}>
                 <span style="display:inline-block;width:14px;height:14px;border-radius:4px;background:${hex};margin-right:6px;vertical-align:-2px"></span>${esc(nm)}</button>`).join('')}
             </div></div>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Mode Tampilan</h3>
+            <div class="sub">Pilih tampilan terang atau gelap untuk seluruh halaman aplikasi</div></div>
+            ${modeNow === 'dark' ? ui.badge('Mode Gelap', 'gray') : ui.badge('Mode Terang', 'green')}</div>
+          <div class="radio-cards" style="grid-template-columns:1fr 1fr">
+            <input type="radio" id="modeLight" name="mode_tema" value="light" ${modeNow !== 'dark' ? 'checked' : ''} ${ro ? 'disabled' : ''}>
+            <label for="modeLight"><span class="dot"></span>☀️ Mode Terang (Light)</label>
+            <input type="radio" id="modeDark" name="mode_tema" value="dark" ${modeNow === 'dark' ? 'checked' : ''} ${ro ? 'disabled' : ''}>
+            <label for="modeDark"><span class="dot"></span>🌙 Mode Gelap (Dark)</label>
+          </div>
+          <div class="hint" style="margin-top:8px">Mode gelap memakai latar gelap kontras tinggi pada dashboard, tabel, formulir,
+            dan portal publik. Dokumen cetak tetap putih agar hasil cetak/PDF tidak berubah.</div>
           <hr class="sep">
           <div class="card-head" style="padding:0 0 8px"><div><h3>Nama Aplikasi</h3><div class="sub">Tampil pada bilah samping, judul tab browser &amp; halaman login</div></div></div>
           <div class="field"><label>Nama Aplikasi</label>
@@ -135,14 +148,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       <div class="card">
         <div class="card-head"><div><h3>Logo Aplikasi</h3><div class="sub">Menggantikan ikon bawaan pada bilah samping &amp; halaman login</div></div></div>
         <div class="center" style="padding:14px 0 18px">
-          ${appLogo ? `<img src="${esc(appLogo)}" alt="Logo aplikasi" style="max-width:150px;max-height:150px;object-fit:contain;background:#fff;border-radius:16px;padding:8px;border:1px solid var(--line)">`
+          ${appLogo ? `<img src="${esc(appLogo)}" alt="Logo aplikasi" width="150" height="150" loading="lazy" decoding="async" style="max-width:150px;max-height:150px;object-fit:contain;background:#fff;border-radius:16px;padding:8px;border:1px solid var(--line)">`
         : `<div class="brand-mark" style="margin:0 auto;width:64px;height:64px;border-radius:18px">${ui.icon('wallet')}</div>
               <p class="help mt-2">Belum ada logo aplikasi khusus — ikon bawaan dipakai.</p>`}
         </div>
         ${ro ? '' : `<form method="post" action="${c.base}/tema/logo">
           <input type="hidden" name="logo_b64" id="app_logo_b64">
+          <input type="hidden" name="logo_b64_small" id="app_logo_b64_small">
           <div class="field"><label>Pilih berkas logo</label>
-            <input type="file" accept="image/png,image/jpeg,image/svg+xml" data-b64="app_logo_b64" data-max="5">
+            <input type="file" accept="image/png,image/jpeg,image/svg+xml" data-b64="app_logo_b64" data-thumb="1" data-max="5">
             <div class="hint" id="app_logo_b64-info">Rekomendasi <b>512 × 512 px</b> (PNG transparan) agar tajam di semua ukuran. Maks 5 MB.</div></div>
           <button class="btn btn-primary btn-block">${ui.icon('upload')}Unggah Logo Aplikasi</button>
         </form>
@@ -162,11 +176,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const hex = /^#?[0-9a-fA-F]{6}$/.test(raw) ? ('#' + raw.replace('#', '')).toUpperCase() : null;
     if (!hex) return res.redirect(req.BASE + '/tema?err=' + encodeURIComponent('Kode warna tidak valid. Gunakan format #RRGGBB.'));
     dbm.setSetting('tema_warna', hex);
+    if (req.body.mode_tema !== undefined) {
+      dbm.setSetting('mode_tema', String(req.body.mode_tema) === 'dark' ? 'dark' : 'light');
+    }
     if (req.body.app_nama !== undefined) {
       const nm = String(req.body.app_nama || '').trim().slice(0, 60);
       dbm.setSetting('app_nama', nm || 'SIMKEU Sekolah');
     }
-    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Tema aplikasi diperbarui: warna ${hex}, nama "${dbm.appNama()}"`);
+    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Tema aplikasi diperbarui: warna ${hex}, mode ${String(dbm.getSetting('mode_tema', 'light')) === 'dark' ? 'gelap' : 'terang'}, nama "${dbm.appNama()}"`);
     res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Tema & nama aplikasi disimpan.'));
   });
 
@@ -174,6 +191,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!guard(req, res, 'sekolah', 'edit')) return;
     if (req.body.hapus) {
       dbm.setSetting('app_logo', '');
+      dbm.setSetting('app_logo_small', '');
       dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Menghapus logo aplikasi kustom');
       return res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Logo aplikasi dihapus.'));
     }
@@ -184,6 +202,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const ext = (m[1].split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
       const url = await uploadMedia(req.body.logo_b64, `logo-aplikasi-${Date.now()}.${ext}`);
       dbm.setSetting('app_logo', url);
+      if (req.body.logo_b64_small) {
+        try { dbm.setSetting('app_logo_small', await uploadMedia(req.body.logo_b64_small, `logo-aplikasi-kecil-${Date.now()}.webp`)); } catch (e) { }
+      }
       dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Mengunggah logo aplikasi kustom');
       res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Logo aplikasi diperbarui.'));
     } catch (e) {
@@ -192,157 +213,167 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
   });
 
   /* ================= IDENTITAS SEKOLAH ================= */
+  const isEmail = v => !v || /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(v);
+  const isUrl = v => !v || /^https?:\/\/[^\s]+\.[^\s]+$/i.test(v);
+  /** bentuk pendidikan resmi → preset tingkat kelas (agar master kelas tetap konsisten) */
+  const BENTUK_JENJANG = { SMK: 'SMK', SMA: 'SMA/MA', MA: 'SMA/MA', SMP: 'SMP/MTs', MTS: 'SMP/MTs', SD: 'SD/MI', MI: 'SD/MI', PAUD: 'PAUD/TK' };
+  const backPath = (req, def) => {
+    const raw = String((req.body && req.body.back) || (req.query.get && req.query.get('back')) || '').trim();
+    return /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(raw) && !raw.startsWith('//') ? raw : def;
+  };
+
   get('/sekolah', (req, res) => {
     guard(req, res, 'sekolah', 'view');
     const c = ctx(req);
     const s = c.settings;
     const ro = !c.can('sekolah', 'edit');
-    const field = (label, name, val, type = 'text', hint = '') => `<div class="field"><label>${esc(label)}</label>
-      <input type="${type}" name="${name}" value="${esc(val)}" ${ro ? 'readonly' : ''}>${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
-    // host publik untuk pratinjau alamat portal (APP_BASE_URL dari .env bila ada)
-    const portalHost = String(process.env.APP_BASE_URL || req.BASE || '').replace(/\/+$/, '') || '(domain ini)';
+    const ident = dbm.identitasSekolah();
+    const inp = (name, val, extra = '') => `<input name="${name}" value="${esc(val == null ? '' : val)}" ${ro ? 'readonly' : ''} ${extra}>`;
+    const fld = (label, name, val, hint = '', extra = '') => `<div class="field"><label>${esc(label)}</label>
+      ${inp(name, val, extra)}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
     const content = `<div class="split">
-      <div class="card">
-        <div class="card-head"><div><h3>Identitas Sekolah</h3><div class="sub">Tampil otomatis sebagai kop pada setiap cetakan</div></div>
-          <div class="toolbar">${ro ? ui.badge('Hanya Lihat', 'gray') : ''}
-            <a class="btn btn-sm" href="${c.base}/tampilan-menu" title="Pengaturan Tampilan Navigation / Menu">${ui.icon('menu')}Atur Tampilan Menu</a>
-          </div></div>
-        <form method="post" action="${c.base}/sekolah">
-          ${field('1. Nama Sekolah', 'sekolah_nama', s.sekolah_nama)}
-          <div class="field"><label>2. Alamat Sekolah</label><textarea name="sekolah_alamat" ${ro ? 'readonly' : ''}>${esc(s.sekolah_alamat)}</textarea>
-            <div class="hint">Boleh multi-baris: alamat, telepon, email.</div></div>
-          <div class="row2">
-            ${field('3. Nama Kepala Sekolah', 'sekolah_kepala', s.sekolah_kepala)}
-            ${field('4. NIP / NUPTK Kepala Sekolah', 'sekolah_nip_kepala', s.sekolah_nip_kepala)}
-          </div>
-          <div class="row2">
-            ${field('5. Nama Bendahara', 'sekolah_bendahara', s.sekolah_bendahara)}
-            ${field('6. NIP / NUPTK Bendahara', 'sekolah_nip_bendahara', s.sekolah_nip_bendahara)}
-          </div>
-          <div class="row2">
-            <div class="field"><label>7. Jenjang Pendidikan</label>
-              <select name="jenjang_pendidikan" ${ro ? 'disabled' : ''}>
-                ${Object.entries(dbm.JENJANG).map(([k, v]) => `<option value="${esc(k)}" ${String(s.jenjang_pendidikan || '') === k ? 'selected' : ''}>${esc(v.label)}${v.preset.length ? ' — tingkat ' + v.preset.join(', ') : ''}</option>`).join('')}
-              </select>
-              <div class="hint">Menentukan preset tingkat kelas. Kelola di <a href="${c.base}/kelas/tingkat">Pengaturan Kelas &amp; Tingkat</a>.</div></div>
-            <div class="field"><label>Tingkat Aktif Sekarang</label>
-              <input type="text" value="${esc(dbm.tingkatAktif().join(', '))}" readonly>
-              <div class="hint">${dbm.tingkatAktif().length} tingkat aktif.</div></div>
-          </div>
-          <div class="alert info">${ui.icon('info')}<div>Tarif <b>tugas tambahan (Pembantu Kepsek / Wali Kelas)</b> dan <b>sertifikasi per jam</b>
-            kini diatur pada menu <a href="${c.base}/tarif-honor"><b>Nominal Tunjangan &amp; Honor</b></a> agar tidak ganda.</div></div>
-          <hr class="sep">
-          <div class="card-head" style="padding:0 0 8px"><div><h3>Kop Surat Resmi</h3><div class="sub">Teks &amp; ukuran font kop pada semua cetakan</div></div></div>
-          <div class="field"><label>Teks Kop Surat (satu baris = satu baris kop)</label>
-            <textarea name="kop_baris" rows="7" style="font-family:ui-monospace,monospace;font-size:12px" ${ro ? 'readonly' : ''}>${esc(s.kop_baris || '')}</textarea>
-            <div class="hint">Baris ke-4 otomatis ditampilkan paling besar &amp; tebal (nama sekolah).</div></div>
-          <div class="row2">
-            <div class="field"><label>Ukuran Font Teks (pt)</label><input type="number" step="0.5" min="6" max="24" name="kop_font" value="${esc(s.kop_font || 10)}" ${ro ? 'readonly' : ''}></div>
-            <div class="field"><label>Ukuran Font Nama Sekolah (pt)</label><input type="number" step="0.5" min="8" max="36" name="kop_font_besar" value="${esc(s.kop_font_besar || 15)}" ${ro ? 'readonly' : ''}></div>
-          </div>
-          <div class="row3">
-            <div class="field"><label>Kertas Kwitansi — Panjang (mm)</label><input type="number" step="0.5" min="60" name="kwitansi_w_mm" value="${esc(s.kwitansi_w_mm || 210)}" ${ro ? 'readonly' : ''}></div>
-            <div class="field"><label>Tinggi (mm)</label><input type="number" step="0.5" min="30" name="kwitansi_h_mm" value="${esc(s.kwitansi_h_mm || 99)}" ${ro ? 'readonly' : ''}></div>
-            <div class="field"><label>Margin (mm)</label><input type="number" step="0.5" min="0" name="kwitansi_margin_mm" value="${esc(s.kwitansi_margin_mm || 6)}" ${ro ? 'readonly' : ''}></div>
-          </div>
-          <hr class="sep">
-          <div class="card-head" style="padding:0 0 8px"><div><h3>Alamat (URL) Portal Publik</h3>
-            <div class="sub">Ujung alamat ketiga portal dapat diubah sendiri, mis. <code>portal-slip</code> → <code>portal-slip-pegawai</code></div></div></div>
-          <div class="row3">
-            <div class="field"><label>Portal Tagihan Siswa</label>
-              <input name="portal_slug" value="${esc(s.portal_slug || 'portal')}" ${ro ? 'readonly' : ''} placeholder="portal">
-              <div class="hint">Contoh alamat: <code>${esc(portalHost)}/${esc(s.portal_slug || 'portal')}</code></div></div>
-            <div class="field"><label>Portal Piutang Pegawai</label>
-              <input name="portal_pegawai_slug" value="${esc(s.portal_pegawai_slug || 'portal-pegawai')}" ${ro ? 'readonly' : ''} placeholder="portal-pegawai">
-              <div class="hint">Contoh alamat: <code>${esc(portalHost)}/${esc(s.portal_pegawai_slug || 'portal-pegawai')}</code></div></div>
-            <div class="field"><label>Portal Slip Gaji Pegawai</label>
-              <input name="portal_slip_slug" value="${esc(s.portal_slip_slug || 'portal-slip')}" ${ro ? 'readonly' : ''} placeholder="portal-slip">
-              <div class="hint">Contoh alamat: <code>${esc(portalHost)}/${esc(s.portal_slip_slug || 'portal-slip')}</code></div></div>
-          </div>
-          <div class="alert info">${ui.icon('info')}<div>Gunakan huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.
-            Alamat lama (default) tetap dapat dibuka. Perubahan langsung berlaku tanpa restart server.</div></div>
-          <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Identitas</button>`}</div>
-        </form>
-      </div>
-      <div class="card">
-        <div class="card-head"><div><h3>Logo Sekolah</h3><div class="sub">PNG/JPG, maksimal 15 MB</div></div></div>
-        <div class="center" style="padding:14px 0 18px">
-          ${s.sekolah_logo ? `<img src="${esc(s.sekolah_logo)}" alt="Logo" style="max-width:150px;max-height:150px;object-fit:contain">`
-        : `<div style="width:120px;height:120px;border-radius:50%;border:2px dashed var(--line-2);display:grid;place-items:center;margin:0 auto;color:var(--muted)">${ui.icon('school')}</div>
-              <p class="help mt-2">Belum ada logo. Unggah logo sekolah agar kop surat tampil resmi.</p>`}
-        </div>
-        ${ro ? '' : `<form method="post" action="${c.base}/sekolah/logo">
-          <input type="hidden" name="logo_b64" id="logo_b64">
-          <div class="field"><label>Pilih berkas logo</label>
-            <input type="file" accept="image/*" data-b64="logo_b64" data-max="15">
-            <div class="hint" id="logo_b64-info"></div>
-          </div>
-          <button class="btn btn-primary btn-block">${ui.icon('upload')}Unggah Logo</button>
-        </form>
-        ${s.sekolah_logo ? `<form method="post" action="${c.base}/sekolah/logo" data-confirm="Hapus logo sekolah?"><input type="hidden" name="hapus" value="1">
-          <button class="btn btn-danger btn-block mt-1">${ui.icon('trash')}Hapus Logo</button></form>` : ''}`}
-        <hr class="sep">
-        <div class="small muted">Kop ini otomatis dipakai pada: Laporan BKU, Rekonsiliasi Kas, Berita Acara Tutup BKU, Rekap Piutang, dan Kwitansi Transaksi.</div>
-      </div>
       <div>
         <div class="card mb-3">
-          <div class="card-head"><div><h3>URL Portal Publik</h3>
-            <div class="sub">Alamat unik sekolah untuk portal orang tua</div></div></div>
-          <form method="post" action="${c.base}/sekolah/portal">
-            <div class="field"><label>Custom URL Portal Publik</label>
-              <div class="flex" style="gap:6px;align-items:center">
-                <span class="small muted nowrap">${esc(portalHost)}/</span>
-                <input name="portal_slug" value="${esc((req.tenant && req.tenant.portal_slug) || s.portal_slug || '')}" ${ro ? 'readonly' : ''}
-                  placeholder="sdn-1-jakarta" style="flex:1" pattern="[a-z0-9]([a-z0-9-]{1,38})[a-z0-9]">
-                <span class="small muted nowrap">/portal</span>
-              </div>
-              <div class="hint">Pratinjau: <code>${esc(portalHost)}/${esc((req.tenant && req.tenant.portal_slug) || 'slug-sekolah')}/portal</code></div></div>
-            <div class="alert info">${ui.icon('info')}<div>Slug wajib <b>unik antar sekolah</b>, hanya huruf kecil, angka, dan tanda hubung (-), tanpa spasi/karakter khusus (3-40 karakter).</div></div>
-            ${ro ? '' : `<button class="btn btn-primary btn-block">${ui.icon('save')}Simpan URL Portal</button>`}
+          <div class="card-head"><div><h3>Informasi Umum &amp; Kontak</h3>
+            <div class="sub">Data pokok sekolah yang dipakai pada kop surat, kwitansi, laporan &amp; portal publik</div></div>
+            ${ro ? ui.badge('Hanya Lihat', 'gray') : ui.badge('Identitas Resmi', 'orange')}</div>
+          <form method="post" action="${c.base}/sekolah">
+            ${fld('Nama Sekolah', 'sekolah_nama', s.sekolah_nama, '', 'required maxlength="150"')}
+            <div class="row2">
+              ${fld('NPSN (Nomor Pokok Sekolah Nasional)', 'sekolah_npsn', ident.npsn,
+        'Wajib <b>8 digit angka</b> dan unik antar sekolah. Muncul di kop surat &amp; footer portal.',
+        'inputmode="numeric" maxlength="8" pattern="[0-9]{8}" placeholder="20211525"')}
+              ${fld('No. Telepon / WhatsApp Sekolah', 'sekolah_telp', ident.telp, 'Contoh: (0265) 773258 atau 0812xxxxxxx.', 'maxlength="40"')}
+            </div>
+            <div class="row2">
+              ${fld('Email Resmi Sekolah', 'sekolah_email', ident.email, 'Format email akan divalidasi otomatis.', 'type="email" maxlength="120" placeholder="info@sekolah.sch.id"')}
+              ${fld('Website Sekolah', 'sekolah_website', ident.website, 'Diawali <code>https://</code>, contoh: https://smkpgricikoneng.sch.id', 'maxlength="150" placeholder="https://sekolah.sch.id"')}
+            </div>
+            <div class="field"><label>Alamat Lengkap Sekolah</label>
+              <textarea name="sekolah_alamat" rows="3" ${ro ? 'readonly' : ''} placeholder="Jalan, kelurahan, kecamatan, kabupaten, kode pos">${esc(s.sekolah_alamat || '')}</textarea>
+              <div class="hint">Baris baru akan ditampilkan sebagai baris terpisah pada kop surat.</div></div>
+            <hr class="sep">
+            <div class="row2">
+              ${fld('Nama Kepala Sekolah', 'sekolah_kepala', s.sekolah_kepala, '', 'maxlength="120"')}
+              ${fld('NIP / NUPTK Kepala Sekolah', 'sekolah_nip_kepala', s.sekolah_nip_kepala, '', 'maxlength="40"')}
+            </div>
+            <div class="row2">
+              ${fld('Nama Bendahara', 'sekolah_bendahara', s.sekolah_bendahara, '', 'maxlength="120"')}
+              ${fld('NIP / NUPTK Bendahara', 'sekolah_nip_bendahara', s.sekolah_nip_bendahara, '', 'maxlength="40"')}
+            </div>
+            <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Identitas Sekolah</button>`}</div>
           </form>
         </div>
+
         <div class="card">
-          <div class="card-head"><div><h3>Domain / Subdomain Khusus</h3>
-            <div class="sub">Akses portal lewat domain sekolah sendiri</div></div>
-            ${(() => {
-      const st = String((req.tenant && req.tenant.custom_domain_status) || '').toUpperCase();
-      if (!(req.tenant && req.tenant.custom_domain)) return ui.badge('Belum Ada', 'gray');
-      return st === 'VERIFIED' ? ui.badge('Terverifikasi', 'green') : st === 'FAILED' ? ui.badge('Gagal', 'red') : ui.badge('Menunggu Verifikasi', 'amber');
-    })()}</div>
-          <form method="post" action="${c.base}/sekolah/domain">
-            <div class="field"><label>Domain / Subdomain Khusus</label>
-              <input name="custom_domain" value="${esc((req.tenant && req.tenant.custom_domain) || '')}" ${ro ? 'readonly' : ''}
-                placeholder="keuangan.sman1jakarta.sch.id"></div>
-            <div class="alert info">${ui.icon('info')}<div><b>Petunjuk konfigurasi DNS:</b><br>
-              Buka panel DNS domain Anda, lalu tambahkan <b>CNAME Record</b> yang mengarahkan subdomain Anda ke
-              <code>${esc(saas.get('saas_base_url', '') || 'portal.simkeu.com')}</code>,
-              atau <b>A Record</b> ke IP server <code>${esc(process.env.SERVER_IP || '(hubungi Super Admin)')}</code>.</div></div>
-            ${ro ? '' : `<button class="btn btn-primary btn-block">${ui.icon('refresh')}Simpan &amp; Verifikasi DNS</button>`}
+          <div class="card-head"><div><h3>Legalitas &amp; Status</h3>
+            <div class="sub">Bentuk pendidikan, status, dan kepemilikan sekolah</div></div></div>
+          <form method="post" action="${c.base}/sekolah">
+            <input type="hidden" name="bagian" value="legalitas">
+            <div class="row2">
+              <div class="field"><label>Bentuk Pendidikan</label>
+                <select name="sekolah_bentuk" ${ro ? 'disabled' : ''}>
+                  <option value="">— Pilih bentuk pendidikan —</option>
+                  ${dbm.BENTUK_PENDIDIKAN.map(([k, v]) => `<option value="${k}" ${String(ident.bentuk) === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+                </select>
+                <div class="hint">Mengubah bentuk pendidikan ikut menyesuaikan preset tingkat kelas (dapat diatur ulang di
+                  <a href="${c.base}/kelas/tingkat">Kelas &amp; Tingkat</a>).</div></div>
+              <div class="field"><label>Status Sekolah</label>
+                <div class="radio-cards" style="grid-template-columns:1fr 1fr">
+                  ${dbm.STATUS_SEKOLAH.map((v, i) => `<input type="radio" id="st${i}" name="sekolah_status" value="${v}" ${String(ident.status) === v ? 'checked' : ''} ${ro ? 'disabled' : ''}>
+                    <label for="st${i}"><span class="dot"></span>${esc(v)}</label>`).join('')}
+                </div>
+                <div class="hint">Status kelembagaan sekolah (Negeri / Swasta).</div></div>
+            </div>
+            <div class="row2">
+              <div class="field"><label>Status Kepemilikan</label>
+                <input name="sekolah_kepemilikan" value="${esc(ident.kepemilikan)}" list="kepemilikanList" ${ro ? 'readonly' : ''} maxlength="80" placeholder="Yayasan / Pemerintah Daerah">
+                <datalist id="kepemilikanList">${dbm.KEPEMILIKAN_OPTIONS.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
+                <div class="hint">Contoh: Pemerintah Daerah, Yayasan, Kementerian Agama, Perorangan.</div></div>
+              <div class="field"><label>Tingkat Kelas Aktif</label>
+                <input type="text" value="${esc(dbm.tingkatAktif().join(', '))}" readonly>
+                <div class="hint">${dbm.tingkatAktif().length} tingkat aktif · atur di <a href="${c.base}/kelas/tingkat">Pengaturan Kelas &amp; Tingkat</a>.</div></div>
+            </div>
+            <div class="alert info">${ui.icon('info')}<div><b>Kop Surat Resmi</b>, <b>Ukuran Kuitansi</b>, dan redaksional dokumen cetak kini diatur di
+              <a href="${c.base}/desain-cetak"><b>Desain Templat Cetak</b></a>. Alamat portal, slug, dan domain diatur di
+              <a href="${c.base}/portal-publik"><b>Portal Publik</b></a>.</div></div>
+            <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Legalitas &amp; Status</button>`}</div>
           </form>
-          <p class="help mt-1">Sertifikat SSL/HTTPS diterbitkan otomatis oleh proxy server setelah domain terverifikasi Super Admin.</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Pratinjau Kop Surat</h3><div class="sub">Persis seperti pada dokumen cetak</div></div>
+            <a class="btn btn-sm" href="${c.base}/desain-cetak">${ui.icon('printer')}Atur Kop</a></div>
+          <div class="doc" style="padding:14px;border:1px dashed var(--line-2);border-radius:12px;background:#fff">
+            ${ui.kop(s)}
+          </div>
+          <div class="small muted mt-2">Variabel dinamis yang dapat dipakai pada teks kop, kwitansi, dan templat cetak:
+            <code>{nama}</code> <code>{npsn}</code> <code>{bentuk}</code> <code>{status}</code> <code>{kepemilikan}</code>
+            <code>{alamat}</code> <code>{telp}</code> <code>{email}</code> <code>{website}</code>.</div>
+        </div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Logo Sekolah</h3><div class="sub">PNG/JPG · maksimal 15 MB · otomatis dioptimalkan</div></div></div>
+          <div class="center" style="padding:14px 0 18px">
+            ${s.sekolah_logo ? `<img src="${esc(s.sekolah_logo)}" alt="Logo" width="150" height="150" loading="lazy" decoding="async" style="max-width:150px;max-height:150px;object-fit:contain">`
+        : `<div style="width:120px;height:120px;border-radius:50%;border:2px dashed var(--line-2);display:grid;place-items:center;margin:0 auto;color:var(--muted)">${ui.icon('school')}</div>
+              <p class="help mt-2">Belum ada logo. Unggah logo sekolah agar kop surat tampil resmi.</p>`}
+          </div>
+          ${ro ? '' : `<form method="post" action="${c.base}/sekolah/logo">
+            <input type="hidden" name="logo_b64" id="logo_b64">
+            <div class="field"><label>Pilih berkas logo</label>
+              <input type="file" accept="image/*" data-b64="logo_b64" data-max="15">
+              <div class="hint" id="logo_b64-info"></div>
+            </div>
+            <button class="btn btn-primary btn-block">${ui.icon('upload')}Unggah Logo</button>
+          </form>
+          ${s.sekolah_logo ? `<form method="post" action="${c.base}/sekolah/logo" data-confirm="Hapus logo sekolah?"><input type="hidden" name="hapus" value="1">
+            <button class="btn btn-danger btn-block mt-1">${ui.icon('trash')}Hapus Logo</button></form>` : ''}`}
+          <hr class="sep">
+          <div class="small muted">Logo otomatis dipakai pada: kop Laporan BKU, Rekonsiliasi Kas, Berita Acara, Kwitansi, favicon, dan portal publik.</div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>Menu Terkait</h3><div class="sub">Pengaturan tampilan &amp; publikasi</div></div></div>
+          <div class="list">
+            <a class="list-row" href="${c.base}/portal-publik"><div><div class="nm">Portal Publik</div><div class="mt">Slug alamat portal, subdomain &amp; custom domain</div></div><span class="ml-auto">${ui.icon('link')}</span></a>
+            <a class="list-row" href="${c.base}/desain-cetak"><div><div class="nm">Desain Templat Cetak</div><div class="mt">Kop surat resmi &amp; ukuran kuitansi</div></div><span class="ml-auto">${ui.icon('printer')}</span></a>
+            <a class="list-row" href="${c.base}/tema"><div><div class="nm">Tema &amp; Branding</div><div class="mt">Warna, logo aplikasi, mode terang/gelap</div></div><span class="ml-auto">${ui.icon('chart')}</span></a>
+            <a class="list-row" href="${c.base}/tampilan-menu"><div><div class="nm">Pengaturan Tampilan Menu</div><div class="mt">Urutan, judul &amp; ikon menu</div></div><span class="ml-auto">${ui.icon('menu')}</span></a>
+          </div>
         </div>
       </div>
     </div>`;
-    page(req, res, { title: 'Identitas Sekolah', sub: 'Kop surat, kepala sekolah & bendahara', active: 'sekolah', content });
+    page(req, res, { title: 'Identitas Sekolah', sub: 'Nama, NPSN, kontak & legalitas sekolah', active: 'sekolah', content });
   });
 
   post('/sekolah', (req, res) => {
     if (!guard(req, res, 'sekolah', 'edit')) return;
-    /* validasi dulu alamat (slug) portal publik sebelum menulis setting apa pun */
-    const slugBaru = {};
-    for (const [key, settingKey] of Object.entries(dbm.PORTAL_SLUG_KEYS)) {
-      if (req.body[settingKey] === undefined) continue;
-      const raw = String(req.body[settingKey] || '').trim().toLowerCase();
-      const errSlug = raw ? dbm.portalSlugError(raw, key) : null;
-      if (errSlug) return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent(errSlug));
-      slugBaru[settingKey] = raw || dbm.PORTAL_SLUG_DEFAULT[key];
+    const ident = dbm.identitasSekolah();
+    // ---- validasi NPSN (8 digit & unik antar sekolah) ----
+    if (req.body.sekolah_npsn !== undefined) {
+      const npsn = saas && saas.npsnNormalize ? saas.npsnNormalize(req.body.sekolah_npsn) : String(req.body.sekolah_npsn || '').trim();
+      const errN = saas && saas.npsnError ? saas.npsnError(npsn, req.tenant ? req.tenant.id : 0) : (npsn.length === 8 ? null : 'NPSN harus 8 digit.');
+      if (errN) return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent(errN));
     }
-    const keys = ['sekolah_nama', 'sekolah_alamat', 'sekolah_kepala', 'sekolah_nip_kepala', 'sekolah_bendahara', 'sekolah_nip_bendahara'];
+    if (req.body.sekolah_email !== undefined && !isEmail(String(req.body.sekolah_email || '').trim())) {
+      return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent('Format email sekolah tidak valid (contoh: info@sekolah.sch.id).'));
+    }
+    if (req.body.sekolah_website !== undefined && !isUrl(String(req.body.sekolah_website || '').trim())) {
+      return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent('Format website tidak valid — diawali https:// (contoh: https://sekolah.sch.id).'));
+    }
+    // ---- identitas umum & kontak ----
+    const keys = ['sekolah_nama', 'sekolah_alamat', 'sekolah_kepala', 'sekolah_nip_kepala', 'sekolah_bendahara', 'sekolah_nip_bendahara',
+      'sekolah_telp', 'sekolah_email', 'sekolah_website', 'sekolah_status', 'sekolah_kepemilikan'];
     for (const k of keys) if (req.body[k] !== undefined) dbm.setSetting(k, String(req.body[k]).trim());
-    if (req.body.kop_baris !== undefined) dbm.setSetting('kop_baris', String(req.body.kop_baris).replace(/\r/g, ''));
-    // jenjang pendidikan → preset tingkat otomatis (hanya bila berubah / belum pernah diatur)
+    if (req.body.sekolah_npsn !== undefined) {
+      const npsn = saas && saas.npsnNormalize ? saas.npsnNormalize(req.body.sekolah_npsn) : String(req.body.sekolah_npsn || '').trim();
+      dbm.setSetting('sekolah_npsn', npsn);
+      if (saas && saas.setTenantNpsn && req.tenant) saas.setTenantNpsn(req.tenant.id, npsn);
+    }
+    // ---- jenjang pendidikan (kompatibilitas): langsung memilih preset tingkat kelas ----
     let presetInfo = '';
-    if (req.body.jenjang_pendidikan !== undefined) {
+    if (req.body.jenjang_pendidikan !== undefined && !req.body.sekolah_bentuk) {
       const j = String(req.body.jenjang_pendidikan || '').trim();
       if (dbm.JENJANG[j]) {
         const before = String(dbm.getSetting('jenjang_pendidikan', ''));
@@ -353,14 +384,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         }
       }
     }
-    for (const k of ['kop_font', 'kop_font_besar', 'kwitansi_w_mm', 'kwitansi_h_mm', 'kwitansi_margin_mm']) {
-      if (req.body[k] !== undefined) {
-        const v = Number(String(req.body[k]).replace(',', '.'));
-        if (Number.isFinite(v) && v > 0) dbm.setSetting(k, v);
+    // ---- bentuk pendidikan → preset tingkat kelas ----
+    if (req.body.sekolah_bentuk !== undefined) {
+      const b = String(req.body.sekolah_bentuk || '').trim().toUpperCase();
+      if (!b || dbm.BENTUK_LABEL[b]) {
+        const before = String(dbm.getSetting('sekolah_bentuk', ''));
+        dbm.setSetting('sekolah_bentuk', b);
+        const jenjang = BENTUK_JENJANG[b];
+        if (jenjang && b !== before && dbm.JENJANG[jenjang]) {
+          dbm.setSetting('jenjang_pendidikan', jenjang);
+          const r = dbm.applyJenjangPreset(jenjang, true);
+          presetInfo = r.changed ? ` Preset tingkat ${jenjang}: ${r.list.join(', ')}.` : '';
+        }
       }
     }
-    for (const [settingKey, v] of Object.entries(slugBaru)) dbm.setSetting(settingKey, v);
-    dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Memperbarui identitas sekolah / kop surat');
+    dbm.logAudit(req.user, 'EDIT', 'sekolah',
+      `Memperbarui identitas resmi sekolah (NPSN ${dbm.getSetting('sekolah_npsn', '-')}, bentuk ${dbm.BENTUK_LABEL[dbm.getSetting('sekolah_bentuk', '')] || '-'})`);
     res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Identitas sekolah berhasil disimpan.' + presetInfo));
   });
 
@@ -368,12 +407,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!guard(req, res, 'sekolah', 'edit')) return;
     if (req.body.hapus) {
       dbm.setSetting('sekolah_logo', '');
+      dbm.setSetting('sekolah_logo_small', '');
       dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Menghapus logo sekolah');
       return res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Logo dihapus.'));
     }
     try {
       const url = await uploadMedia(req.body.logo_b64, 'logo-sekolah.' + ((String(req.body.logo_b64).match(/^data:image\/(\w+)/) || [])[1] || 'png'));
       dbm.setSetting('sekolah_logo', url);
+      if (req.body.logo_b64_small) {
+        try { dbm.setSetting('sekolah_logo_small', await uploadMedia(req.body.logo_b64_small, 'logo-sekolah-kecil.webp')); } catch (e) { }
+      }
       dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Mengunggah logo sekolah');
       res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Logo berhasil diunggah.'));
     } catch (e) {
@@ -381,10 +424,221 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     }
   });
 
+  /* ================= PORTAL PUBLIK (slug, subdomain & custom domain) ================= */
+  get('/portal-publik', (req, res) => {
+    guard(req, res, 'sekolah', 'view');
+    const c = ctx(req);
+    const s = c.settings;
+    const ro = !c.can('sekolah', 'edit');
+    const t = req.tenant || {};
+    const localHost = String(process.env.APP_BASE_URL || req.BASE || '').replace(/\/+$/, '') || '(domain ini)';
+    const platformHost = String(saas.get('saas_base_url', '') || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const baseHost = String(process.env.APP_BASE_URL || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const domStatus = String(t.custom_domain_status || '').toUpperCase();
+    const domBadge = !t.custom_domain ? ui.badge('Belum Ada', 'gray')
+      : domStatus === 'VERIFIED' ? ui.badge('Terverifikasi', 'green')
+        : domStatus === 'FAILED' ? ui.badge('Gagal Verifikasi', 'red') : ui.badge('Menunggu Verifikasi', 'amber');
+    const serverIp = (saas.serverIp && saas.serverIp()) || '(belum diatur Super Admin)';
+    const cnameTarget = platformHost || 'portal.simkeu.com';
+    const tenantSlug = String(t.portal_slug || '');
+    /* ---- teks portal (judul tab + sub-judul banner) & status publikasi ---- */
+    const txt = (saas.portalText ? saas.portalText(s) : { title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA', defaultTitle: 'Cek Tagihan', defaultSubtitle: 'PORTAL CEK TAGIHAN IURAN SISWA' });
+    const namaSekolah = String(s.sekolah_nama || t.nama || 'Sekolah');
+    const publishedOn = String(s.portal_aktif || '1') === '1';
+    const pegawaiOn = String(s.portal_pegawai_aktif || '1') === '1';
+    const slipOn = String(s.portal_slip_aktif || '1') === '1';
+    const swRow = (name, on, label, sub, href, extra = '') => `<div class="publ-row">
+      <label class="sw">
+        <input type="checkbox" name="${name}" value="1" ${on ? 'checked' : ''} ${ro ? 'disabled' : ''}>
+        <span class="sw-track"></span>
+        <span class="sw-label">${esc(label)}</span>
+        <span class="sw-state">${on ? 'ON' : 'OFF'}</span>
+      </label>
+      <div class="publ-meta">
+        <a class="url-chip" href="${esc(href)}" target="_blank" rel="noopener">${ui.icon('link')}${esc(href.replace(/^https?:\/\/[^/]+/, ''))}</a>
+        <span class="small muted">${sub}${extra}</span>
+      </div>
+    </div>`;
+    const pst = (saas.portalStatusOf ? saas.portalStatusOf(t) : 'aktif');
+    const pstInfo = (saas.portalStatusInfo ? saas.portalStatusInfo(t) : { label: 'Aktif', color: 'green', desc: '' });
+    const superAktif = pst === 'aktif';
+    const adminBanner = superAktif ? '' : `<div class="alert err mb-3" id="bannerPortalAdmin">${ui.icon('lock')}<div>
+      <b>Halaman portal publik Anda sedang dinonaktifkan oleh Administrator Pusat.</b><br>
+      Status dari pusat: ${ui.badge(pstInfo.label, pstInfo.color)}
+      ${t.portal_note ? ` · Catatan: <i>${esc(t.portal_note)}</i>` : ''}
+      ${t.portal_locked_by ? `<div class="small" style="margin-top:4px">Ditutup oleh ${esc(t.portal_locked_by)}${t.portal_locked_at ? ' · ' + esc(lib.stampShort(t.portal_locked_at)) : ''}</div>` : ''}
+      <div class="small" style="margin-top:4px">Selama status ini berlaku, pengunjung tidak dapat membuka alamat portal publik. Hubungi Super Admin Pusat untuk mengaktifkan kembali.</div>
+    </div></div>`;
+    const pvLogo = s.sekolah_logo
+      ? `<img src="${esc(s.sekolah_logo)}" alt="Logo sekolah" width="44" height="44" loading="lazy" decoding="async">`
+      : `<div class="pv-ph">${esc(namaSekolah.charAt(0))}</div>`;
+    const slugRow = (label, key, def, hint) => `<div class="field"><label>${esc(label)}</label>
+      <input name="${key}" value="${esc(s[key] || def)}" ${ro ? 'readonly' : ''} placeholder="${esc(def)}" maxlength="40" pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9]">
+      <div class="hint">${hint}</div></div>`;
+    const content = `${adminBanner}<div class="split">
+      <div>
+        <div class="card mb-3" id="publikasiPortal">
+          <div class="card-head"><div><h3>Publikasi &amp; Teks Halaman Portal</h3>
+            <div class="sub">Sakelar tayang, judul tab browser &amp; sub-judul banner portal</div></div>
+            ${publishedOn ? ui.badge('Dipublikasikan', 'green') : ui.badge('Tidak Dipublikasikan', 'gray')}</div>
+          <form method="post" action="${c.base}/sekolah/portal-publik/simpan">
+            <input type="hidden" name="simpan_publikasi" value="1">
+            <div class="publ-list">
+              ${swRow('portal_aktif', publishedOn, 'Publikasikan Halaman Portal', 'Portal cek tagihan iuran siswa (orang tua/wali).', `${c.base}/${dbm.portalSlugs().siswa}`)}
+              ${swRow('portal_pegawai_aktif', pegawaiOn, 'Portal Piutang Pegawai', 'Cek sisa piutang pegawai (verifikasi OTP WhatsApp).', `${c.base}/${dbm.portalSlugs().pegawai}`)}
+              ${swRow('portal_slip_aktif', slipOn, 'Portal Slip Gaji Pegawai', 'Unduh slip gaji pegawai (verifikasi OTP WhatsApp).', `${c.base}/${dbm.portalSlugs().slip}`)}
+            </div>
+            <div class="hint" style="margin:10px 0 14px 0">Bila sakelar dimatikan, halaman tersebut otomatis tidak dapat dibuka.
+              Seluruh pengaturan &amp; data tetap tersimpan dan langsung aktif lagi saat sakelar dinyalakan.</div>
+            <div class="row2">
+              <div class="field"><label>Judul Tab Browser (page_title)</label>
+                <input type="text" name="portal_page_title" value="${esc(s.portal_page_title || '')}" maxlength="40"
+                  placeholder="${esc(txt.defaultTitle)}" ${ro ? 'readonly' : ''} data-pv-title>
+                <div class="hint">Tampil pada tab browser: <code data-pv-tabhint>${esc(txt.title)} · ${esc(namaSekolah)}</code>.
+                  Kosongkan untuk memakai default <b>${esc(txt.defaultTitle)}</b>.</div></div>
+              <div class="field"><label>Sub-Judul Banner Portal</label>
+                <input type="text" name="portal_subtitle" value="${esc(s.portal_subtitle || '')}" maxlength="60"
+                  placeholder="${esc(txt.defaultSubtitle)}" ${ro ? 'readonly' : ''} data-pv-sub>
+                <div class="hint">Maksimal <b>60 karakter</b> agar tata letak portal di layar HP tetap rapi.
+                  Kosongkan untuk memakai default <b>${esc(txt.defaultSubtitle)}</b>.</div></div>
+            </div>
+            <div class="card-head" style="padding:0;margin:4px 0 8px"><div><h3 style="font-size:14px">Pratinjau Langsung</h3>
+              <div class="sub">Tab browser &amp; banner portal — berubah saat Anda mengetik</div></div></div>
+            <div class="portal-preview" data-portal-preview
+              data-def-title="${esc(txt.defaultTitle)}" data-def-sub="${esc(txt.defaultSubtitle)}"
+              data-school="${esc(namaSekolah)}">
+              <div class="pv-tab"><span class="pv-dot"></span><span class="pv-title" data-pv-tab>${esc(txt.title)} · ${esc(namaSekolah)}</span></div>
+              <div class="pv-banner">
+                ${pvLogo}
+                <div><div class="pv-name">${esc(namaSekolah)}</div><div class="pv-sub" data-pv-subtitle>${esc(txt.subtitle)}</div></div>
+              </div>
+              <div class="pv-body">Cuplikan isi halaman: formulir cek tagihan iuran siswa, rincian per bulan, dan kolom catatan orang tua.</div>
+            </div>
+            ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Publikasi &amp; Teks</button></div>`}
+          </form>
+        </div>
+
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Alamat (URL) Portal Publik</h3>
+            <div class="sub">Ujung alamat ketiga portal dapat diubah sendiri, mis. <code>portal-slip</code> → <code>portal-slip-pegawai</code></div></div>
+            ${ro ? ui.badge('Hanya Lihat', 'gray') : ui.badge('Berlaku Langsung', 'green')}</div>
+          <form method="post" action="${c.base}/sekolah/portal-slug">
+            <div class="row3">
+              ${slugRow('Portal Tagihan Siswa', 'portal_slug', 'portal', `Contoh: <code>${esc(localHost)}/${esc(s.portal_slug || 'portal')}</code>`)}
+              ${slugRow('Portal Piutang Pegawai', 'portal_pegawai_slug', 'portal-pegawai', `Contoh: <code>${esc(localHost)}/${esc(s.portal_pegawai_slug || 'portal-pegawai')}</code>`)}
+              ${slugRow('Portal Slip Gaji Pegawai', 'portal_slip_slug', 'portal-slip', `Contoh: <code>${esc(localHost)}/${esc(s.portal_slip_slug || 'portal-slip')}</code>`)}
+            </div>
+            <div class="alert info">${ui.icon('info')}<div>Gunakan huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.
+              Alamat bawaan tetap dapat dibuka. Perubahan langsung berlaku tanpa restart server.</div></div>
+            ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Alamat Portal</button></div>`}
+          </form>
+        </div>
+
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Subdomain / URL Portal Sekolah</h3>
+            <div class="sub">Slug unik antar sekolah untuk alamat portal sekolah ini</div></div></div>
+          <form method="post" action="${c.base}/sekolah/portal">
+            <input type="hidden" name="back" value="/portal-publik">
+            <div class="field"><label>Custom URL Slug</label>
+              <div class="flex" style="gap:6px;align-items:center">
+                <span class="small muted nowrap">${esc(localHost)}/</span>
+                <input name="portal_slug" value="${esc(tenantSlug)}" ${ro ? 'readonly' : ''} placeholder="sdn-1-jakarta" style="flex:1" pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9]">
+                <span class="small muted nowrap">/portal</span>
+              </div>
+              <div class="hint">Pratinjau: <code>${esc(localHost)}/${esc(tenantSlug || 'slug-sekolah')}/portal</code></div></div>
+            <div class="alert info">${ui.icon('info')}<div>Slug wajib <b>unik antar sekolah</b>, hanya huruf kecil, angka, dan tanda hubung (-), tanpa spasi (3–40 karakter).</div></div>
+            <div class="kv mb-2">
+              <dt>Alamat bawaan platform</dt><dd><code>${esc(baseHost || localHost)}${esc(tenantSlug ? '/' + tenantSlug : '')}</code></dd>
+              <dt>Kode sekolah</dt><dd><b>${esc(t.school_code || '-')}</b></dd>
+            </div>
+            ${ro ? '' : `<button class="btn btn-primary btn-block">${ui.icon('save')}Simpan URL Portal</button>`}
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h3>Custom Domain (Domain / Subdomain Sendiri)</h3>
+            <div class="sub">Akses portal lewat domain sekolah sendiri</div></div>${domBadge}</div>
+          <form method="post" action="${c.base}/sekolah/domain">
+            <input type="hidden" name="back" value="/portal-publik">
+            <div class="field"><label>Domain / Subdomain Khusus</label>
+              <input name="custom_domain" value="${esc(t.custom_domain || '')}" ${ro ? 'readonly' : ''}
+                placeholder="keuangan.sman1jakarta.sch.id">
+              <div class="hint">Tanpa <code>https://</code> dan tanpa garis miring di akhir.</div></div>
+            <div class="card" style="padding:14px;background:var(--o-50);border:1px solid var(--line)">
+              <div class="t-strong mb-1">Petunjuk Konfigurasi DNS (pilih salah satu)</div>
+              <div class="small" style="line-height:1.7">
+                <b>Opsi 1 — CNAME Record</b><br>
+                Nama/Host: <code>subdomain</code> sekolah Anda → Target/Value: <code>${esc(cnameTarget)}</code><br>
+                <span class="muted">Cocok bila penyedia DNS mendukung CNAME pada subdomain.</span>
+                <hr class="sep" style="margin:10px 0">
+                <b>Opsi 2 — A Record (Direkomendasikan)</b><br>
+                Nama/Host: <code>subdomain</code> sekolah Anda → Target/Value: <code>${esc(serverIp)}</code><br>
+                <span class="muted">Gunakan bila CNAME gagal/tidak cocok. Arahkan langsung ke IP dedicated server.</span>
+              </div>
+            </div>
+            <div class="alert info mt-2">${ui.icon('shield')}<div>Verifikasi otomatis mengecek <b>pengarah IP (A Record)</b> dan <b>Host Domain (HTTP_HOST)</b> sekaligus,
+              sehingga domain langsung aktif tanpa error bila salah satu pengarah sudah benar.
+              Sertifikat SSL/HTTPS diterbitkan otomatis oleh proxy server setelah domain terverifikasi.</div></div>
+            ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('refresh')}Simpan &amp; Verifikasi DNS</button></div>`}
+          </form>
+          <p class="help mt-1">Bila status masih <b>Menunggu Verifikasi</b>, propagasi DNS umumnya memerlukan 5 menit–24 jam.
+            Super Admin Pusat juga dapat memverifikasi manual dari panelnya.</p>
+        </div>
+      </div>
+      <div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Status Portal</h3><div class="sub">Ringkasan publikasi portal sekolah</div></div></div>
+          <div class="kv">
+            <dt>Portal tagihan siswa</dt><dd>${publishedOn ? ui.badge('Dipublikasikan', 'green') : ui.badge('Tidak Dipublikasikan', 'gray')}</dd>
+            <dt>Portal piutang pegawai</dt><dd>${pegawaiOn ? ui.badge('Dipublikasikan', 'green') : ui.badge('Tidak Dipublikasikan', 'gray')}</dd>
+            <dt>Portal slip gaji</dt><dd>${slipOn ? ui.badge('Dipublikasikan', 'green') : ui.badge('Tidak Dipublikasikan', 'gray')}</dd>
+            <dt>Status dari Super Admin</dt><dd>${ui.badge(pstInfo.label, pstInfo.color)}</dd>
+            <dt>Alamat portal</dt><dd>${tenantSlug ? `<span class="mono">/${esc(tenantSlug)}/portal</span>` : '<span class="muted">(tidak ada)</span>'}</dd>
+            <dt>Custom domain</dt><dd>${t.custom_domain ? `<span class="mono">${esc(t.custom_domain)}</span>` : '-'}</dd>
+            <dt>Status domain</dt><dd>${domBadge}</dd>
+          </div>
+          <div class="alert ${superAktif ? 'info' : 'warn'} mt-2">${ui.icon(superAktif ? 'info' : 'alert')}<div>
+            ${superAktif
+        ? `Halaman publik hanya dapat dibuka pengunjung bila <b>sakelar sekolah ON</b> <u>dan</u> status dari Super Admin <b>Aktif</b>.`
+        : `Halaman publik sedang <b>diblokir Administrator Pusat</b> (${esc(pstInfo.label)}), sehingga tidak dapat dibuka pengunjung.`}</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>Identitas pada Portal</h3><div class="sub">Nama & kontak sekolah tampil di portal</div></div></div>
+          <div class="kv">
+            <dt>Nama sekolah</dt><dd>${esc(s.sekolah_nama || '-')}</dd>
+            <dt>NPSN</dt><dd>${esc(s.sekolah_npsn || '-')}</dd>
+            <dt>Telepon</dt><dd>${esc(s.sekolah_telp || '-')}</dd>
+            <dt>Email</dt><dd>${esc(s.sekolah_email || '-')}</dd>
+            <dt>Website</dt><dd>${esc(s.sekolah_website || '-')}</dd>
+          </div>
+          <a class="btn btn-sm btn-block mt-2" href="${c.base}/sekolah">${ui.icon('edit')}Ubah Identitas Sekolah</a>
+        </div>
+      </div>
+    </div>`;
+    page(req, res, { title: 'Portal Publik', sub: 'Alamat portal, subdomain & custom domain sekolah', active: 'portal_publik', content });
+  });
+
+  /* alamat (slug) ketiga portal — divalidasi semua sebelum disimpan */
+  post('/sekolah/portal-slug', (req, res) => {
+    if (!guard(req, res, 'sekolah', 'edit')) return;
+    const baru = {};
+    for (const [key, settingKey] of Object.entries(dbm.PORTAL_SLUG_KEYS)) {
+      if (req.body[settingKey] === undefined) continue;
+      const raw = String(req.body[settingKey] || '').trim().toLowerCase();
+      const err = raw ? dbm.portalSlugError(raw, key) : null;
+      if (err) return res.redirect(req.BASE + '/portal-publik?err=' + encodeURIComponent(err));
+      baru[settingKey] = raw || dbm.PORTAL_SLUG_DEFAULT[key];
+    }
+    for (const [k, v] of Object.entries(baru)) dbm.setSetting(k, v);
+    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Mengubah alamat portal publik (${Object.values(baru).join(', ')})`);
+    res.redirect(req.BASE + '/portal-publik?ok=' + encodeURIComponent('Alamat portal publik disimpan.'));
+  });
+
   /* ---------------- URL portal (slug unik antar sekolah) ---------------- */
   post('/sekolah/portal', (req, res) => {
     if (!guard(req, res, 'sekolah', 'edit')) return;
     const t = req.tenant;
+    const back = backPath(req, '/portal-publik');
     try {
       const raw = String(req.body.portal_slug || '').trim().toLowerCase();
       const err = saas.portalSlugError(raw, t.id);
@@ -393,37 +647,82 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       dbm.setSetting('portal_slug', raw);
       dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Mengubah URL portal publik menjadi /' + raw + '/portal');
       if (typeof refreshPortalMap === 'function') refreshPortalMap();
-      res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('URL portal publik disimpan: /' + raw + '/portal'));
+      res.redirect(req.BASE + flashUrl(back, 'ok', 'URL portal publik disimpan: /' + raw + '/portal'));
     } catch (e) {
-      res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent(e.message));
+      res.redirect(req.BASE + flashUrl(back, 'err', e.message));
     }
   });
 
-  /* ---------------- domain khusus + verifikasi DNS ---------------- */
+  /* ---------------- publikasi & teks halaman portal (sakelar + judul tab + sub-judul) ---------------- */
+  post('/sekolah/portal-publik/simpan', (req, res) => {
+    if (!guard(req, res, 'sekolah', 'edit')) return;
+    try {
+      const title = String(req.body.portal_page_title || '').replace(/\s+/g, ' ').trim();
+      const subtitle = String(req.body.portal_subtitle || '').replace(/\s+/g, ' ').trim();
+      const err = saas.portalTextError ? saas.portalTextError({ title, subtitle }) : null;
+      if (err) throw new Error(err);
+      /* sakelar publikasi ketiga portal (nilai '1'/'0').
+         Hanya diproses bila form publikasi yang dikirim (penanda simpan_publikasi) —
+         checkbox yang tidak dicentang memang tidak ikut terkirim. */
+      const withSwitches = String(req.body.simpan_publikasi || '') === '1';
+      const SW = [
+        ['portal_aktif', 'Portal tagihan siswa'],
+        ['portal_pegawai_aktif', 'Portal piutang pegawai'],
+        ['portal_slip_aktif', 'Portal slip gaji']
+      ];
+      const changed = [];
+      if (withSwitches) {
+        for (const [key, label] of SW) {
+          const val = req.body[key] ? '1' : '0';
+          const before = dbm.getSetting(key, '1') === '1';
+          if (before !== (val === '1')) changed.push(`${label}: ${val === '1' ? 'ON' : 'OFF'}`);
+          dbm.setSetting(key, val);
+        }
+      }
+      dbm.setSetting('portal_page_title', title);
+      dbm.setSetting('portal_subtitle', subtitle);
+      dbm.logAudit(req.user, 'EDIT PORTAL', 'sekolah',
+        `Portal publik — ${withSwitches ? (changed.length ? changed.join(' · ') : 'sakelar tidak berubah') : 'teks saja'}; ` +
+        `judul "${title || '(default)'}", sub-judul "${subtitle || '(default)'}"`);
+      const anyOff = withSwitches && SW.some(([key]) => !req.body[key]);
+      res.redirect(req.BASE + flashUrl('/portal-publik', 'ok',
+        !withSwitches ? 'Teks portal publik disimpan.'
+          : anyOff ? 'Pengaturan portal disimpan. Halaman yang sakelarnya OFF dinonaktifkan (data tetap tersimpan).'
+            : 'Pengaturan portal publik disimpan — ketiga halaman aktif.'));
+    } catch (e) {
+      res.redirect(req.BASE + flashUrl('/portal-publik', 'err', e.message));
+    }
+  });
+
+  /* ---------------- domain khusus + verifikasi DNS (CNAME atau A Record) ---------------- */
   post('/sekolah/domain', async (req, res) => {
     if (!guard(req, res, 'sekolah', 'edit')) return;
     const t = req.tenant;
+    const back = backPath(req, '/portal-publik');
     try {
       const dom = String(req.body.custom_domain || '').trim();
       if (!dom) {
         saas.setCustomDomain(t.id, '', req.user);
-        return res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Domain khusus dilepas.'));
+        return res.redirect(req.BASE + flashUrl(back, 'ok', 'Domain khusus dilepas.'));
       }
       const err = saas.domainError(dom, t.id);
       if (err) throw new Error(err);
       saas.setCustomDomain(t.id, dom, req.user, 'pending');
       dbm.logAudit(req.user, 'AJUKAN DOMAIN', 'sekolah', 'Mengajukan domain khusus ' + dom);
-      const chk = await saas.checkDns(dom);
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+      const chk = await saas.checkDns(dom, { host });
       if (chk.ok) {
         saas.setCustomDomain(t.id, dom, req.user, 'verified');
-        return res.redirect(req.BASE + '/sekolah?ok=' + encodeURIComponent('Domain ' + dom + ' terverifikasi (' + chk.note + '). Portal dapat diakses lewat domain tersebut.'));
+        const extra = chk.hostMatch ? ' Host domain cocok.' : ' Domain aktif setelah DNS mengarah ke server.';
+        return res.redirect(req.BASE + flashUrl(back, 'ok', 'Domain ' + dom + ' terverifikasi (' + chk.note + ').' + extra));
       }
       saas.setCustomDomain(t.id, dom, req.user, 'pending');
-      res.redirect(req.BASE + '/sekolah?warn=' + encodeURIComponent('Domain ' + dom + ' disimpan, menunggu verifikasi. Status DNS: ' + chk.note));
+      res.redirect(req.BASE + flashUrl(back, 'warn', 'Domain ' + dom + ' disimpan, menunggu verifikasi. Status DNS: ' + chk.note));
     } catch (e) {
-      res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent(e.message));
+      res.redirect(req.BASE + flashUrl(back, 'err', e.message));
     }
   });
+
 
   /* ================= TAHUN AJARAN ================= */
   get('/tahun-ajaran', (req, res) => {

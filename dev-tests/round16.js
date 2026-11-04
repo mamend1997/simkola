@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 16 — Portal Slip Gaji: dropdown periode (bulan & tahun), data realtime per
    periode, pesan "belum tersedia", cetak sesuai periode terpilih. */
 const { spawn } = require('child_process');

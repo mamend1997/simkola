@@ -82,6 +82,10 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
   addCol('tenants', 'wa_notify', 'INTEGER NOT NULL DEFAULT 1');
   S.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_portal_slug ON tenants(portal_slug) WHERE portal_slug IS NOT NULL AND portal_slug<>\'\'');
   S.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_custom_domain ON tenants(custom_domain) WHERE custom_domain IS NOT NULL AND custom_domain<>\'\'');
+  // NPSN unik (8 digit). Dibuat kondisional: bila data lama sudah ganda, indeks dilewati
+  // dan validasi aplikasi (npsnError) tetap mencegah duplikasi baru.
+  try { S.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_npsn ON tenants(npsn) WHERE npsn IS NOT NULL AND npsn<>''"); }
+  catch (e) { console.error('[npsn-index]', e.message); }
 
   const DEFAULTS = {
     maintenance_aktif: '0',
@@ -89,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     maintenance_selesai: '',
     maint_last_notice: '',
     wa_api_url: '', wa_api_token: '', wa_sender: '', wa_payload: 'form', wa_aktif: '0', wa_demo: '1',
-    saas_base_url: ''
+    saas_base_url: '', saas_server_ip: '', portal_cname_target: ''
   };
   for (const [k, v] of Object.entries(DEFAULTS)) S.prepare('INSERT OR IGNORE INTO saas_settings (k,v) VALUES (?,?)').run(k, v);
 
@@ -144,8 +148,14 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     if (err) throw new Error(err);
     S.prepare('UPDATE tenants SET portal_slug=?,updated_at=? WHERE id=?').run(String(slug).trim().toLowerCase(), lib.nowStamp(), id);
     syncTenantSetting(id, 'portal_slug', String(slug).trim().toLowerCase());
+    resetSlugCache();
     logSaas(user, 'UBAH SLUG', 'tenant', `${t.nama}: alamat portal → /${slug}`, id);
     return tenantById(id);
+  }
+
+  /** cache slug portal (db.js) tidak sadar tenant → wajib dikosongkan setiap slug berubah */
+  function resetSlugCache() {
+    try { if (dbm.resetPortalSlugCache) dbm.resetPortalSlugCache(); } catch (e) { }
   }
 
   function syncTenantSetting(tenantId, key, value) {
@@ -153,6 +163,125 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
       const conn = dbm.openTenantConn(tenantId, (tenantById(tenantId) || {}).db_file);
       conn.prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(String(key), String(value ?? ''));
     } catch (e) { }
+  }
+
+  /* ================= portal publik: status akses & teks ================= */
+  /* Status akses publik ditentukan Super Admin Pusat (override tenant):
+     aktif   → halaman publik dapat dibuka siapa saja
+     nonaktif → disembunyikan (404 Not Found)
+     private  → hanya untuk kalangan internal sekolah (403 Forbidden) */
+  const PORTAL_STATUS = {
+    aktif: { key: 'aktif', label: 'Aktif', color: 'green', desc: 'Dapat dibuka siapa saja' },
+    nonaktif: { key: 'nonaktif', label: 'Non-Aktif', color: 'red', desc: 'Disembunyikan — pengunjung menerima 404' },
+    private: { key: 'private', label: 'Private', color: 'amber', desc: 'Akses terbatas — pengunjung menerima 403' }
+  };
+  const PORTAL_TEXT_DEFAULT = { title: 'Cek Tagihan', subtitle: 'PORTAL CEK TAGIHAN IURAN SISWA' };
+  const PORTAL_TITLE_MAX = 40;
+  const PORTAL_SUBTITLE_MAX = 60;
+
+  function portalStatusOf(t) {
+    const k = String((t && t.portal_status) || 'aktif').trim().toLowerCase();
+    return PORTAL_STATUS[k] ? k : 'aktif';
+  }
+  function portalStatusInfo(t) { return PORTAL_STATUS[portalStatusOf(t)]; }
+
+  function setPortalStatus(id, status, note, user) {
+    const t = tenantById(id);
+    if (!t) throw new Error('Sekolah tidak ditemukan.');
+    const k = String(status || '').trim().toLowerCase();
+    if (!PORTAL_STATUS[k]) throw new Error('Status akses publik tidak dikenal.');
+    const now = lib.nowStamp();
+    const locked = k !== 'aktif';
+    S.prepare('UPDATE tenants SET portal_status=?,portal_note=?,portal_locked_at=?,portal_locked_by=?,updated_at=? WHERE id=?')
+      .run(k, String(note || '').slice(0, 200), locked ? now : null, locked ? (user ? user.nama : 'sistem') : null, now, id);
+    logSaas(user, locked ? 'BLOKIR PORTAL PUBLIK' : 'BUKA PORTAL PUBLIK', 'portal',
+      `${t.nama}: status akses publik → ${PORTAL_STATUS[k].label}${note ? ' · ' + note : ''}`, id);
+    return tenantById(id);
+  }
+
+  /** hapus halaman publik: kosongkan slug + kunci akses (dapat dipulihkan dengan mengisi slug kembali) */
+  function clearPortalSlug(id, user) {
+    const t = tenantById(id);
+    if (!t) throw new Error('Sekolah tidak ditemukan.');
+    const old = String(t.portal_slug || '');
+    const now = lib.nowStamp();
+    S.prepare("UPDATE tenants SET portal_slug='',portal_status='nonaktif',portal_locked_at=?,portal_locked_by=?,updated_at=? WHERE id=?")
+      .run(now, user ? user.nama : 'sistem', now, id);
+    syncTenantSetting(id, 'portal_slug', '');
+    resetSlugCache();
+    logSaas(user, 'HAPUS HALAMAN PUBLIK', 'portal', `${t.nama}: alamat publik /${old || '-'} dihapus`, id);
+    return tenantById(id);
+  }
+
+  /** sakelar publikasi per jenis portal milik sekolah sendiri (settings) */
+  const PORTAL_SWITCH = { siswa: 'portal_aktif', pegawai: 'portal_pegawai_aktif', slip: 'portal_slip_aktif' };
+  function portalKindOf(path) {
+    const p = String(path || '/portal');
+    if (/^\/portal-slip(\/|$)/.test(p)) return 'slip';
+    if (/^\/portal-pegawai(\/|$)/.test(p)) return 'pegawai';
+    if (/^\/portal(\/|$)/.test(p)) return 'siswa';
+    return '';
+  }
+  /** status sakelar publikasi ketiga portal sekaligus (dipakai panel tenant & Super Admin) */
+  function tenantPortalSwitches(t) {
+    const out = { siswa: true, pegawai: true, slip: true };
+    try {
+      const conn = dbm.openTenantConn(t.id, t.db_file);
+      const rows = conn.prepare("SELECT k,v FROM settings WHERE k IN ('portal_aktif','portal_pegawai_aktif','portal_slip_aktif')").all();
+      const g = k => { const r = rows.find(x => x.k === k); return r ? String(r.v) : '1'; };
+      for (const [kind, key] of Object.entries(PORTAL_SWITCH)) out[kind] = g(key) !== '0';
+    } catch (e) { }
+    return out;
+  }
+  function tenantPortalPublished(t, kind) {
+    const sw = tenantPortalSwitches(t);
+    const k = kind || 'siswa';
+    return sw[k] !== false;
+  }
+
+  /** hasil pemeriksaan akses halaman publik (dipakai middleware server.js)
+   *  status pusat (nonaktif/private/hapus) menutup SEMUA portal sekolah; sakelar publikasi
+   *  milik sekolah diperiksa per jenis portal sesuai path. */
+  function portalAccess(t, path) {
+    if (!t) return { ok: false, status: 404, mode: 'notfound', title: 'Sekolah tidak ditemukan' };
+    const p = String(path || '/portal');
+    const st = portalStatusOf(t);
+    if (st === 'nonaktif') {
+      return { ok: false, status: 404, mode: 'hidden', tenant: t, title: 'Halaman Tidak Ditemukan' };
+    }
+    if (st === 'private') {
+      return { ok: false, status: 403, mode: 'private', tenant: t, title: 'Halaman Publik Bersifat Private' };
+    }
+    if (!String(t.portal_slug || '').trim()) {
+      return { ok: false, status: 404, mode: 'deleted', tenant: t, title: 'Halaman Publik Tidak Tersedia' };
+    }
+    const kind = portalKindOf(p);
+    if (kind && !tenantPortalPublished(t, kind)) {
+      const label = kind === 'pegawai' ? 'Portal piutang pegawai' : kind === 'slip' ? 'Portal slip gaji' : 'Portal tagihan siswa';
+      return { ok: false, status: 503, mode: 'unpublished', tenant: t, kind, title: 'Portal Sementara Ditutup', label };
+    }
+    return { ok: true, status: 200, mode: 'aktif', tenant: t };
+  }
+
+  function portalDefaults() {
+    return {
+      title: String(get('portal_default_title', '') || '').trim() || PORTAL_TEXT_DEFAULT.title,
+      subtitle: String(get('portal_default_subtitle', '') || '').trim() || PORTAL_TEXT_DEFAULT.subtitle
+    };
+  }
+  /** teks portal sekolah: judul tab + sub-judul banner (fallback ke default Super Admin) */
+  function portalText(settings) {
+    const d = portalDefaults();
+    const s = settings || {};
+    const title = String(s.portal_page_title || '').trim() || d.title;
+    const subtitle = String(s.portal_subtitle || '').trim() || d.subtitle;
+    return { title: title.slice(0, PORTAL_TITLE_MAX), subtitle: subtitle.slice(0, PORTAL_SUBTITLE_MAX), defaultTitle: d.title, defaultSubtitle: d.subtitle };
+  }
+  function portalTextError({ title, subtitle } = {}) {
+    if (String(title || '').length > PORTAL_TITLE_MAX) return `Judul tab browser maksimal ${PORTAL_TITLE_MAX} karakter.`;
+    if (String(subtitle || '').length > PORTAL_SUBTITLE_MAX) return `Sub-judul banner maksimal ${PORTAL_SUBTITLE_MAX} karakter.`;
+    if (/\n|\r/.test(String(title || '') + String(subtitle || ''))) return 'Teks portal tidak boleh memuat baris baru.';
+    return null;
   }
 
   function normalizeDomain(raw) {
@@ -199,20 +328,52 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     if (!s) return null;
     return S.prepare('SELECT * FROM tenants WHERE lower(COALESCE(portal_slug,\'\'))=?').get(s) || null;
   }
-  /** cek DNS: CNAME ke target platform atau A record ke IP server */
-  async function checkDns(domain) {
+  /** cek DNS: CNAME ke target platform ATAU A record ke IP server (dicek bersamaan) */
+  async function checkDns(domain, opts = {}) {
     const d = normalizeDomain(domain);
-    const out = { domain: d, cname: [], a: [], ok: false, note: '' };
-    const target = normalizeDomain(process.env.PORTAL_CNAME_TARGET || get('saas_base_url', '') || '');
+    const out = { domain: d, cname: [], a: [], ok: false, note: '', target: '', ip: '', hostMatch: null };
+    const target = normalizeDomain(process.env.PORTAL_CNAME_TARGET || get('saas_base_url', '') || get('portal_cname_target', '') || '');
+    const ip = String(opts.ip || get('saas_server_ip', '') || process.env.SERVER_IP || '').trim();
+    out.target = target; out.ip = ip;
     try { out.cname = await dns.promises.resolveCname(d); } catch (e) { out.cname = []; }
     try { out.a = await dns.promises.resolve4(d); } catch (e) { out.a = []; }
-    const ip = String(process.env.SERVER_IP || '').trim();
-    if (target && out.cname.some(c => normalizeDomain(c) === target)) { out.ok = true; out.note = 'CNAME mengarah ke ' + target; }
-    else if (ip && out.a.includes(ip)) { out.ok = true; out.note = 'A record mengarah ke ' + ip; }
+    const cnameOk = !!(target && out.cname.some(c => normalizeDomain(c) === target));
+    const aOk = !!(ip && out.a.includes(ip));
+    if (cnameOk) { out.ok = true; out.note = 'CNAME mengarah ke ' + target; }
+    else if (aOk) { out.ok = true; out.note = 'A record mengarah ke ' + ip; }
     else if (!out.cname.length && !out.a.length) { out.note = 'DNS belum mengarah (NXDOMAIN / belum propagasi).'; }
     else { out.note = 'DNS ditemukan tetapi belum mengarah ke server: ' + (out.cname.concat(out.a).join(', ') || '-'); }
+    // verifikasi tambahan: HOST/HTTP_HOST pada permintaan ini harus sama dengan domain (bila disediakan)
+    if (opts.host) {
+      const h = normalizeDomain(opts.host);
+      out.hostMatch = h === d;
+      if (out.ok && !out.hostMatch) {
+        out.note += ' — namun permintaan datang lewat host ' + h + ' (belum memakai domain ini).';
+      }
+    }
     return out;
   }
+
+  /* ============ NPSN (Nomor Pokok Sekolah Nasional) ============ */
+  function npsnNormalize(raw) { return String(raw || '').replace(/\D/g, '').slice(0, 8); }
+  function npsnError(raw, exceptId) {
+    const n = npsnNormalize(raw);
+    if (!n) return null;                       // opsional, tetapi bila diisi harus 8 digit & unik
+    if (n.length !== 8) return 'NPSN harus tepat 8 digit angka.';
+    const r = S.prepare('SELECT id FROM tenants WHERE npsn=?').get(n);
+    if (r && Number(r.id) !== Number(exceptId || 0)) return 'NPSN ' + n + ' sudah dipakai sekolah lain.';
+    return null;
+  }
+  function setTenantNpsn(id, npsn) {
+    const n = npsnNormalize(npsn);
+    try { S.prepare('UPDATE tenants SET npsn=?, updated_at=? WHERE id=?').run(n, lib.nowStamp(), Number(id)); } catch (e) { }
+    return n;
+  }
+  function tenantNpsn(id) {
+    const t = tenantById(id);
+    return t ? String(t.npsn || '') : '';
+  }
+  function serverIp() { return String(get('saas_server_ip', '') || process.env.SERVER_IP || '').trim(); }
 
   /* ================= Master Petunjuk Pengguna ================= */
   function guideRows(opts = {}) {
@@ -518,6 +679,11 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
   return {
     RESERVED, slugify, slugFromName, portalSlugTaken, portalSlugError, setPortalSlug,
     tenantByPortalSlug, normalizeDomain, domainError, setCustomDomain, tenantByDomain, checkDns,
+    PORTAL_STATUS, PORTAL_TEXT_DEFAULT, PORTAL_TITLE_MAX, PORTAL_SUBTITLE_MAX,
+    portalStatusOf, portalStatusInfo, setPortalStatus, clearPortalSlug,
+    PORTAL_SWITCH, portalKindOf, tenantPortalSwitches, tenantPortalPublished,
+    portalAccess, portalDefaults, portalText, portalTextError,
+    npsnNormalize, npsnError, setTenantNpsn, tenantNpsn, serverIp,
     guideRows, guideById, guideSave, guideDelete, guideReorder,
     announcementRows, announcementById, announcementSave, announcementDelete, visibleAnnouncements,
     maintenance, setMaintenance,

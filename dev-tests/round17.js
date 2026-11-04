@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Ronde 17 — Modul Posting & BKU, iuran bulanan, catatan pegawai, backup menyeluruh, .env
    1. Non-BKU pada antrean posting (2 tombol aksi + edit status)
    2. Pelonggaran validasi tutup bulan (hanya periode DITUTUP yang memblokir)
@@ -217,30 +219,24 @@ const today = new Date().toISOString().slice(0, 10);
   ok('staff melihat balasan bendahara', /Balasan Bendahara/.test(r.text) && /honor menjadi Rp 540\.000/.test(r.text));
   cookie = adminCookie;
 
-  /* ================= 5. BACKUP MENYELURUH ================= */
+  /* ================= 5. BACKUP DATA SEKOLAH (JSON) ================= */
   r = await req('GET', '/backup');
-  ok('halaman backup memuat menu export database & source', /Export Database \(\.sql\)/.test(r.text) && /Download Source Code \(\.zip\)/.test(r.text));
-  ok('halaman backup menampilkan konfigurasi .env', /Konfigurasi Lingkungan \(\.env\)/.test(r.text) && /APP_MEDIA_TOKEN/.test(r.text));
-
+  ok('halaman backup sekolah = Backup Data Sekolah', /Backup Data Sekolah/.test(r.text));
+  ok('tombol unduh JSON tersedia', /Unduh Backup Data Sekolah \(\.json\)/.test(r.text));
+  ok('menu export database / source code TIDAK ada di akun sekolah', !/Export Database \(\.sql\)/.test(r.text) && !/Download Source Code \(\.zip\)/.test(r.text));
+  ok('konfigurasi .env tidak lagi ditampilkan ke sekolah', !/Konfigurasi Lingkungan \(\.env\)/.test(r.text));
   r = await req('GET', '/backup/export-database', null, { binary: true });
-  const sql = r.text.toString('utf8');
-  ok('export database .sql 200', r.status === 200 && /attachment; filename="simkeu-database-\d+\.sql"/.test(String(r.headers.get('content-disposition') || '')), String(r.status));
-  ok('dump memuat struktur tabel', /CREATE TABLE .*catatan_pegawai|CREATE TABLE catatan_pegawai/.test(sql) || /CREATE TABLE "?catatan_pegawai"?/.test(sql));
-  ok('dump memuat data transaksi', /INSERT INTO "?transaksi"?/.test(sql));
-  ok('dump memuat data catatan pegawai', /INSERT INTO "?catatan_pegawai"?/.test(sql) && /Nominal honor saya bulan ini salah/.test(sql));
-  ok('dump diakhiri COMMIT', /COMMIT;/.test(sql));
-
+  ok('export database .sql ditolak untuk akun sekolah', r.status === 404, r.status);
   r = await req('GET', '/backup/download-source', null, { binary: true });
-  const zipBuf = r.text;
-  ok('download source .zip 200', r.status === 200 && zipBuf.slice(0, 2).toString() === 'PK', String(r.status));
-  let entries = {};
-  try { entries = X.unzipEntries(zipBuf); } catch (e) { }
-  const names = Object.keys(entries);
-  ok('source memuat server.js & routes', names.includes('server.js') && names.some(n => n === 'routes/iuran.js'), names.slice(0, 8).join(','));
-  ok('source memuat aset publik & .env.example', names.some(n => n === 'public/app.css') && names.includes('.env.example'));
-  ok('source TIDAK memuat .env & database', !names.includes('.env') && !names.some(n => /\.sqlite/.test(n)) && !names.some(n => n.startsWith('data/')));
-  ok('source TIDAK memuat node_modules', !names.some(n => n.includes('node_modules')));
-  ok('source menyertakan README pemasangan', names.includes('README-SOURCE.txt') && /npm install/.test(entries['README-SOURCE.txt'].toString('utf8')));
+  ok('download source code ditolak untuk akun sekolah', r.status === 404, r.status);
+  r = await req('GET', '/backup/download', null, { binary: true });
+  let dump = null;
+  try { dump = JSON.parse(r.text.toString('utf8')); } catch (e) { dump = null; }
+  ok('backup JSON berisi seluruh tabel sekolah', r.status === 200 && dump && dump.app === 'simkeu-sekolah' && Array.isArray(dump.tables.transaksi));
+  ok('backup JSON memuat data transaksi', !!dump && (dump.tables.transaksi || []).length > 0);
+  ok('backup JSON memuat catatan pegawai', !!dump && (dump.tables.catatan_pegawai || []).some(x => /Nominal honor saya bulan ini salah/.test(String(x.pesan || ''))));
+  r = await req('GET', '/backup/download-zip', null, { binary: true });
+  ok('arsip .zip data sekolah tetap tersedia', r.status === 200 && r.text.slice(0, 2).toString() === 'PK', r.status);
 
   /* ================= 6. .env / KONFIGURASI LINGKUNGAN ================= */
   const tmpEnv = path.join(os.tmpdir(), 'simkeu-env-' + Date.now() + '.env');

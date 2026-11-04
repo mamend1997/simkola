@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI ronde 12: ceklis siswa & perubahan massal, riwayat rekap input piutang,
    hapus/edit riwayat pembayaran, dashboard tanpa notifikasi kelulusan */
 const { spawn } = require('child_process');

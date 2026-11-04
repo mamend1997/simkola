@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* =====================================================================
    TES RONDE 24 — jenjang & tingkat kelas, login ringkas, branding dinamis,
    trial + kode acak + paket dinamis, anti-spam, laporan tunggakan per tingkat
@@ -129,7 +131,8 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
     admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', paket: 'basic', telp: '081234567'
   });
   r = await req('POST', '/register', regBody(1));
-  ok('registrasi sekolah baru', r.status === 303 && /Pendaftaran%20berhasil/.test(r.loc), r.loc);
+  /* ronde 30: setelah daftar langsung masuk dashboard sekolah baru (?welcome=1) */
+  ok('registrasi sekolah baru (langsung ke dashboard)', r.status === 303 && /\/\?welcome=1$/.test(r.loc), r.loc);
   const t1 = sdb.prepare("SELECT * FROM tenants WHERE nama='SD Negeri Uji 1'").get();
   ok('kode sekolah 4 karakter acak (bukan SK01/SK02)', t1 && /^[A-Z0-9]{4}$/.test(t1.school_code) && !/^SK\d\d$/.test(t1.school_code), t1 && t1.school_code);
   ok('paket default Basic untuk pendaftaran mandiri', t1 && t1.paket === 'basic', t1 && t1.paket);
@@ -165,7 +168,7 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
   ok('checklist tingkat menampilkan preset SD aktif', /name="tingkat" value="I" checked/.test(r.text) && /name="tingkat" value="VI" checked/.test(r.text));
   ok('jenjang sekolah tampil di halaman', /SD \/ MI/.test(r.text));
   r = await req('GET', '/sekolah', null, { cookie: cT });
-  ok('profil sekolah memuat pilihan jenjang pendidikan', /name="jenjang_pendidikan"/.test(r.text));
+  ok('profil sekolah memuat pilihan bentuk pendidikan (SMK/SMA/MA/SMP/MTs/SD/MI/PAUD)', /name="sekolah_bentuk"/.test(r.text) && /Sekolah Menengah Kejuruan \(SMK\)/.test(r.text));
 
   // ubah jenjang → preset baru
   r = await req('POST', '/kelas/tingkat/jenjang', { jenjang_pendidikan: 'SMP/MTs' }, { cookie: cT });

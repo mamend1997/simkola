@@ -11,7 +11,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
     return `<!DOCTYPE html><html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${lib.esc(appName)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+${ui.fontLinks()}
+${ui.logoPreconnect([appLogo])}
+${appLogo ? `<link rel="preload" as="image" href="${lib.esc(appLogo)}" fetchpriority="high">` : ''}
 <link rel="stylesheet" href="${base}/assets/app.css?v=${ui.ASSET_V}">
 ${ui.themeCss(tema)}
 <link rel="icon" type="image/png" href="${base}/favicon.ico">
@@ -22,7 +24,7 @@ ${ui.themeCss(tema)}
   <aside class="auth-aside">
     <div class="inner">
       <div class="flex" style="gap:12px">
-        <div style="width:46px;height:46px;border-radius:14px;overflow:hidden;background:rgba(255,255,255,.2);display:grid;place-items:center;border:1px solid rgba(255,255,255,.3)">${appLogo ? `<img src="${lib.esc(appLogo)}" alt="Logo" style="width:100%;height:100%;object-fit:contain">` : ui.icon('wallet')}</div>
+        <div style="width:46px;height:46px;border-radius:14px;overflow:hidden;background:rgba(255,255,255,.2);display:grid;place-items:center;border:1px solid rgba(255,255,255,.3)">${appLogo ? `<img src="${lib.esc(appLogo)}" alt="Logo" width="46" height="46" fetchpriority="high" decoding="async" style="width:100%;height:100%;object-fit:contain">` : ui.icon('wallet')}</div>
         <div>
           <div style="font-weight:800;font-size:17px;letter-spacing:-.02em">${lib.esc(appName)}</div>
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:.16em;opacity:.8">Sistem Informasi Keuangan</div>
@@ -39,7 +41,7 @@ ${ui.themeCss(tema)}
   </aside>
   <main class="auth-main"><div class="auth-card">${content}</div></main>
 </div>
-<script src="${base}/assets/app.js?v=${ui.ASSET_V}"></script>
+<script src="${base}/assets/app.js?v=${ui.ASSET_V}" defer></script>
 </body></html>`;
   }
 
@@ -59,7 +61,7 @@ ${ui.themeCss(tema)}
       sideDesc: 'Satu tempat untuk transaksi harian, anggaran, piutang, sampai pelaporan pertanggungjawaban dana sekolah.',
       content: `
       <div class="auth-login-head">
-        ${sysLogo ? `<img src="${lib.esc(sysLogo)}" alt="Logo" class="auth-logo-img">` : `<div class="auth-logo-ph">${ui.icon('school')}</div>`}
+        ${sysLogo ? `<img src="${lib.esc(sysLogo)}" alt="Logo" class="auth-logo-img" width="96" height="96" fetchpriority="high" decoding="async">` : `<div class="auth-logo-ph">${ui.icon('school')}</div>`}
         <div class="auth-welcome">Selamat datang di ${lib.esc(appName)}</div>
         <div class="small muted">Sistem Informasi Manajemen Keuangan Sekolah</div>
       </div>
@@ -314,11 +316,109 @@ ${ui.themeCss(tema)}
         contact_telp: String(b.telp || ''), jenjang,
         paket: b.paket, trial: true
       });
-      res.redirect(base + '/login?ok=' + encodeURIComponent(
-        `Pendaftaran berhasil! Kode Sekolah Anda: ${tenant.school_code}. Simpan kode ini untuk login.`) + '&kode=' + encodeURIComponent(tenant.school_code));
+      /* ================================================================
+         SETELAH DAFTAR: langsung masuk sebagai Admin Sekolah yang baru dibuat.
+         Kredensial (kode sekolah 4 karakter, username, password) disimpan pada
+         baris sesi — bukan di URL — lalu ditampilkan SEKALI di dashboard.
+         Bila pembuatan sesi gagal, pengguna diarahkan ke halaman sukses
+         berisi kredensial yang sama (token sekali pakai, kedaluwarsa 30 menit).
+         ================================================================ */
+      const admin = (() => {
+        try {
+          return dbm.runAsTenant(tenant, () => db.prepare(
+            "SELECT * FROM users WHERE role='super_admin' ORDER BY id LIMIT 1").get());
+        } catch (e) { console.error('[daftar] admin sekolah tidak ditemukan:', e.message); return null; }
+      })();
+      const kredensial = {
+        kode: tenant.school_code,
+        sekolah: tenant.nama,
+        username: (admin && (admin.username || admin.email)) || email,
+        nama: (admin && admin.nama) || String(b.admin_nama || 'Administrator Sekolah').trim(),
+        password: p1,
+        at: lib.nowStamp()
+      };
+      let token = null;
+      if (admin && admin.aktif) {
+        try { token = setSession(admin.id, tenant.id, 0, JSON.stringify(kredensial)); } catch (e) { console.error('[daftar] gagal membuat sesi:', e.message); }
+      }
+      try {
+        dbm.runAsTenant(tenant, () => dbm.logAudit(admin || null, 'DAFTAR', 'auth',
+          `Pendaftaran sekolah ${tenant.nama} (${tenant.school_code}) — admin ${email}`
+          + (token ? ' langsung masuk ke dashboard' : ' diarahkan ke halaman kredensial')));
+      } catch (e) { }
+      if (token) {
+        res.set('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}`);
+        return res.redirect(base + '/?welcome=1');
+      }
+      // ---- fallback: halaman sukses berisi kredensial (token sekali pakai) ----
+      const sKey = require('crypto').randomBytes(12).toString('hex');
+      successStore.set(sKey, { ...kredensial, exp: Date.now() + 30 * 60 * 1000 });
+      return res.redirect(base + '/daftar/sukses?t=' + sKey);
     } catch (e) {
       res.redirect(back(Object.assign({}, keep, { err: e.message })));
     }
+  });
+
+  /* ================================================================
+     HALAMAN SUKSES PENDAFTARAN (fallback / tautan ulang)
+     Menampilkan Kode Sekolah, Username, dan Password dalam satu kartu.
+     Data disimpan di memori 30 menit & sekali pakai — tidak pernah di URL.
+     ================================================================ */
+  const successStore = new Map();
+  function takeSuccess(key) {
+    const k = String(key || '');
+    if (!k) return null;
+    const v = successStore.get(k);
+    if (!v) return null;
+    successStore.delete(k);
+    if (v.exp && v.exp < Date.now()) return null;
+    return v;
+  }
+  get('/daftar/sukses', (req, res) => {
+    const base = req.BASE;
+    const data = takeSuccess(req.query.get('t'));
+    const kodeUrl = String(req.query.get('kode') || '').trim().toUpperCase().slice(0, 4);
+    const usernameUrl = String(req.query.get('u') || '').trim();
+    if (!data && !kodeUrl) return res.redirect(base + '/login?err=' + encodeURIComponent('Halaman kredensial pendaftaran sudah kedaluwarsa. Silakan masuk dengan kode sekolah Anda.'));
+    const kode = data ? data.kode : kodeUrl;
+    const username = data ? data.username : (usernameUrl || '-');
+    const sekolah = data ? data.sekolah : '';
+    const nama = data ? data.nama : '';
+    const pwd = data ? data.password : '';
+    res.html(authShell({
+      base,
+      sideTitle: 'Pendaftaran berhasil!',
+      sideDesc: 'Simpan kredensial di samping, lalu masuk ke dashboard keuangan sekolah Anda.',
+      content: `
+      <div class="auth-login-head">
+        <div class="auth-logo-ph" style="background:#DCFCE7;color:#15803D">${ui.icon('check')}</div>
+        <div class="auth-welcome">Sekolah berhasil didaftarkan</div>
+        <div class="small muted">${lib.esc(nama || 'Administrator Sekolah')}${sekolah ? ' · ' + lib.esc(sekolah) : ''}</div>
+      </div>
+      <div class="alert ok">${ui.icon('check')}<div>Akun sekolah sudah aktif. <b>Simpan kredensial</b> berikut untuk masuk kembali kapan saja.</div></div>
+      <div class="cred-box">
+        <div class="cred-row">
+          <div><div class="cred-lbl">Kode Sekolah</div>
+            <div class="cred-val mono" data-cred="kode">${lib.esc(kode)}</div></div>
+          <button type="button" class="btn btn-sm" data-copy="${lib.esc(kode)}">${ui.icon('file')}Salin</button>
+        </div>
+        <div class="cred-row">
+          <div><div class="cred-lbl">Username</div>
+            <div class="cred-val mono" data-cred="user">${lib.esc(username)}</div></div>
+          <button type="button" class="btn btn-sm" data-copy="${lib.esc(username)}">${ui.icon('file')}Salin</button>
+        </div>
+        <div class="cred-row">
+          <div><div class="cred-lbl">Password</div>
+            <div class="cred-val mono" data-cred="pwd" data-pw>${pwd ? '•'.repeat(pwd.length) : '(password yang Anda pilih saat mendaftar)'}</div></div>
+          ${pwd ? `<div class="flex" style="gap:6px">
+            <button type="button" class="btn btn-sm" data-pw-toggle>${ui.icon('eye')}Lihat</button>
+            <button type="button" class="btn btn-sm" data-copy="${lib.esc(pwd)}">${ui.icon('file')}Salin</button></div>` : ''}
+        </div>
+      </div>
+      <p class="help" style="margin-top:10px">Demi keamanan, password hanya ditampilkan sekali di halaman ini. Bila lupa, minta Administrator Pusat meresetnya.</p>
+      <a class="btn btn-primary btn-block" href="${base}/login?kode=${lib.esc(kode)}" style="margin-top:6px">${ui.icon('login')}Masuk ke Dashboard Sekolah</a>
+      <p class="small muted" style="margin-top:14px;text-align:center">Alamat masuk: <b>${base}/login</b></p>`
+    }));
   });
 
   post('/logout', (req, res) => {
@@ -332,11 +432,7 @@ ${ui.themeCss(tema)}
   /* profil sendiri */
   get('/akun', (req, res) => {
     const c = ctx(req);
-    // akun demo memakai database dummy: identitas diambil dari sesi, bukan dari database dummy
-    const u = req.user.role === 'demo'
-      ? Object.assign({}, req.user)
-      : dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
-    const isDemo = u.role === 'demo';
+    const u = dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id) || req.user;
     page(req, res, {
       title: 'Akun Saya', sub: 'Kelola profil dan password Anda', active: 'akun',
       content: `<div class="split"><div class="card">
@@ -371,13 +467,10 @@ ${ui.themeCss(tema)}
             <div class="field"><label>Email</label><input type="email" name="email" value="${lib.esc(u.email)}" required></div>
           </div>
           <div class="field"><label>Role</label><input type="text" value="${lib.esc(roleLabel(u.role))}" readonly></div>
-          ${isDemo ? `<div class="alert info">${ui.icon('lock')}<div><b>Akun Demo tidak dapat mengubah kata sandinya sendiri.</b>
-            Kata sandi akun demo hanya dapat diatur &amp; diubah oleh Super Admin melalui menu <b>Pengguna &amp; Hak Akses</b>.
-            Akun ini juga memakai <b>database dummy</b> terpisah, sehingga semua perubahan tidak memengaruhi data sekolah.</div></div>`
-      : `<div class="row2">
+          <div class="row2">
             <div class="field"><label>Password Baru</label><input type="password" name="password" placeholder="Kosongkan jika tidak diubah" minlength="6"></div>
             <div class="field"><label>Ulangi Password Baru</label><input type="password" name="password2" placeholder="Ulangi password baru"></div>
-          </div>`}
+          </div>
           <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Perubahan</button></div>
         </form>
       </div>
@@ -391,12 +484,6 @@ ${ui.themeCss(tema)}
 
   post('/akun', (req, res) => {
     const { nama, email, password, password2 } = req.body;
-    const me = req.user.role === 'demo'
-      ? { role: 'demo' }
-      : dbm.mainDb.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
-    if (me && me.role === 'demo' && password) {
-      return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Akun Demo tidak dapat mengubah kata sandi sendiri. Hubungi Super Admin.'));
-    }
     if (!nama || !email) return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Nama dan email wajib diisi.'));
     const dup = dbm.mainDb.prepare('SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?').get(String(email).trim(), req.user.id);
     if (dup) return res.redirect(req.BASE + '/akun?err=' + encodeURIComponent('Email sudah dipakai akun lain.'));

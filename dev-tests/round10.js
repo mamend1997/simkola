@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 10:
    - sinkronisasi status piutang (pegawai & sertifikasi) dengan portal publik
    - leger honor sebagai DRAF (bebas bulan / lintas tahun pelajaran, tanpa error "Periode tidak valid")

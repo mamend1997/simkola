@@ -602,6 +602,11 @@ tr.dragging{opacity:.55}
 .portal-head .pn{font-weight:800;font-size:16px;letter-spacing:-.01em}
 .portal-head .ps{font-size:11.5px;opacity:.9;text-transform:uppercase;letter-spacing:.12em}
 .portal-head .portal-login{margin-left:auto;background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.35)}
+/* banner portal: judul sekolah + sub-judul yang dapat diubah sekolah (maks 60 karakter) */
+.portal-head .banner-text{min-width:0}
+.portal-head .school-title{margin:0;font-size:16.5px;font-weight:800;letter-spacing:-.01em;line-height:1.25;overflow-wrap:anywhere}
+.portal-head .portal-subtitle{margin:2px 0 0;font-size:11.5px;opacity:.93;text-transform:uppercase;letter-spacing:.12em;line-height:1.35;overflow-wrap:anywhere}
+@media (max-width:620px){.portal-head .school-title{font-size:15px}.portal-head .portal-subtitle{font-size:10.5px;letter-spacing:.07em}}
 .portal-card{background:rgba(255,255,255,.82);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.7);border-radius:18px;box-shadow:0 22px 50px -34px rgba(42,26,18,.5);padding:22px 22px;margin-top:20px}
 .portal-card h2{margin:0 0 6px;font-size:20px}
 .portal-card h3{margin:0 0 12px;font-size:16px}
@@ -951,3 +956,176 @@ p.help svg,p.hint svg,.portal-card .help svg,.portal-card .hint svg{width:13px;h
 .svc-mini .svc-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 .svc-mini .svc-actions .btn{padding:5px 10px;font-size:12px}
 @media(max-width:640px){.svc-mini .svc-actions{margin-left:0;width:100%}}
+
+/* ============================================================
+   MODE GELAP (diatur di Tema & Branding → Mode Tampilan)
+   Aktif lewat atribut <html data-mode="dark">.
+   ============================================================ */
+html[data-mode="dark"]{
+  color-scheme:dark;
+  --ink:#EFEBFF; --ink-2:#C7C1E2; --muted:#9B94B8;
+  --line:#302A4A; --line-2:#3B3457;
+  --white:#1B1730; --bg:#12101E;
+  --green:#4ADE80; --green-bg:#123024; --red:#F87171; --red-bg:#3A1721;
+  --blue:#9CB8FF; --blue-bg:#1B2647; --amber:#FBBF24; --amber-bg:#3A2A0F;
+  --sh-1:0 1px 2px rgba(0,0,0,.45), 0 10px 30px -16px rgba(0,0,0,.75);
+  --sh-2:0 24px 60px -24px rgba(0,0,0,.85);
+}
+html[data-mode="dark"] body{background:var(--bg);color:var(--ink)}
+html[data-mode="dark"] body::before{
+  background:
+    radial-gradient(760px 480px at 8% -8%, rgba(139,92,246,.22) 0%, rgba(139,92,246,0) 62%),
+    radial-gradient(680px 420px at 96% 4%, rgba(79,70,229,.18) 0%, rgba(79,70,229,0) 60%),
+    radial-gradient(700px 500px at 60% 105%, rgba(236,72,153,.12) 0%, rgba(236,72,153,0) 65%),
+    var(--bg);
+}
+html[data-mode="dark"] .sidebar{background:rgba(24,20,40,.9);border-right-color:var(--line)}
+html[data-mode="dark"] .topbar{background:rgba(20,17,34,.86);border-bottom-color:var(--line)}
+html[data-mode="dark"] .userchip,
+html[data-mode="dark"] .hamburger,
+html[data-mode="dark"] .card,
+html[data-mode="dark"] .kpi,
+html[data-mode="dark"] .modal-box,
+html[data-mode="dark"] .list-row,
+html[data-mode="dark"] table,
+html[data-mode="dark"] .toggle-form,
+html[data-mode="dark"] .bulk-bar,
+html[data-mode="dark"] .pembantu-tabs a,
+html[data-mode="dark"] .avatar-pos button,
+html[data-mode="dark"] .btn,
+html[data-mode="dark"] .btn-soft,
+html[data-mode="dark"] .radio-cards label,
+html[data-mode="dark"] .multipick summary,
+html[data-mode="dark"] .multipick .mp-body,
+html[data-mode="dark"] .table-wrap,
+html[data-mode="dark"] .nav-sec,
+html[data-mode="dark"] .pager a{background:#1B1730;border-color:var(--line);color:var(--ink)}
+html[data-mode="dark"] .card{background:rgba(27,23,48,.92)}
+html[data-mode="dark"] thead th{background:#211C39;border-bottom-color:var(--line);color:var(--muted)}
+html[data-mode="dark"] tbody td{border-bottom-color:#262040}
+html[data-mode="dark"] tbody tr:hover{background:#241E3E}
+html[data-mode="dark"] tfoot td{background:#241E3E;border-top-color:var(--line)}
+html[data-mode="dark"] .modal-foot{background:#1E1934;border-top-color:var(--line)}
+html[data-mode="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+html[data-mode="dark"] select,
+html[data-mode="dark"] textarea{background:#141126;border-color:var(--line-2);color:var(--ink)}
+html[data-mode="dark"] input::placeholder,
+html[data-mode="dark"] textarea::placeholder{color:#7B7499}
+html[data-mode="dark"] .btn-primary,
+html[data-mode="dark"] .btn.btn-primary{background:linear-gradient(135deg,var(--o-400),var(--o-600));color:#fff;border-color:transparent}
+html[data-mode="dark"] .btn-danger{background:#2A1420;border-color:#5B2233;color:#FCA5A5}
+html[data-mode="dark"] .nav a{color:var(--ink-2)}
+html[data-mode="dark"] .nav a.active{color:#fff}
+html[data-mode="dark"] .nav-toggle{color:var(--ink-2)}
+html[data-mode="dark"] .alert.ok{background:#123024;color:#86EFAC}
+html[data-mode="dark"] .alert.info{background:#1B2647;color:#BFD3FF}
+html[data-mode="dark"] .alert.warn{background:#3A2A0F;color:#FCD34D}
+html[data-mode="dark"] .alert.err{background:#3A1721;color:#FCA5A5}
+html[data-mode="dark"] .chart-wrap svg text{fill:#C7C1E2}
+html[data-mode="dark"] .portal-body{background:linear-gradient(160deg,#151126 0%,#12101E 45%,#191334 100%);color:var(--ink)}
+html[data-mode="dark"] .portal-card{background:rgba(27,23,48,.86);border-color:var(--line);color:var(--ink)}
+html[data-mode="dark"] .portal-foot{color:var(--muted)}
+html[data-mode="dark"] .auth-wrap{background:#12101E}
+html[data-mode="dark"] .auth-main{background:#12101E}
+html[data-mode="dark"] .auth-card{background:#1B1730;border-color:var(--line)}
+html[data-mode="dark"] .searchbox,
+html[data-mode="dark"] .chip,
+html[data-mode="dark"] .tag{background:#241E3E;border-color:var(--line);color:var(--ink-2)}
+/* dokumen cetak tetap putih (tampilan kertas) */
+html[data-mode="dark"] .doc,
+html[data-mode="dark"] .print-area,
+html[data-mode="dark"] .kwit-box,
+html[data-mode="dark"] .slip{
+  background:#fff;color:#2A1A12;
+  --ink:#2A1A12;--ink-2:#5B4A40;--muted:#8A7A70;--line:#EAD9CC;--line-2:#EAD9CC;
+}
+html[data-mode="dark"] .doc input,
+html[data-mode="dark"] .doc select,
+html[data-mode="dark"] .doc textarea,
+html[data-mode="dark"] .print-area input,
+html[data-mode="dark"] .print-area select,
+html[data-mode="dark"] .print-area textarea{background:#fff;color:#2A1A12;border-color:#EAD9CC}
+
+/* ============ pengingat tagihan WhatsApp ============ */
+.tag-bank{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.tag-chip{
+  border:1.5px dashed var(--line-2); background:var(--o-50); color:var(--o-700);
+  font:inherit; font-size:11.5px; font-weight:700; padding:5px 10px; border-radius:9px; cursor:pointer;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; transition:.15s;
+}
+.tag-chip:hover{border-color:var(--o-400); background:var(--o-100)}
+.wa-bubble{
+  background:#DCF8C6; color:#1F2A22; border-radius:12px 12px 12px 3px; padding:12px 14px;
+  font-size:12.8px; line-height:1.6; white-space:pre-wrap; word-break:break-word;
+  max-width:520px; box-shadow:0 1px 2px rgba(0,0,0,.08);
+}
+html[data-mode="dark"] .wa-bubble{background:#14432B; color:#D9FDD3}
+.wa-preview-row{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--o-50);font-size:12.5px}
+.wa-preview-row b{font-variant-numeric:tabular-nums}
+.wa-modal-info{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12.5px;margin-bottom:10px}
+.wa-modal-info dt{color:var(--muted)}
+.wa-modal-info dd{margin:0;font-weight:650}
+.wa-icon-btn{color:#128C7E}
+html[data-mode="dark"] .wa-icon-btn{color:#4ADE80}
+
+/* ============ manajemen halaman publik: sakelar & pratinjau teks portal ============ */
+.sw{position:relative;display:inline-flex;align-items:center;gap:11px;cursor:pointer;user-select:none;font-weight:600}
+.sw input[type=checkbox]{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.sw .sw-track{position:relative;flex:0 0 46px;width:46px;height:25px;border-radius:999px;background:#D9D5E6;transition:background .18s ease}
+.sw .sw-track::after{content:'';position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(24,18,45,.28);transition:transform .18s ease}
+.sw input:checked + .sw-track{background:linear-gradient(135deg,#F97316,#EA580C)}
+.sw input:checked + .sw-track::after{transform:translateX(21px)}
+.sw input:focus-visible + .sw-track{outline:2px solid var(--o-400);outline-offset:2px}
+.sw .sw-label{font-size:13px}
+.sw .sw-state{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.sw input:checked ~ .sw-state{color:#16A34A}
+html[data-mode="dark"] .sw .sw-track{background:#3A3450}
+
+.portal-preview{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 16px 36px -30px rgba(42,26,18,.6)}
+.portal-preview .pv-tab{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#F1EDFF;font-size:12px;color:var(--ink-2)}
+.portal-preview .pv-tab .pv-dot{width:9px;height:9px;border-radius:50%;background:#F97316;flex:0 0 9px}
+.portal-preview .pv-tab .pv-title{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.portal-preview .pv-banner{display:flex;align-items:center;gap:12px;padding:14px 16px;background:linear-gradient(135deg,#F97316,#EA580C);color:#fff}
+.portal-preview .pv-banner img{width:44px;height:44px;object-fit:contain;background:#fff;border-radius:10px;padding:3px}
+.portal-preview .pv-banner .pv-ph{width:44px;height:44px;border-radius:10px;background:rgba(255,255,255,.22);display:grid;place-items:center;font-weight:800;font-size:19px}
+.portal-preview .pv-banner .pv-name{font-weight:800;font-size:14.5px;line-height:1.25;overflow-wrap:anywhere}
+.portal-preview .pv-banner .pv-sub{margin:2px 0 0;font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;opacity:.93;overflow-wrap:anywhere}
+.portal-preview .pv-body{padding:11px 14px;font-size:11.5px;color:var(--muted)}
+.url-chip{display:inline-flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:var(--o-50);border:1px solid var(--line);border-radius:8px;padding:3px 8px;overflow-wrap:anywhere}
+
+/* daftar sakelar publikasi portal (menu Portal Publik) */
+.publ-list{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
+.publ-row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--o-50)}
+.publ-row .sw .sw-label{font-size:13px}
+.publ-row .publ-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.publ-row .url-chip svg{width:12px;height:12px}
+html[data-mode="dark"] .publ-row{background:#241F35;border-color:#3A3450}
+@media (max-width:620px){.publ-row{gap:8px}.publ-row .publ-meta{width:100%}}
+
+/* ============ kartu kredensial pendaftaran (dashboard & halaman sukses) ============ */
+.cred-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.cred-cell{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff;display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.cred-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:800;display:flex;align-items:center;gap:7px}
+.cred-val{font-size:14px;font-weight:700;overflow-wrap:anywhere;line-height:1.4}
+.cred-val.cred-big{font-size:24px;letter-spacing:.16em;color:var(--o-700)}
+.welcome-card{border:1px solid #BBF7D0;background:linear-gradient(135deg,rgba(240,253,244,.95),rgba(255,255,255,.92))}
+.welcome-head{display:flex;gap:14px;align-items:flex-start;margin-bottom:14px}
+.welcome-head h3{margin:0 0 4px;font-size:17px}
+.welcome-ico{flex:0 0 42px;width:42px;height:42px;border-radius:13px;background:#DCFCE7;color:#15803D;display:grid;place-items:center}
+.welcome-ico svg{width:22px;height:22px}
+.welcome-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px}
+.welcome-foot .small{display:flex;align-items:center;gap:6px}
+.welcome-card.off{display:none}
+html[data-mode="dark"] .welcome-card{background:#1E2A22;border-color:#2F6B45}
+html[data-mode="dark"] .cred-cell{background:#241F35;border-color:#3A3450}
+html[data-mode="dark"] .welcome-ico{background:#14432B;color:#4ADE80}
+
+/* halaman sukses pendaftaran (auth) */
+.cred-box{border:1px solid var(--line);border-radius:16px;overflow:hidden;margin:4px 0 6px}
+.cred-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:#fff;border-bottom:1px solid var(--line)}
+.cred-row:last-child{border-bottom:0}
+.cred-row .cred-val{font-size:15px}
+
+/* tombol salin (data-copy) */
+.btn.copied{background:#DCFCE7;border-color:#86EFAC;color:#15803D}

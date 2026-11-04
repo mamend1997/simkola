@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 8: menu akordeon + pengaturan tampilan menu, kwitansi selektif & export vertikal iuran,
    kolom bulanan data iuran, aktivasi massal siswa non-aktif, grid honor ekskul + edit/hapus tersinkron */
 const { spawn } = require('child_process');

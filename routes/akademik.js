@@ -38,7 +38,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           return {
             sheet: sh, row: i, iNama, iNisn,
             iJk: labels.findIndex(t => /JENIS\s*KELAMIN|JK|L\/P/.test(t)),
-            iTgl: labels.findIndex(t => /TANGGAL\s*LAHIR|TGL\s*LAHIR/.test(t))
+            iTgl: labels.findIndex(t => /TANGGAL\s*LAHIR|TGL\s*LAHIR/.test(t)),
+            // kolom opsional: nomor HP / WhatsApp orang tua (dipakai pengingat tagihan)
+            iHp: labels.findIndex(t => /(HP|HANDPHONE|WHATSAPP|WA|TELEPON|TELP|KONTAK).*(ORANG|WALI|ORTU)|(ORANG|WALI|ORTU).*(HP|WA|WHATSAPP|TELEPON|TELP)|NO\.?\s*(HP|WA)/.test(t))
           };
         }
       }
@@ -283,6 +285,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="field"><label>Tanggal Lahir</label><input type="date" name="tanggal_lahir" value="${esc(s ? s.tanggal_lahir : '')}">
           <div class="hint">Dipakai verifikasi portal orang tua.</div></div>
       </div>
+      <div class="field"><label>No. HP / WA Orang Tua</label>
+        <input name="parent_phone" inputmode="tel" value="${esc(s ? (lib.phoneDisplay(s.parent_phone) || '') : '')}" placeholder="081234567890" autocomplete="off">
+        <div class="hint">Nomor WhatsApp orang tua/wali untuk <b>pengingat tagihan otomatis</b>. Format <code>08…</code> otomatis diubah menjadi <code>628…</code>.</div></div>
       <div class="field"><label>Kelas</label><select name="kelas_id">
         <option value="">— Belum ditetapkan —</option>${kelasOptions(taSel, s ? s.kelas_id : '')}</select></div>
       <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(s ? s.keterangan : '')}" placeholder="Opsional"></div>
@@ -326,7 +331,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       </form>
       ${rows.length ? `<div class="table-wrap sticky-head"><table id="tblSiswa"><thead><tr>
         ${editable ? `<th class="pick-cell"><input type="checkbox" data-check-all-box="siswa" title="Pilih semua siswa" aria-label="Pilih semua siswa"></th>` : ''}
-        <th>NISN</th><th>Nama</th><th>JK</th><th>Kelas</th><th>Tanggal Lahir</th><th>Status</th><th class="right">Aksi</th>
+        <th>NISN</th><th>Nama</th><th>JK</th><th>Kelas</th><th>Tanggal Lahir</th><th>No. HP Orang Tua</th><th>Status</th><th class="right">Aksi</th>
       </tr></thead><tbody>
       ${rows.map(s => `<tr>
         ${editable ? `<td class="pick-cell"><input type="checkbox" name="siswa" value="${s.id}" form="fBulkSiswa" aria-label="Pilih ${esc(s.nama)}"></td>` : ''}
@@ -335,6 +340,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td>${esc(JK_LABEL[s.jenis_kelamin] || '-')}</td>
         <td>${esc(s.kelas_nama || '-')}<div class="t-sub">${esc(s.program_nama || '')}</div></td>
         <td class="nowrap">${s.tanggal_lahir ? tglID(s.tanggal_lahir) : '-'}</td>
+        <td class="nowrap mono">${s.parent_phone ? esc(lib.phoneDisplay(s.parent_phone)) : '<span class="t-sub">belum diisi</span>'}</td>
         <td>${statusBadge(s.status)}</td>
         <td class="right nowrap">
           <a class="btn btn-sm" href="${c.base}/siswa/${s.id}" title="Detail">${ui.icon('eye')}</a>
@@ -376,7 +382,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     ${editable ? ui.modal('mImportSiswa', {
       title: 'Import Data Siswa (Excel / CSV)', wide: true,
       body: `<form method="post" action="${c.base}/siswa/import" id="fImportSiswa">
-        <div class="alert info">${ui.icon('info')}<div><b>Format kolom:</b> <code>NISN | NAMA | JENIS KELAMIN | TANGGAL LAHIR (opsional)</code><br>
+        <div class="alert info">${ui.icon('info')}<div><b>Format kolom:</b> <code>NISN | NAMA | JENIS KELAMIN | TANGGAL LAHIR (opsional) | NO. HP / WA ORANG TUA (opsional)</code><br>
           Pilih <b>kelas tujuan</b> — semua siswa pada berkas akan dimasukkan ke kelas tersebut. Data akan <b>divalidasi baris-per-baris</b> dan ditampilkan sebagai pratinjau sebelum disimpan.</div></div>
         <div class="field"><label>Kelas Tujuan <span style="color:var(--red)">*</span></label>
           <select name="kelas_id" required><option value="">— Pilih kelas tujuan —</option>${kelasOptions(taSel, '', true)}</select></div>
@@ -400,12 +406,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       [{ v: 'TEMPLATE IMPORT DATA SISWA', bold: true }],
       ['Isi baris di bawah ini, lalu simpan sebagai .xlsx / .csv'],
       ['NISN wajib unik. Tanggal lahir opsional (format DD/MM/YYYY) — dipakai untuk verifikasi portal orang tua.'],
+      ['NO. HP / WA ORANG TUA berisi nomor WhatsApp orang tua/wali untuk pengingat tagihan otomatis (08… otomatis menjadi 628…).'],
       [],
-      ['NISN', 'NAMA', 'JENIS KELAMIN', 'TANGGAL LAHIR'].map(v => ({ v, bold: true })),
-      ['0012345678', 'Ahmad Fauzi', 'L', '12/03/2009'],
-      ['0012345679', 'Siti Aminah', 'P', '05/07/2009']
+      ['NISN', 'NAMA', 'JENIS KELAMIN', 'TANGGAL LAHIR', 'NO. HP / WA ORANG TUA'].map(v => ({ v, bold: true })),
+      ['0012345678', 'Ahmad Fauzi', 'L', '12/03/2009', '081234567890'],
+      ['0012345679', 'Siti Aminah', 'P', '05/07/2009', '081298765432']
     ];
-    xlsxSend(res, 'template-import-siswa.xlsx', 'Siswa', rows, [16, 32, 18, 18]);
+    xlsxSend(res, 'template-import-siswa.xlsx', 'Siswa', rows, [16, 32, 18, 18, 24]);
   });
 
   /* import siswa: 1) validasi + pratinjau */
@@ -430,7 +437,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       const nama = X.cellText(cells[h.iNama]).trim();
       if (!nisn && !nama) continue;
       if (/^(NAMA|TEMPLATE|JUMLAH|TOTAL)/i.test(nama) || /NISN/i.test(nisn)) continue;
-      const raw = [nisn, nama, h.iJk >= 0 ? X.cellText(cells[h.iJk]) : '', h.iTgl >= 0 ? X.cellText(cells[h.iTgl]) : ''].join(' | ');
+      const hpRaw = h.iHp >= 0 ? X.cellText(cells[h.iHp]).trim().replace(/\.0$/, '') : '';
+      const raw = [nisn, nama, h.iJk >= 0 ? X.cellText(cells[h.iJk]) : '', h.iTgl >= 0 ? X.cellText(cells[h.iTgl]) : '', hpRaw].join(' | ');
       const lineNo = i + 1;
       if (!nama) { errors.push({ row: lineNo, msg: 'Nama siswa kosong.', raw }); continue; }
       if (!nisn) { errors.push({ row: lineNo, msg: 'NISN kosong.', raw }); continue; }
@@ -444,11 +452,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         tgl = X.parseDateCell(cells[h.iTgl]);
         if (!tgl) { errors.push({ row: lineNo, msg: 'Format tanggal lahir salah (gunakan DD/MM/YYYY).', raw }); continue; }
       }
+      let hp = '';
+      if (hpRaw) {
+        hp = lib.normPhone(hpRaw);
+        if (!hp) { errors.push({ row: lineNo, msg: `Nomor HP/WA orang tua "${hpRaw}" tidak valid (contoh: 081234567890).`, raw }); continue; }
+      }
       if (seen.has(nisn)) { errors.push({ row: lineNo, msg: `NISN ${nisn} ganda di dalam berkas (baris sebelumnya).`, raw }); continue; }
       seen.add(nisn);
       const dup = db.prepare('SELECT nama FROM siswa WHERE nisn=?').get(nisn);
       if (dup) { errors.push({ row: lineNo, msg: `NISN ${nisn} sudah terdaftar pada siswa lain (${dup.nama}).`, raw }); continue; }
-      items.push({ nisn, nama, jk: jk || 'L', tgl, raw, lineNo });
+      items.push({ nisn, nama, jk: jk || 'L', tgl, hp, raw, lineNo });
     }
     if (!items.length && !errors.length) return res.redirect(back + '?err=' + encodeURIComponent('Tidak ada baris data yang bisa dibaca dari berkas.'));
 
@@ -469,6 +482,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const rows = cache.items.map((it, i) => `<tr>
       <td class="num">${i + 1}</td><td class="mono">${esc(it.nisn)}</td><td class="t-strong">${esc(it.nama)}</td>
       <td>${esc(JK_LABEL[it.jk] || it.jk)}</td><td class="nowrap">${it.tgl ? tglID(it.tgl) : '-'}</td>
+      <td class="nowrap">${it.hp ? esc(lib.phoneDisplay(it.hp)) : '-'}</td>
       <td>${okAll ? ui.badge('Valid', 'green') : ui.badge('Perlu diperiksa', 'amber')}</td></tr>`).join('');
 
     const content = `<div class="card">
@@ -476,7 +490,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="sub">Kelas tujuan: <b>${esc(kelas ? kelas.nama : '-')}</b> · ${cache.items.length} baris terbaca · ${cache.errors.length} error</div></div>
         <div class="toolbar"><a class="btn btn-sm" href="${c.base}/siswa">${ui.icon('x')}Batal</a></div></div>
       ${cache.errors.length ? `<div class="alert err">${ui.icon('alert')}<div><b>Import dibatalkan.</b> ${cache.errors.length} baris bermasalah — perbaiki berkas lalu unggah ulang. Tidak ada data yang disimpan.</div></div>` : ''}
-      <div class="table-wrap" style="max-height:52vh"><table><thead><tr><th>No</th><th>NISN</th><th>Nama</th><th>JK</th><th>Tanggal Lahir</th><th>Status</th></tr></thead>
+      <div class="table-wrap" style="max-height:52vh"><table><thead><tr><th>No</th><th>NISN</th><th>Nama</th><th>JK</th><th>Tanggal Lahir</th><th>No. HP Orang Tua</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
       ${cache.items.length ? `<form method="post" action="${c.base}/siswa/import/commit" class="form-actions mt-2">
         <input type="hidden" name="token" value="${esc(token)}">
@@ -497,12 +511,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!kelas) return res.redirect(req.BASE + '/siswa?err=' + encodeURIComponent('Kelas tujuan tidak ditemukan.'));
     let n = 0;
     db.transaction(() => {
-      const ins = db.prepare(`INSERT INTO siswa (nisn,nama,jenis_kelamin,tanggal_lahir,kelas_id,tahun_ajaran_id,status,keterangan,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,'aktif','',?,?)`);
+      const ins = db.prepare(`INSERT INTO siswa (nisn,nama,jenis_kelamin,tanggal_lahir,kelas_id,tahun_ajaran_id,status,keterangan,parent_phone,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,'aktif','',?,?,?)`);
       for (const it of cache.items) {
         const dup = db.prepare('SELECT id FROM siswa WHERE nisn=?').get(it.nisn);
         if (dup) continue;
-        const info = ins.run(it.nisn, it.nama, it.jk, it.tgl || null, kelas.id, kelas.tahun_ajaran_id, nowStamp(), nowStamp());
+        const info = ins.run(it.nisn, it.nama, it.jk, it.tgl || null, kelas.id, kelas.tahun_ajaran_id, it.hp || null, nowStamp(), nowStamp());
         dbm.penempatanSet(Number(info.lastInsertRowid), kelas.id, kelas.tahun_ajaran_id, { sumber: 'import' });
         n++;
       }
@@ -519,16 +533,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       taId, kelasId: req.query.get('kelas') || '', q: req.query.get('q') || '',
       status: ['aktif', 'nonaktif', 'lulus', 'pindah', 'do']
     });
-    const head = ['NISN', 'NAMA', 'JENIS KELAMIN', 'KELAS', 'TANGGAL LAHIR', 'STATUS'].map(v => ({ v, bold: true }));
+    const head = ['NISN', 'NAMA', 'JENIS KELAMIN', 'KELAS', 'TANGGAL LAHIR', 'NO. HP / WA ORANG TUA', 'STATUS'].map(v => ({ v, bold: true }));
     xlsxSend(res, 'data-siswa.xlsx', 'Siswa',
-      [head, ...rows.map(s => [s.nisn || '', s.nama, JK_LABEL[s.jenis_kelamin] || '', s.kelas_nama || '', s.tanggal_lahir || '', (dbm.SISWA_STATUS[s.status] || [s.status])[0]])],
-      [16, 32, 16, 20, 16, 22]);
+      [head, ...rows.map(s => [s.nisn || '', s.nama, JK_LABEL[s.jenis_kelamin] || '', s.kelas_nama || '', s.tanggal_lahir || '',
+        lib.phoneDisplay(s.parent_phone) || '', (dbm.SISWA_STATUS[s.status] || [s.status])[0]])],
+      [16, 32, 16, 20, 16, 24, 22]);
   });
 
   post('/siswa/save', (req, res) => {
     const isEdit = !!req.body.id;
     guard(req, res, 'siswa', isEdit ? 'edit' : 'create');
     const { id, nisn, nama, jenis_kelamin, tanggal_lahir, kelas_id, keterangan } = req.body;
+    const parentPhoneRaw = String(req.body.parent_phone || '').trim();
+    const parentPhone = parentPhoneRaw ? lib.normPhone(parentPhoneRaw) : '';
+    if (parentPhoneRaw && !parentPhone) {
+      return res.redirect(req.BASE + '/siswa?err=' + encodeURIComponent('Nomor HP/WA orang tua tidak valid (contoh: 081234567890).'));
+    }
     const back = req.BASE + '/siswa';
     if (!String(nama || '').trim()) return res.redirect(back + '?err=' + encodeURIComponent('Nama siswa wajib diisi.'));
     const nisnV = String(nisn || '').trim();
@@ -540,12 +560,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const taId = k ? k.tahun_ajaran_id : (isEdit ? db.prepare('SELECT tahun_ajaran_id FROM siswa WHERE id=?').get(id)?.tahun_ajaran_id : dbm.taAutoId());
     let siswaId = Number(id || 0);
     if (isEdit) {
-      db.prepare('UPDATE siswa SET nisn=?,nama=?,jenis_kelamin=?,tanggal_lahir=?,kelas_id=?,tahun_ajaran_id=?,keterangan=?,updated_at=? WHERE id=?')
-        .run(nisnV || null, nama.trim(), jenis_kelamin === 'P' ? 'P' : 'L', tanggal_lahir || null, kelas_id || null, taId, keterangan || '', nowStamp(), id);
+      db.prepare('UPDATE siswa SET nisn=?,nama=?,jenis_kelamin=?,tanggal_lahir=?,kelas_id=?,tahun_ajaran_id=?,keterangan=?,parent_phone=?,updated_at=? WHERE id=?')
+        .run(nisnV || null, nama.trim(), jenis_kelamin === 'P' ? 'P' : 'L', tanggal_lahir || null, kelas_id || null, taId, keterangan || '', parentPhone || null, nowStamp(), id);
     } else {
-      const info = db.prepare(`INSERT INTO siswa (nisn,nama,jenis_kelamin,tanggal_lahir,kelas_id,tahun_ajaran_id,status,keterangan,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,'aktif',?,?,?)`)
-        .run(nisnV || null, nama.trim(), jenis_kelamin === 'P' ? 'P' : 'L', tanggal_lahir || null, kelas_id || null, taId, keterangan || '', nowStamp(), nowStamp());
+      const info = db.prepare(`INSERT INTO siswa (nisn,nama,jenis_kelamin,tanggal_lahir,kelas_id,tahun_ajaran_id,status,keterangan,parent_phone,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,'aktif',?,?,?,?)`)
+        .run(nisnV || null, nama.trim(), jenis_kelamin === 'P' ? 'P' : 'L', tanggal_lahir || null, kelas_id || null, taId, keterangan || '', parentPhone || null, nowStamp(), nowStamp());
       siswaId = Number(info.lastInsertRowid);
     }
     // catat penempatan kelas pada tahun pelajaran kelas tersebut (riwayat antar-TA tetap utuh)
@@ -675,6 +695,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <dt>NISN</dt><dd class="mono">${esc(s.nisn || '-')}</dd>
           <dt>Jenis Kelamin</dt><dd>${esc(JK_LABEL[s.jenis_kelamin] || '-')}</dd>
           <dt>Tanggal Lahir</dt><dd>${s.tanggal_lahir ? tglID(s.tanggal_lahir) : '-'}</dd>
+          <dt>No. HP / WA Orang Tua</dt><dd class="mono">${s.parent_phone ? esc(lib.phoneDisplay(s.parent_phone)) : '<span class="t-sub">belum diisi</span>'}</dd>
           <dt>Keterangan</dt><dd>${esc(s.keterangan || '-')}</dd>
         </div>
         <div class="kpi-grid mt-2" style="grid-template-columns:repeat(2,minmax(0,1fr))">
@@ -791,7 +812,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         ${drafts.map(d => `<tr><td class="mono">${esc(d.nisn || '-')}</td><td class="t-strong">${esc(d.siswa_nama)}</td>
           <td>${esc(d.asal_nama || '-')}</td><td class="nowrap">${esc(taName(d.ta_asal_id))}</td>
           <td>${esc(d.tujuan_nama || '-')}</td><td class="nowrap">${esc(taName(d.ta_tujuan_id))}</td>
-          <td class="nowrap">${esc(String(d.created_at || '').slice(0, 16))}</td>
+          <td class="nowrap">${esc(lib.stampShort(d.created_at))}</td>
           <td class="right">${editable ? `<form method="post" action="${c.base}/mutasi-kelas/delete" style="display:inline"><input type="hidden" name="id" value="${d.id}"><button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>` : ''}</td></tr>`).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada draf mutasi', 'Pilih kelas asal & kelas tujuan, centang siswa, lalu Tetapkan Mutasi.')}
     </div>
@@ -802,7 +823,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         ${riwayat.map(d => `<tr><td class="mono">${esc(d.nisn || '-')}</td><td class="t-strong">${esc(d.siswa_nama)}</td>
           <td>${esc(d.asal_nama || '-')}</td><td class="nowrap">${esc(taName(d.ta_asal_id))}</td>
           <td>${esc(d.tujuan_nama || '-')}</td><td class="nowrap">${esc(taName(d.ta_tujuan_id))}</td>
-          <td class="nowrap">${esc(String(d.applied_at || '').slice(0, 16))}</td><td>${esc(d.applied_by || '-')}</td></tr>`).join('')}
+          <td class="nowrap">${esc(lib.stampShort(d.applied_at))}</td><td>${esc(d.applied_by || '-')}</td></tr>`).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada mutasi diterapkan', 'Riwayat akan tampil setelah draf mutasi diterapkan.')}
     </div>`;
     page(req, res, { title: 'Mutasi Kelas', sub: 'Pindahkan siswa antar kelas & tahun pelajaran', active: 'mutasi_kelas', content });

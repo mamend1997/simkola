@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* =====================================================================
    TES RONDE 25
    1. Kontrol fitur per PAKET di menu Paket Langganan

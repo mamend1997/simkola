@@ -1,4 +1,6 @@
 'use strict';
+/* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* UI ronde 17 (Playwright): rincian iuran bulanan, antrean Non-BKU, catatan pegawai,
    menu baru, dan tidak ada overflow horizontal / error JS di desktop & mobile 390px. */
 const { spawn } = require('child_process');
@@ -102,11 +104,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('catatan masuk tampil di rekap', /Nominal potongan BPJS/.test(await page.locator('#tblCatatan').innerText()));
   ok('nama pengirim tercatat dari sesi', /Bendahara Utama/.test(await page.locator('#tblCatatan').innerText()));
 
-  /* ---------- backup menyeluruh ---------- */
+  /* ---------- backup data sekolah (JSON) ---------- */
   await page.goto(base + '/backup');
-  ok('tombol Export Database ada', await page.locator('a[href="/backup/export-database"]').count() === 1);
-  ok('tombol Download Source ada', await page.locator('a[href="/backup/download-source"]').count() === 1);
-  ok('kartu konfigurasi .env ada', /APP_MEDIA_TOKEN/.test(await page.locator('table.env-tbl').innerText()));
+  ok('tombol unduh Backup Data Sekolah (.json) ada', await page.locator('a[href="/backup/download"]').count() === 1);
+  ok('tombol Export Database TIDAK ada di akun sekolah', await page.locator('a[href="/backup/export-database"]').count() === 0);
+  ok('tombol Download Source TIDAK ada di akun sekolah', await page.locator('a[href="/backup/download-source"]').count() === 0);
+  ok('kartu konfigurasi .env dipindah ke Super Admin', await page.locator('table.env-tbl').count() === 0);
   await ctx.close();
 
   /* ---------- mobile 390px ---------- */
