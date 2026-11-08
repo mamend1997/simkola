@@ -409,13 +409,6 @@
     sync();
   });
 
-  /* bulk close BKU: centang semua */
-  $$('[data-check-all]').forEach(master => {
-    master.addEventListener('change', () => {
-      $$('input[name^="pilih_"]').forEach(c => { if (!c.disabled) c.checked = master.checked; });
-    });
-  });
-
   /* tables: simple client search */
   const filterRowsOf = (tb, q) => {
     if (!tb) return 0;
@@ -734,32 +727,111 @@ function terbilang(n) {
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
-  /* tombol & kotak "pilih semua / hapus ceklis" */
-  function boxes(name) { return $$('input[name="' + name + '"]').filter(b => !b.disabled); }
-  $$('[data-check-all]').forEach(btn => btn.addEventListener('click', () => {
-    boxes(btn.dataset.checkAll).forEach(b => { b.checked = true; });
-    const m = $('[data-check-all-box="' + btn.dataset.checkAll + '"]'); if (m) m.checked = true;
-    syncCount();
-  }));
-  $$('[data-check-none]').forEach(btn => btn.addEventListener('click', () => {
-    boxes(btn.dataset.checkNone).forEach(b => { b.checked = false; });
-    const m = $('[data-check-all-box="' + btn.dataset.checkNone + '"]'); if (m) m.checked = false;
-    syncCount();
-  }));
-  $$('[data-check-all-box]').forEach(master => master.addEventListener('change', () => {
-    boxes(master.dataset.checkAllBox).forEach(b => { b.checked = master.checked; });
-    syncCount();
-  }));
-  document.addEventListener('change', e => { if (e.target && e.target.name) syncCount(); });
+  /* ===== ceklis massal: "Pilih Semua" + penghitung "Terpilih: N" =====
+     Satu grup ceklis dikenali dari NAMA pada:
+       data-check-all / data-check-none (tombol), data-check-all-box (kotak di kepala tabel),
+       data-check-count (penghitung jumlah terpilih).
+     Anggota grup dicari lewat `data-check-item="nama"` — dipakai saat atribut `name`
+     checkbox baris berbeda dari nama grup (mis. baris transaksi ber-name="id") — atau
+     lewat `name="nama"`.
+     Bila satu halaman memuat beberapa grup bernama sama (mis. dua tabel ber-name="ids"),
+     batasi pencarian dengan `data-check-scope="#idTabel"` pada tombol/kotak/penghitung. */
+  function scopeRootOf(el) {
+    const sel = el && el.dataset ? String(el.dataset.checkScope || '') : '';
+    if (sel) {
+      try { const r = document.querySelector(sel); if (r) return r; } catch (e) { }
+    }
+    return document;
+  }
+  function groupBoxes(name, root) {
+    const r = root || document;
+    const seen = new Set();
+    const out = [];
+    const push = b => {
+      if (!b || seen.has(b) || b.type !== 'checkbox' || b.disabled) return;
+      if (b.hasAttribute('data-check-all-box')) return;
+      seen.add(b); out.push(b);
+    };
+    $$('[data-check-item="' + name + '"]', r).forEach(push);
+    $$('input[name="' + name + '"]', r).forEach(push);
+    return out;
+  }
+  function ackMaster(name, root) {
+    const list = groupBoxes(name, root);
+    const on = list.filter(b => b.checked).length;
+    $$('[data-check-all-box="' + name + '"]', root).forEach(m => {
+      m.checked = list.length > 0 && on === list.length;
+      m.indeterminate = on > 0 && on < list.length;
+    });
+    return on;
+  }
   function syncCount() {
     // penghitung generik: <b data-check-count="nama"> untuk grup ceklis apa pun
     $$('[data-check-count]').forEach(el => {
-      el.textContent = String(boxes(el.dataset.checkCount).filter(b => b.checked).length);
+      el.textContent = String(ackMaster(el.dataset.checkCount, scopeRootOf(el)));
     });
+    // kotak "pilih semua" (dan tombol) ikut menyesuaikan diri terhadap isi grupnya
+    $$('[data-check-all-box]').forEach(m => ackMaster(m.dataset.checkAllBox, scopeRootOf(m)));
     const out = document.getElementById('mutasiCount');
-    if (out) out.textContent = boxes('siswa_id').filter(b => b.checked).length;
+    if (out) out.textContent = String(groupBoxes('siswa_id').filter(b => b.checked).length);
   }
+  $$('[data-check-all]').forEach(btn => btn.addEventListener('click', () => {
+    groupBoxes(btn.dataset.checkAll, scopeRootOf(btn)).forEach(b => { b.checked = true; });
+    syncCount();
+  }));
+  $$('[data-check-none]').forEach(btn => btn.addEventListener('click', () => {
+    groupBoxes(btn.dataset.checkNone, scopeRootOf(btn)).forEach(b => { b.checked = false; });
+    syncCount();
+  }));
+  $$('[data-check-all-box]').forEach(master => master.addEventListener('change', () => {
+    groupBoxes(master.dataset.checkAllBox, scopeRootOf(master)).forEach(b => { b.checked = master.checked; });
+    master.indeterminate = false;
+    syncCount();
+  }));
+  document.addEventListener('change', e => { if (e.target && e.target.type === 'checkbox') syncCount(); });
   syncCount();
+
+  /* ===== kop surat: tampilkan/sembunyikan teks manual sesuai sumber data ===== */
+  $$('[data-kop-sumber]').forEach(sel => {
+    const wrap = document.querySelector('[data-kop-manual]');
+    if (!wrap) return;
+    const sync = () => { wrap.style.display = sel.value === 'auto' ? 'none' : ''; };
+    sel.addEventListener('change', sync);
+    sync();
+  });
+
+  /* ===== tinjau / edit masal (mis. Antrean Posting Iuran) =====
+     Menyalin ceklis sumber ke dalam modal agar modal dapat menampilkan & mengirim
+     kelompok penerimaan yang dipilih di halaman. */
+  $$('[data-mass-review]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const src = document.getElementById(btn.dataset.massReview || '');
+      const modal = document.getElementById(btn.dataset.massTarget || '');
+      if (!src || !modal) return;
+      const picked = $$('input[name="ids"]').filter(b => b.form === src && b.checked && !b.disabled);
+      const holder = modal.querySelector('[data-mass-ids]');
+      const summary = modal.querySelector('[data-mass-summary]');
+      const list = picked.map(b => String(b.value || '')).filter(Boolean);
+      const totalIds = list.reduce((n, v) => n + v.split(',').filter(Boolean).length, 0);
+      if (!list.length) {
+        // modal tetap dibuka agar pengguna tahu harus mencentang kelompok penerimaan lebih dulu
+        if (holder) holder.innerHTML = '';
+        if (summary) summary.textContent = 'Belum ada kelompok yang dipilih — centang dulu kelompok penerimaan pada tabel, lalu klik lagi.';
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+        return;
+      }
+      if (holder) {
+        holder.innerHTML = list.map(v =>
+          '<input type="hidden" name="ids" value="' + v.replace(/"/g, '&quot;') + '" form="fMassTinjau">').join('');
+      }
+      if (summary) {
+        summary.textContent = `${list.length} kelompok penerimaan terpilih · ${totalIds} pembayaran siswa akan diproses.`;
+      }
+      modal.classList.add('show');
+      document.body.style.overflow = 'hidden';
+    });
+  });
 
   /* ===== grup iuran: jenis & mode nominal ===== */
   $$('[data-iuran-form]').forEach(form => {
@@ -1828,6 +1900,122 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       if (tokHint) tokHint.textContent = `${tok} · ${school}`;
     };
     [inTitle, inSub, inToken].forEach(el => { if (el) el.addEventListener('input', render); });
+    render();
+  });
+})();
+
+/* =========================================================================
+   TAB & PRATINJAU LANGSUNG KOP — Desain Templat Cetak
+   Dua template kop terpisah: `kwitansi` (kwitansi BKU / iuran / pinjaman)
+   dan `laporan` (BKU, rekap, ledger, leger, laporan iuran, ekskul).
+   ========================================================================= */
+(function () {
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const $ = (s, r = document) => r.querySelector(s);
+
+  /* ---------- tab generik ([data-tabgroup] + [data-tab-btn] + [data-tab-pane]) ---------- */
+  $$('[data-tabgroup]').forEach(group => {
+    const btns = $$('[data-tab-btn]', group);
+    const panes = $$('[data-tab-pane]', document);
+    if (!btns.length) return;
+    const show = key => {
+      btns.forEach(b => b.classList.toggle('on', b.dataset.tabBtn === key));
+      panes.forEach(p => {
+        const on = p.dataset.tabPane === key;
+        p.style.display = on ? '' : 'none';
+        p.hidden = !on;
+      });
+    };
+    btns.forEach(b => b.addEventListener('click', () => {
+      show(b.dataset.tabBtn);
+      try { history.replaceState(null, '', '#' + b.dataset.tabBtn); } catch (e) { }
+    }));
+    const want = String(location.hash || '').replace('#', '');
+    show(btns.some(b => b.dataset.tabBtn === want) ? want : btns[0].dataset.tabBtn);
+  });
+
+  /* ---------- pratinjau kop real-time ---------- */
+  const numOr = (v, d) => { const n = Number(String(v == null ? '' : v).replace(',', '.')); return Number.isFinite(n) && n > 0 ? n : d; };
+
+  function kopBorderCss(garis, kw) {
+    if (garis === 'none') return 'none';
+    if (garis === 'single') return kw ? '1.4px solid #1F1B3A' : '1.5px solid #2A1A12';
+    return kw ? '3px double #1F1B3A' : '3px double #2A1A12';
+  }
+
+  function renderKopv(box) {
+    const form = box.closest('form');
+    if (!form) return;
+    const jenis = box.dataset.kopv || 'laporan';
+    const kw = jenis === 'kwitansi';
+    const unit = kw ? 'px' : 'pt';
+    const sumberSel = $('[data-kopv-sumber]', form);
+    const sumber = sumberSel ? sumberSel.value : 'manual';
+    const manualWrap = $('[data-kopv-manual="' + jenis + '"]', form);
+    if (manualWrap) manualWrap.style.display = sumber === 'auto' ? 'none' : '';
+
+    const f = numOr(($('[data-kopv-font]', form) || {}).value, kw ? 9 : 10);
+    const fb = numOr(($('[data-kopv-font-besar]', form) || {}).value, kw ? 11.5 : 15);
+
+    let lines = [];
+    if (sumber === 'auto') {
+      const el = document.querySelector('[data-kopv-auto="' + jenis + '"]');
+      try { lines = JSON.parse((el && el.textContent) || '[]'); } catch (e) { lines = []; }
+      lines = lines.map(l => {
+        const o = (typeof l === 'string') ? { teks: l } : l;
+        return { teks: o.teks || '', size: Number(o.size) > 0 ? Number(o.size) : (o.nama ? fb : f), bold: !!o.bold, italic: false };
+      });
+    } else {
+      const ta = $('[data-kopv-text]', form);
+      lines = String((ta && ta.value) || '').split('\n').map(t => t.trim()).filter(Boolean)
+        .map((t, i) => ({ teks: t, size: i === 3 ? fb : f, bold: i === 3, italic: false }));
+    }
+
+    const sizes = $$('[data-kopv-size]', form);
+    const bolds = $$('[data-kopv-bold]', form);
+    const italics = $$('[data-kopv-italic]', form);
+    lines = lines.map((l, i) => {
+      const s = sizes[i] ? numOr(sizes[i].value, l.size) : l.size;
+      const bold = bolds[i] ? !!bolds[i].checked : l.bold;
+      const italic = italics[i] ? !!italics[i].checked : l.italic;
+      return { teks: l.teks, size: s || l.size, bold, italic };
+    });
+
+    const hidden = $('input[name="logo_b64"]', form);
+    const logoUrl = (hidden && /^data:image\//i.test(hidden.value || '')) ? hidden.value : String(box.dataset.kopvLogo || '');
+    const lw = numOr(($('[data-kopv-logo-w]', form) || {}).value, kw ? 34 : 76);
+    const lh = numOr(($('[data-kopv-logo-h]', form) || {}).value, kw ? 34 : 76);
+    const garisSel = $('[name="garis"]', form);
+    const garis = garisSel ? garisSel.value : (kw ? 'single' : 'double');
+
+    const logo = logoUrl
+      ? '<img src="' + logoUrl.replace(/"/g, '&quot;') + '" alt="Logo" style="width:' + lw + 'px;height:' + lh + 'px;object-fit:contain;flex:0 0 ' + lw + 'px">'
+      : '<div class="kopv-ph" style="width:' + lh + 'px;height:' + lh + 'px;flex:0 0 ' + lh + 'px">?</div>';
+    const txt = lines.length
+      ? lines.map(l => '<div style="font-size:' + l.size + unit + (l.bold ? ';font-weight:800' : '') + (l.italic ? ';font-style:italic' : '') + '">' + escapeHtml(l.teks) + '</div>').join('')
+      : '<div class="muted" style="font-size:11px">' + (sumber === 'auto'
+        ? 'Identitas sekolah belum lengkap — isi di menu Identitas Sekolah.'
+        : 'Belum ada baris kop. Tulis teks kop pada kolom di atas.') + '</div>';
+    box.innerHTML = '<div class="kopv-inner" style="border-bottom:' + kopBorderCss(garis, kw) + '">'
+      + logo + '<div class="kopv-txt">' + txt + '</div></div>';
+  }
+
+  function escapeHtml(t) {
+    return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  $$('[data-kopv]').forEach(box => {
+    const form = box.closest('form');
+    if (!form) return;
+    const render = () => renderKopv(box);
+    ['input', 'change'].forEach(ev => form.addEventListener(ev, render));
+    const file = form.querySelector('input[type=file][data-b64]');
+    if (file) file.addEventListener('change', () => { setTimeout(render, 400); setTimeout(render, 1200); });
+    $$('[data-kopv-refresh]', form).forEach(b => b.addEventListener('click', render));
+    // gambar yang gagal dimuat → tampilkan placeholder huruf
+    box.addEventListener('error', e => {
+      if (e.target && e.target.tagName === 'IMG') e.target.replaceWith(Object.assign(document.createElement('div'), { className: 'kopv-ph', textContent: '?' }));
+    }, true);
     render();
   });
 })();

@@ -638,7 +638,8 @@ const MODULES = [
   { key: 'laporan', label: 'Laporan & Export' },
   { key: 'audit', label: 'Audit Log' },
   { key: 'backup', label: 'Backup & Restore' },
-  { key: 'panduan', label: 'Petunjuk Pengguna' }
+  { key: 'panduan', label: 'Petunjuk Pengguna' },
+  { key: 'legal', label: 'Legalitas Layanan (ToS & SLA)' }
 ];
 const ACTIONS = ['view', 'create', 'edit', 'delete', 'approve', 'export'];
 
@@ -661,14 +662,14 @@ function defaultAllowed(role, module, action) {
   }
   const AKADEMIK = ['siswa', 'kelas', 'program', 'mutasi_kelas', 'iuran', 'ekskul'];
   if (role === 'kepala_sekolah') {
-    if (action === 'view') return ['dashboard', 'transaksi', 'laporan', 'bku', 'anggaran', 'piutang', 'piutang_lain', 'piutang_lainnya', 'sekolah', 'audit', 'tutup_bulanan', 'import', 'pegawai', 'payroll', 'beasiswa', 'mutasi_kas', 'catatan', 'panduan', ...AKADEMIK].includes(module) ? 1 : 0;
+    if (action === 'view') return ['dashboard', 'transaksi', 'laporan', 'bku', 'anggaran', 'piutang', 'piutang_lain', 'piutang_lainnya', 'sekolah', 'audit', 'tutup_bulanan', 'import', 'pegawai', 'payroll', 'beasiswa', 'mutasi_kas', 'catatan', 'panduan', 'legal', ...AKADEMIK].includes(module) ? 1 : 0;
     if (action === 'approve' && module === 'transaksi') return 1;
     if (action === 'edit' && module === 'catatan') return 1;
     if (action === 'export' && ['laporan', 'payroll', 'iuran'].includes(module)) return 1;
     return 0;
   }
   if (role === 'staff') {
-    if (action === 'view') return ['dashboard', 'transaksi', 'bku', 'piutang', 'piutang_lain', 'piutang_lainnya', 'saldo_awal', 'coa', 'aset', 'pegawai', 'beasiswa', 'mutasi_kas', 'catatan', 'panduan', ...AKADEMIK].includes(module) ? 1 : 0;
+    if (action === 'view') return ['dashboard', 'transaksi', 'bku', 'piutang', 'piutang_lain', 'piutang_lainnya', 'saldo_awal', 'coa', 'aset', 'pegawai', 'beasiswa', 'mutasi_kas', 'catatan', 'panduan', 'legal', ...AKADEMIK].includes(module) ? 1 : 0;
     if (action === 'create') return ['transaksi', 'piutang', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa', 'ekskul', 'catatan'].includes(module) ? 1 : 0;
     if (action === 'edit') return ['transaksi', 'piutang_lain', 'piutang_lainnya', 'iuran', 'siswa'].includes(module) ? 1 : 0;
     return 0;
@@ -905,6 +906,11 @@ function bootstrap() {
       kop_baris: 'PERWAKILAN YAYASAN PEMBINA LEMBAGA PENDIDIKAN\nPERSATUAN GURU REPUBLIK INDONESIA\n(YPLP-PGRI) KABUPATEN CIAMIS\nSEKOLAH MENENGAH KEJURUAN PGRI CIKONENG\nAKREDITASI : A - NPSN : 20211525\nJalan Raya No.144 Telp./Fax.:(0265)773258 e-mail:smkpgrickn@yahoo.co.id Cikoneng- Ciamis',
       kop_font: '10',
       kop_font_besar: '15',
+      // kop surat dinamis: 'auto' = dari Identitas Sekolah, 'manual' = teks sendiri
+      kop_sumber: 'manual',
+      // logo kop terpisah (tidak harus logo utama sekolah) + pengaturan font per baris
+      kop_logo: '',
+      kop_format: '',        // JSON [{"size":12,"bold":1}, …] per baris kop
       // tempat yang dicetak sebelum tanggal pada semua dokumen ("Cikoneng, 2 November 2026")
       print_tempat: 'Cikoneng',
       print_design: '{}',
@@ -1426,6 +1432,12 @@ function temaWarna() {
   return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toUpperCase() : TEMA_DEFAULT;
 }
 function appNama() { return String(getSetting('app_nama', 'SIMKEU Sekolah') || 'SIMKEU Sekolah').trim() || 'SIMKEU Sekolah'; }
+/**
+ * Sub-judul di bawah nama aplikasi pada bilah samping ("Sistem Keuangan").
+ * Kosong = ikuti branding sistem dari Super Admin (lihat server.page()).
+ */
+const APP_SUB_DEFAULT = 'Sistem Keuangan';
+function appSub() { return String(getSetting('app_sub', '') || '').trim().slice(0, 60); }
 function appLogo() { return String(getSetting('app_logo', '') || '').trim(); }
 
 /** struktur penataan menu: { groups:{gid:urutan}, order:{href:urutan}, labels:{href:teks}, icons:{href:url} } */
@@ -1462,6 +1474,10 @@ function temaWarnaGlobal() {
 function appNamaGlobal() {
   const v = String(mainSetting('app_nama', 'SIMKEU Sekolah') || '').trim();
   return v || 'SIMKEU Sekolah';
+}
+/** sub-judul aplikasi versi GLOBAL (dipakai bila sekolah belum mengisinya sendiri) */
+function appSubGlobal() {
+  return String(mainSetting('app_sub', '') || '').trim().slice(0, 60);
 }
 function appLogoGlobal() { return String(mainSetting('app_logo', '') || '').trim(); }
 /** tulis setting GLOBAL (selalu database utama) — dipakai pengaturan tampilan menu */
@@ -3105,7 +3121,8 @@ const TRASH_LABEL = {
   siswa: 'Data Siswa', mutasi_kas: 'Mutasi Kas',
   piutang_bayar: 'Riwayat Pembayaran Piutang', piutang_lain_bayar: 'Riwayat Pembayaran Piutang Sertifikasi',
   piutang_lainnya: 'Piutang Lainnya', piutang_lainnya_bayar: 'Riwayat Pembayaran Piutang Lainnya',
-  piutang_kategori: 'Kategori Piutang Lainnya', siswa_penempatan: 'Penempatan Kelas Siswa'
+  piutang_kategori: 'Kategori Piutang Lainnya', siswa_penempatan: 'Penempatan Kelas Siswa',
+  pegawai: 'Data Pegawai'
 };
 function cleanupOrphanPiutang(user) {
   const validIds = db.prepare('SELECT id FROM tahun_ajaran').all().map(r => Number(r.id));
@@ -3191,7 +3208,27 @@ function createTenantDatabase(opts = {}) {
     if (opts.kepala) setSetting('sekolah_kepala', String(opts.kepala));
     if (opts.app_nama) setSetting('app_nama', String(opts.app_nama));
     if (opts.tema) setSetting('tema_warna', String(opts.tema));
-    if (opts.logo) setSetting('sekolah_logo', String(opts.logo));
+    if (opts.logo) {
+      // logo default sistem dipakai sebagai logo sekolah sampai admin sekolah menggantinya sendiri
+      setSetting('sekolah_logo', String(opts.logo));
+      setSetting('app_logo', String(opts.logo));
+    }
+    /* ---------- ONBOARDING: kondisi awal BERSIH ----------------------------
+       Sekolah yang baru mendaftar memulai dengan:
+         · daftar BKU KOSONG (tanpa 17 BKU contoh),
+         · seluruh identitas sekolah KOSONG kecuali Nama Sekolah (dari form
+           pendaftaran) — alamat, kepala, bendahara, NIP/NUPTK, NPSN, kontak,
+           bentuk pendidikan & kop surat tidak ikut contoh.
+       `opts.keepSample` dipakai internal (mis. sandbox/demo) bila data contoh
+       memang dibutuhkan. */
+    if (!opts.keepSample) {
+      try { if (opts.keepBku !== true) db.prepare('DELETE FROM bku').run(); } catch (e) { }
+      const kosongkan = ['sekolah_alamat', 'sekolah_kepala', 'sekolah_nip_kepala', 'sekolah_bendahara', 'sekolah_nip_bendahara',
+        'sekolah_npsn', 'sekolah_bentuk', 'sekolah_status', 'sekolah_kepemilikan', 'sekolah_telp', 'sekolah_email',
+        'sekolah_website', 'kop_baris'];
+      const upd = db.prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v');
+      for (const k of kosongkan) upd.run(k, '');
+    }
     // jenjang pendidikan → preset tingkat kelas otomatis untuk sekolah baru
     if (opts.jenjang) {
       setSetting('jenjang_pendidikan', String(opts.jenjang));
@@ -3981,8 +4018,7 @@ function otpCreate(jenis, ref, phone, minutes = 10) {
     .run(token, jenis, String(ref || ''), String(phone || ''), kode, exp, nowStamp());
   return { token, kode, expires_at: exp };
 }
-function otpGet(token) { return token ? db.prepare('SELECT * FROM otp_code WHERE token=?').get(String(token)) : null; }
-function otpVerify(token, kode, maxTries = 5) {
+function otpGet(token) { return token ? db.prepare('SELECT * FROM otp_code WHERE token=?').get(String(token)) : null; }function otpVerify(token, kode, maxTries = 5) {
   const row = otpGet(token);
   if (!row) return { ok: false, err: 'Sesi verifikasi tidak ditemukan. Silakan ulangi pencarian.' };
   if (row.verified) return { ok: true, row };
@@ -3994,6 +4030,41 @@ function otpVerify(token, kode, maxTries = 5) {
   }
   db.prepare('UPDATE otp_code SET verified=1 WHERE token=?').run(row.token);
   return { ok: true, row: { ...row, verified: 1 } };
+}
+
+/* ==================================================================
+   TAUTAN SLIP HONOR LANGSUNG (TANPA OTP)
+   ------------------------------------------------------------------
+   Slip honor dapat dikirim massal lewat WhatsApp. Tautan yang dikirim
+   adalah URL bertoken: "<id-pegawai>.<hmac>" yang ditandatangani dengan
+   `portal_token_secret` milik sekolah, sehingga pegawai langsung melihat
+   slipnya tanpa menunggu/memasukkan kode OTP.
+   ================================================================== */
+function portalSecret() {
+  let s = String(getSetting('portal_token_secret', '') || '').trim();
+  if (s) return s;
+  s = require('crypto').randomBytes(24).toString('hex');
+  try { setSetting('portal_token_secret', s); } catch (e) { }
+  return s;
+}
+/** token akses langsung slip honor pegawai (jenis di-scope agar tidak bisa dipakai lintas modul) */
+function slipToken(pegawaiId, jenis) {
+  const id = Number(pegawaiId) || 0;
+  if (!id) return '';
+  const scope = String(jenis || 'slip');
+  const sig = require('crypto').createHmac('sha256', portalSecret()).update(scope + ':' + id).digest('hex').slice(0, 32);
+  return `${id}.${sig}`;
+}
+/** verifikasi token slip; mengembalikan id pegawai (0 = tidak valid) */
+function verifySlipToken(tok, jenis) {
+  const m = /^(\d{1,12})\.([a-f0-9]{32})$/.exec(String(tok || '').trim());
+  if (!m) return 0;
+  const scope = String(jenis || 'slip');
+  const want = require('crypto').createHmac('sha256', portalSecret()).update(scope + ':' + m[1]).digest('hex').slice(0, 32);
+  try {
+    if (!require('crypto').timingSafeEqual(Buffer.from(want, 'utf8'), Buffer.from(m[2], 'utf8'))) return 0;
+  } catch (e) { return 0; }
+  return Number(m[1]);
 }
 
 /* ==================================================================
@@ -4329,13 +4400,14 @@ module.exports = {
   ekskulRows, ekskulPending, dedupeAset,
   // ronde 9: analitik iuran, rekap sertifikasi, OTP portal, pesan orang tua, beasiswa siswa
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
+  portalSecret, slipToken, verifySlipToken,
   portalSlugs, portalSlugIsCustom, resetPortalSlugCache, portalDefaultAlias, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,
   beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData,
   // tampilan (tema, branding, penataan menu) + petunjuk pengguna
-  temaWarna, appNama, appLogo, navUi, setNavUi, TEMA_DEFAULT,
+  temaWarna, appNama, appSub, appSubGlobal, APP_SUB_DEFAULT, appLogo, navUi, setNavUi, TEMA_DEFAULT,
   // identitas resmi sekolah (NPSN, bentuk, status, kepemilikan, kontak)
   BENTUK_PENDIDIKAN, BENTUK_LABEL, STATUS_SEKOLAH, KEPEMILIKAN_OPTIONS, identitasSekolah,
   mainSetting, setMainSetting, temaWarnaGlobal, appNamaGlobal, appLogoGlobal, navUiGlobal, setNavUiGlobal,

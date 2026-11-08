@@ -1284,3 +1284,144 @@ Disesuaikan karena perubahan **disengaja**:
 Sekolah live (`SMK PGRI CIKONENG`) memakai slug `iuran-siswa-spc` (pegawai `piutang-pegawai-spc`, slip
 `slip-honor-spc`), jadi dengan mode `auto` alamat `/portal` **otomatis** menjadi 404 setelah rilis ini —
 tanpa perlu mengubah data di database live.
+
+---
+
+## Ronde 34 — ceklis massal, menu ToS/SLA, ledger pinjaman, slug dinamis, dua kop cetak
+
+Ringkasan lengkap ada di `../AGENTS.md` bagian **Ronde 34 SIMKEU**. Poin kode penting:
+
+- `public/app.js`: grup ceklis dicari dari `data-check-item="<grup>"` (fallback `name`), dibatasi `data-check-scope="#tabel"`;
+  kotak kepala tabel jadi `indeterminate` saat parsial. Halaman desain memakai `[data-tabgroup]`/`[data-tab-btn]`/`[data-tab-pane]`
+  dan blok pratinjau `[data-kopv]`.
+- `db.js`: modul RBAC `legal`. `ui.js`: NAV grup `Legalitas Layanan` (`defaultOpen`), `kopCfg`/`hasKopCfg`/`kopBorder`,
+  `kop()` = kop laporan, `kwitansiKop()` = kop kwitansi (fallback ke `kop_*` global).
+- `printcfg.js`: `KOP_JENIS/KOP_LABEL/KOP_GARIS/KOP_UNIT`, `readKop`, `saveKopFromBody` (default ukuran per jenis),
+  `resetKop`.
+- `routes/legal.js`: `/legal/tos` & `/legal/sla` di dalam layout (publik tetap `/syarat-ketentuan`, `/sla`).
+- `routes/aset_akun.js`: rute hapus wajib `:id` (`/aset/akun/:id/mutasi/delete`) + `GET /aset/akun/:id/mutasi/:mid/kwitansi`.
+- `saas_extra.js`: `tenantByPortalPrefix`. `server.js`: peta slug mendaftarkan bagian nama slug dua segmen,
+  `portalRestToPath()`, dan penulisan ulang `/<slug>/...` untuk pengguna login.
+- Test: `node dev-tests/round34.js` (96) & `node dev-tests/ui-round34.js` (51).
+
+### Kop tampil apa adanya (revisi setelah rilis ronde 34)
+- `public/app.css`: `text-transform:uppercase` dihapus dari `.kop .kop-txt .l1`, `.kwit-kop .kwit-kop-y`,
+  `.kwit-kop .kwit-kop-nama`. `ui.autoKopLines()` tidak lagi `toUpperCase()` (kepemilikan, bentuk/status, nama).
+- Test: `round34.js` bagian 6 + `ui-round34.js` bagian 5a (computed `text-transform` harus `none`).
+
+---
+
+## Ronde 35 — sub-judul aplikasi ("Sistem Keuangan") dapat diedit
+
+- `db.js`: `APP_SUB_DEFAULT`, `appSub()` (setting `app_sub`, kosong = ikut default sistem), `appSubGlobal()`.
+- `saas.js`: `appSub()` → `saas_sub` (default `'Sistem Keuangan'`).
+- `ui.js`: `layout({ appSub })` merender `.brand-sub`; `server.js` `page()` mengisi `appSub` (sekolah → sistem → bawaan).
+- Form: `/tema` field `app_sub`, `/super-admin/branding` field `saas_sub`.
+- Test: `node dev-tests/round35.js` (33) & `node dev-tests/ui-round35.js` (18). Detail di `../AGENTS.md`.
+
+---
+
+## Ronde 36 — baris JUMLAH/TOTAL tidak lagi berulang di setiap halaman cetak
+
+**Penyebab**: `<tfoot>` adalah *table-footer-group*. Saat tabel panjang dipecah menjadi beberapa halaman,
+mesin cetak Chrome/Edge **mengulang footer group** di setiap halaman (seperti mengulang `<thead>`), sehingga
+baris `JUMLAH` / `TOTAL` / `GRAND TOTAL` tercetak berulang di bawah setiap halaman — termasuk pada laporan
+BKU, buku pembantu, LRA, piutang, neraca, leger honor, dan tabel layar yang dicetak langsung.
+
+**Perbaikan (satu aturan global, bukan ubah 99 markup tabel)** — `public/app.css` blok baru
+`@media print` setelah blok reset `.table-scroll`:
+```css
+@media print{
+  table>tfoot,table>tbody>tfoot{display:table-row-group !important}   /* footer ≠ grup berulang */
+  table>tfoot>tr{page-break-inside:avoid !important; break-inside:avoid !important}
+  tr.row-total,tr.total-row,tr.tr-total,tr.jumlah-row,tr.grand-total{ /* bila total ditaruh di tbody */
+    page-break-inside:avoid !important; break-inside:avoid !important}
+  table>thead{display:table-header-group}                            /* judul kolom TETAP berulang */
+}
+```
+- Dengan `display:table-row-group`, baris total **mengalir tepat setelah baris data terakhir** → muncul
+  **sekali** di halaman terakhir, kolom tetap sejajar karena masih di tabel yang sama.
+- Hanya berlaku saat mencetak: footer *sticky* di tabel bergulir layar (`.table-scroll`) tetap `position:sticky`.
+- Tidak ada perubahan markup/route. `<tfoot>` tetap dipakai (semantik + sticky layar), hanya status
+  "footer group"-nya yang dilepas saat cetak.
+- Firefox tidak mengulang `tfoot` sehingga aturan ini tidak berefek (perilaku tetap benar).
+
+**Gotcha**: jangan menghapus aturan ini saat merapikan CSS, dan jangan menambahkan
+`display:table-footer-group !important` di blok print mana pun. Kalau ada tabel baru dengan total,
+cukup taruh baris total di `<tfoot>` (atau `<tr class="row-total">` bila di `<tbody>`) — otomatis ikut aturan ini.
+
+**Test**: `node dev-tests/print-total.js` (33 cek) — membuat 240 transaksi, mencetak `/cetak/bku?bku=all`
+(20 halaman), `/cetak/pembantu?p=tunai`, dan halaman layar `/bku/:id` ke PDF, lalu membaca teks **per halaman**
+(`pdftotext -layout`, dipisah form feed): total harus ada di **1 halaman** (halaman terakhir, di bawah baris data
+terakhir), judul kolom tetap berulang di setiap halaman berisi data, `getComputedStyle` tfoot = `table-row-group`
+saat media print dan tetap `table-footer-group` di layar.
+
+---
+
+## Ronde 37 — Pembayaran hybrid (QRIS otomatis via payment gateway + QRIS manual)
+
+### Berkas baru
+- **`paygw.js`** — adapter payment gateway tanpa dependency (fetch bawaan):
+  `PROVIDERS`/`PROVIDER_KEYS` (`sandbox`, `midtrans`, `duitku`, `xendit`), `publicConfig(get)`,
+  `orderNo(tenantId)` (`SK-<id>-<epoch36>`), `createCharge(cfg, {order_id, amount, label, customer})`,
+  `checkStatus(cfg, {order_id})`, `verifyCallback(cfg, body, headers)`, `parseCallback(cfg, body)`, `DEF`.
+  - `midtrans` — Core API `/v2/charge` (`payment_type:'qris'`) + `/v2/<order>/status`, signature callback
+    SHA512(`order_id+status_code+gross_amount+ServerKey`).
+  - `duitku` — `/api/merchant/v2/inquiry` (`paymentMethod:'SP'`) + `/transactionStatus`; signature
+    SHA256(merchant+order+amount+key) saat inquiry, MD5(merchant+amount+order+key) saat callback.
+  - `xendit` — `/qr_codes` + `/qr_codes/<ref>`; token callback lewat header `x-callback-token`.
+  - `sandbox` — **tanpa jaringan**: QR string `SIMULASI-QRIS|order|nominal|nama`, status lunas hanya
+    lewat endpoint simulasi. Dipakai dev-tests & demo.
+  - Adapter **selalu** mengembalikan objek (tidak melempar) pada `createCharge`/`checkStatus`.
+
+### Control plane (`saas.js`)
+- Setting baru (`DEFAULT_SETTINGS`): `pay_gateway_aktif` (`0`), `pay_manual_aktif` (`1`),
+  `pay_gateway_provider` (`sandbox`), `pay_gateway_mode` (`sandbox`), `pay_gateway_merchant`,
+  `pay_gateway_key`, `pay_gateway_key2`, `pay_gateway_callback`, `pay_gateway_expire_menit` (`60`).
+- Migrasi kolom `saas_payments` (di `migrateControl()`): `channel` (`manual`|`gateway`), `provider`,
+  `order_id`, `qr_string`, `qr_url`, `checkout_url`, `gateway_status`, `paid_at`, `expires_at`
+  + indeks `idx_pay_order`.
+- Fungsi baru: `gatewayCfg()`, `payConfig(baseUrl)` (aman untuk klien, `callback_url` = `<base>/pay/callback`,
+  `configured` = provider sandbox atau kunci terisi), `bayarGateway(tenantId, {durasi, paket, pengirim,
+  catatan, oleh, base_url})`, `gatewayRow(order_id)`, `gatewayMarkPaid(order_id, oleh)` (idempoten →
+  memanggil `approvePayment` yang sudah ada), `gatewaySync(order_id)` (polling ke provider).
+- **`bayarGateway` membuat baris `saas_payments` lebih dulu** (agar order tetap terlacak walau gateway
+  gagal/timeout); bila `createCharge` gagal → baris ditandai `rejected` + `alasan` dan error dilempar.
+- Kedua metode dimatikan di panel → `pay_manual_aktif` dipaksa `1` (sekolah tidak boleh kehilangan
+  jalan pembayaran).
+
+### Rute
+- `server.js`: **`POST /pay/callback`** ditangani **sebelum** router & masuk `isPublicPath('/pay/callback')`
+  (tanpa sesi). Verifikasi `paygw.verifyCallback` → 401 bila signature salah; `parseCallback` → `order_id`;
+  `gatewayMarkPaid` bila lunas (respons `{ok:true, paid:true, sudah}`), selain itu update `gateway_status`.
+  **Catatan**: handler ini menulis langsung ke `raw res` (bukan `R.*`) karena berjalan sebelum `makeRes`.
+- `routes/layanan.js`:
+  - `GET /perpanjang` kini merender **dua blok**: `[data-metode="gateway"]` (form `POST /perpanjang/qris`)
+    dan `[data-metode="manual"]` (form lama unggah bukti). Blok mengikuti sakelar; kartu pratinjau QRIS
+    diberi badge metode manual aktif/nonaktif.
+  - `POST /perpanjang/qris` → `saas.bayarGateway` → redirect `GET /perpanjang/qris?order=…`.
+  - `GET /perpanjang/qris` — halaman pembayaran: QR (`qr_url` gambar atau `qr_string` teks), nominal,
+    kedaluwarsa, status gateway, tombol **Cek Status** & **Simulasikan Lunas** (hanya provider sandbox),
+    polling otomatis 6 detik lewat `<script>` inline (fetch + `location.reload()` bila lunas).
+  - `GET /perpanjang/status?order=` → JSON `{ok,status,paid,gateway_status,error}` (polling).
+  - `POST /perpanjang/simulasi` → JSON `{ok:true,paid:true}` (hanya provider `sandbox`).
+  - **Gotcha**: handler rute menerima `res` = `makeRes` wrapper (`res.json/res.html/res.redirect`,
+    **bukan** `writeHead`/`end`). Sempat memakai `res.writeHead` → error 500 `res.writeHead is not a function`.
+- `routes/superadmin.js`:
+  - `GET /super-admin/qris` menambah kartu **Metode Pembayaran Hybrid** (`[data-pay-methods]`, ceklis
+    `data-pay-gateway`/`data-pay-manual`, select `data-pay-provider`, kredensial + URL callback) dan
+    ringkasan status kedua metode.
+  - `POST /super-admin/qris/pay` — validasi dulu (minimal satu metode aktif; kunci wajib bila gateway
+    diaktifkan dengan provider non-sandbox), menyimpan sakelar + kredensial (kunci hanya ditimpa bila
+    field diisi), audit `EDIT PEMBAYARAN`.
+  - Tabel `/super-admin/pembayaran` menampilkan kolom **Metode** (QRIS Otomatis + provider / QRIS Manual)
+    dan order id; kolom bukti menampilkan tombol QRIS/`qr_string` untuk transaksi gateway.
+- `ui.js`: ikon baru `qris`.
+
+### Test
+```bash
+node dev-tests/pay-hybrid.js   # 37 cek: sakelar & kredensial Super Admin (validasi minimal satu metode),
+                               # checkout dua metode, QRIS dinamis (order, channel, QR string, halaman,
+                               # polling, simulasi lunas → masa aktif bertambah), callback publik +
+                               # idempoten + order tak dikenal, sakelar mematikan pilihan gateway
+```

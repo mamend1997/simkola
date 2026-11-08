@@ -1,6 +1,7 @@
 'use strict';
 const X = require('../xlsx-read');
 const impcache = require('../impcache');
+const slipwa = require('../slipwa');
 
 /* Master Data Pegawai + import Excel */
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
@@ -51,11 +52,36 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         <div class="toolbar">
           <input placeholder="Cari nama / jabatan" data-table-search="#tblPegawai" style="width:200px">
           <a class="btn btn-sm" href="${c.base}/pegawai/template">${ui.icon('download')}Template Excel</a>
+          <a class="btn btn-sm" href="${c.base}/pegawai/export">${ui.icon('download')}Export Excel</a>
           ${editable ? `<button class="btn btn-sm" data-open="mImport">${ui.icon('upload')}Import Excel</button>` : ''}
           ${editable ? ui.openModalBtn('mAdd', 'Tambah Pegawai') : ''}
         </div></div>
-      ${rows.length ? `<div class="table-wrap"><table id="tblPegawai"><thead><tr><th>Nama</th><th>Jabatan / Tugas</th><th>Kategori</th><th>Tgl Lahir</th><th>WhatsApp</th><th>No. Rekening</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+      ${rows.length ? `<form id="fPegawaiMass" method="post" action="${c.base}/pegawai/hapus-masal">
+        <input type="hidden" name="back" value="/pegawai">
+        <div class="between mb-1">
+          <div class="small muted">Centang pegawai untuk hapus masal atau kirim slip honor via WhatsApp.
+            Terpilih: <b data-check-count="pegawaiIds">0</b> pegawai.</div>
+          <div class="toolbar">
+            <button type="button" class="btn btn-sm" data-check-all="pegawaiIds">${ui.icon('check')}Pilih Semua</button>
+            <button type="button" class="btn btn-sm" data-check-none="pegawaiIds">${ui.icon('x')}Hapus Ceklis</button>
+            <span class="flex" style="gap:6px;align-items:flex-end">
+              <span class="field" style="margin:0"><label style="font-size:11.5px">Periode slip</label>
+                <input type="month" name="periode" value="${esc(dbm.currentPeriode())}" style="min-width:150px"></span>
+              <button class="btn btn-sm btn-green" type="submit" formmethod="post" formaction="${c.base}/pegawai/slip-wa"
+                data-confirm-click="Kirim slip honor periode terpilih ke pegawai yang dicentang via WhatsApp?">
+                ${ui.icon('whatsapp')}Kirim Slip Honor Masal (WA) (<b data-check-count="pegawaiIds">0</b>)
+              </button>
+            </span>
+            ${editable ? `<button class="btn btn-sm btn-danger" type="submit" formmethod="post" formaction="${c.base}/pegawai/hapus-masal"
+              data-confirm-click="Hapus masal pegawai yang dicentang? Data pegawai dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari).">
+              ${ui.icon('trash')}Hapus Masal Terpilih (<b data-check-count="pegawaiIds">0</b>)</button>` : ''}
+          </div></div>
+      </form>
+      <div class="table-wrap"><table id="tblPegawai"><thead><tr>
+        <th style="width:34px"><input type="checkbox" data-check-all-box="pegawaiIds" title="Pilih semua"></th>
+        <th>Nama</th><th>Jabatan / Tugas</th><th>Kategori</th><th>Tgl Lahir</th><th>WhatsApp</th><th>No. Rekening</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(p => `<tr>
+          <td><input type="checkbox" form="fPegawaiMass" name="pegawai" data-check-item="pegawaiIds" value="${p.id}"></td>
           <td class="t-strong">${esc(p.nama)}</td>
           <td>${esc(p.jabatan || '-')}</td>
           <td>${p.tipe === 'tu' ? ui.badge('TU', 'blue') : ui.badge('Guru', 'orange')}</td>
@@ -141,6 +167,59 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     db.prepare('DELETE FROM pegawai WHERE id=?').run(req.body.id);
     dbm.logAudit(req.user, 'HAPUS', 'pegawai', `Hapus pegawai ${p ? p.nama : req.body.id}`);
     res.redirect(req.BASE + '/pegawai?ok=' + encodeURIComponent('Pegawai dihapus.'));
+  });
+
+  /* ---------- export Excel data pegawai ---------- */
+  get('/pegawai/export', (req, res) => {
+    guard(req, res, 'pegawai', 'view');
+    const rows = dbm.pegawaiList(false);
+    const head = ['NO', 'NAMA', 'JABATAN/TUGAS', 'TIPE', 'TANGGAL LAHIR', 'WHATSAPP', 'NO REKENING', 'PEMILIK REKENING', 'STATUS']
+      .map(v => ({ v, bold: true }));
+    const body = rows.map((p, i) => [
+      i + 1, p.nama || '', p.jabatan || '', p.tipe === 'tu' ? 'TU' : 'Guru',
+      p.tanggal_lahir ? String(p.tanggal_lahir).slice(0, 10) : '',
+      p.whatsapp ? lib.phoneDisplay(p.whatsapp) : '',
+      p.no_rekening || '', p.pemilik_rekening || '', p.aktif ? 'Aktif' : 'Nonaktif'
+    ]);
+    res.file(lib.xlsxBuffer('Pegawai', [head, ...body], [6, 30, 28, 10, 16, 16, 22, 24, 12]),
+      'data-pegawai.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  });
+
+  /* ---------- hapus masal pegawai (dipindahkan ke Kotak Sampah) ---------- */
+  post('/pegawai/hapus-masal', (req, res) => {
+    if (!guard(req, res, 'pegawai', 'delete')) return;
+    const back = String(req.body.back || '/pegawai').startsWith('/') ? String(req.body.back || '/pegawai') : '/pegawai';
+    const ids = [].concat(req.body.pegawai || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return res.redirect(req.BASE + back + '?err=' + encodeURIComponent('Tidak ada pegawai yang dipilih.'));
+    const rows = db.prepare(`SELECT * FROM pegawai WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+    for (const p of rows) {
+      try { dbm.trashAdd('pegawai', p, { user: req.user, label: 'Pegawai ' + p.nama }); } catch (e) { }
+      db.prepare('DELETE FROM pegawai WHERE id=?').run(p.id);
+    }
+    dbm.logAudit(req.user, 'HAPUS MASAL', 'pegawai', `Hapus ${rows.length} pegawai: ${rows.map(p => p.nama).join(', ')}`);
+    res.redirect(req.BASE + back + '?ok=' + encodeURIComponent(`${rows.length} pegawai dihapus (dapat dipulihkan dari Kotak Sampah 30 hari).`));
+  });
+
+  /* ---------- kirim slip honor via WhatsApp (tautan langsung tanpa OTP) ---------- */
+  post('/pegawai/slip-wa', (req, res) => {
+    guard(req, res, 'pegawai', 'view');
+    const back = '/pegawai';
+    const periode = /^\d{4}-\d{2}$/.test(String(req.body.periode || '')) ? String(req.body.periode) : dbm.currentPeriode();
+    const ids = [].concat(req.body.pegawai || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return res.redirect(req.BASE + back + '?err=' + encodeURIComponent('Pilih pegawai terlebih dahulu.'));
+    const rows = dbm.payrollRows(periode).filter(r => ids.includes(Number(r.pegawai_id)));
+    const adaIds = new Set(rows.map(r => Number(r.pegawai_id)));
+    const tanpaLeger = ids.filter(id => !adaIds.has(Number(id)));
+    if (!rows.length) {
+      return res.redirect(req.BASE + back + '?err=' + encodeURIComponent(`Belum ada data leger honor periode ${dbm.periodeLabel(periode)} untuk pegawai yang dipilih.`));
+    }
+    const r = slipwa.sendSlipWA({ dbm, req, periode, rows, user: req.user, pemicu: 'Kirim slip honor massal' });
+    const pesan = [
+      `${r.queued} slip honor periode ${dbm.periodeLabel(periode)} masuk antrean WhatsApp.`,
+      r.tanpaNomor.length ? `Tanpa nomor WhatsApp: ${r.tanpaNomor.join(', ')}.` : '',
+      tanpaLeger.length ? `${tanpaLeger.length} pegawai belum punya baris leger pada periode ini.` : ''
+    ].filter(Boolean).join(' ');
+    res.redirect(req.BASE + back + (r.queued ? '?ok=' : '?err=') + encodeURIComponent(pesan));
   });
 
   post('/pegawai/import', (req, res) => {

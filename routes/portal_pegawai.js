@@ -489,7 +489,28 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     if (dbm.getSetting('portal_slip_aktif', '1') !== '1') {
       return res.html(closedBlock(settings, base, 'Portal slip gaji sedang dinonaktifkan.', 'slip'));
     }
-    const row = dbm.otpGet(req.query.get('token'));
+    let row = dbm.otpGet(req.query.get('token'));
+    // ---- TAUTAN LANGSUNG (tanpa OTP): ?t=<token HMAC slip pegawai> ----
+    // Dipakai tautan WhatsApp "Kirim Slip Honor" — pegawai langsung melihat slipnya.
+    const direct = String(req.query.get('t') || '');
+    if (direct && (!row || !row.verified || row.jenis !== 'slip')) {
+      const pid = dbm.verifySlipToken(direct, 'slip');
+      if (pid) {
+        const pgDirect = db.prepare('SELECT * FROM pegawai WHERE id=?').get(pid);
+        if (pgDirect) {
+          // pakai ulang sesi terverifikasi yang masih berlaku, atau buat sesi baru (7 hari)
+          let ada = db.prepare(`SELECT * FROM otp_code WHERE jenis='slip' AND ref=? AND verified=1 AND expires_at>?
+            ORDER BY created_at DESC LIMIT 1`).get(String(pid), lib.nowStamp());
+          if (!ada) {
+            const o = dbm.otpCreate('slip', String(pid), pgDirect.whatsapp || '', 60 * 24 * 7);
+            db.prepare('UPDATE otp_code SET verified=1 WHERE token=?').run(o.token);
+            ada = dbm.otpGet(o.token);
+          }
+          row = ada;
+          dbm.logAudit(null, 'PORTAL SLIP', 'payroll', `Portal publik: ${pgDirect.nama} membuka slip honor via tautan langsung (tanpa OTP)`);
+        }
+      }
+    }
     if (!row || !row.verified || row.jenis !== 'slip') {
       return res.html(shell({
         base, settings, title: 'Akses Kedaluwarsa', aktif: 'slip',

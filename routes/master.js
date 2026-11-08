@@ -99,6 +99,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const ro = !c.can('sekolah', 'edit');
     const tema = dbm.temaWarnaGlobal();
     const appNama = dbm.appNamaGlobal();
+    // sub-judul: isian sekolah (kosong = ikuti Branding Sistem Super Admin)
+    const appSub = dbm.appSub();
+    const subDefault = (saas && saas.appSub ? saas.appSub() : "") || dbm.APP_SUB_DEFAULT;
     const appLogo = dbm.appLogoGlobal();
     const modeNow = String(dbm.getSetting('mode_tema', 'light')) === 'dark' ? 'dark' : 'light';
     const content = `<div class="split">
@@ -134,6 +137,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <div class="field"><label>Nama Aplikasi</label>
             <input name="app_nama" value="${esc(appNama)}" maxlength="60" ${ro ? 'readonly' : ''} placeholder="SIMKEU Sekolah">
             <div class="hint">Nama sekolah pada kop surat tetap diatur pada menu <a href="${c.base}/sekolah">Identitas Sekolah</a>.</div></div>
+          <div class="field"><label>Teks Sub-Judul (baris kecil di bawah nama aplikasi)</label>
+            <input name="app_sub" value="${esc(appSub)}" maxlength="60" ${ro ? 'readonly' : ''} placeholder="${esc(subDefault)}">
+            <div class="hint">Contoh: <b>Sistem Keuangan</b>, <b>Sistem Informasi Sekolah</b>, atau motto sekolah.
+              Kosongkan untuk memakai default dari Super Admin: <b>${esc(subDefault)}</b>.</div></div>
           <div class="preview-theme">
             <div class="pt-card">
               <div class="pt-title">Pratinjau Warna</div>
@@ -183,8 +190,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const nm = String(req.body.app_nama || '').trim().slice(0, 60);
       dbm.setSetting('app_nama', nm || 'SIMKEU Sekolah');
     }
-    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Tema aplikasi diperbarui: warna ${hex}, mode ${String(dbm.getSetting('mode_tema', 'light')) === 'dark' ? 'gelap' : 'terang'}, nama "${dbm.appNama()}"`);
-    res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Tema & nama aplikasi disimpan.'));
+    // sub-judul bilah samping: kosong = ikuti default Branding Sistem (Super Admin)
+    if (req.body.app_sub !== undefined) {
+      dbm.setSetting('app_sub', String(req.body.app_sub || '').replace(/\s+/g, ' ').trim().slice(0, 60));
+    }
+    dbm.logAudit(req.user, 'EDIT', 'sekolah', `Tema aplikasi diperbarui: warna ${hex}, mode ${String(dbm.getSetting('mode_tema', 'light')) === 'dark' ? 'gelap' : 'terang'}, nama "${dbm.appNama()}", sub-judul "${dbm.appSub() || '(default sistem)'}"`);
+    res.redirect(req.BASE + '/tema?ok=' + encodeURIComponent('Tema, nama & sub-judul aplikasi disimpan.'));
   });
 
   post('/tema/logo', async (req, res) => {
@@ -214,7 +225,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
 
   /* ================= IDENTITAS SEKOLAH ================= */
   const isEmail = v => !v || /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(v);
-  const isUrl = v => !v || /^https?:\/\/[^\s]+\.[^\s]+$/i.test(v);
+  /* Website diisi TANPA "https://" (contoh: www.sekolah.sch.id). Protokol ditambahkan
+     otomatis saat disimpan; keduanya tetap diterima agar data lama tidak rusak. */
+  const URL_BARE_RE = /^(?=.{3,190}$)([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d{2,5})?(?:\/[^\s]*)?$/i;
+  const isUrl = v => {
+    const t = String(v || '').trim();
+    if (!t) return true;
+    if (/^https?:\/\//i.test(t)) return URL_BARE_RE.test(t.replace(/^https?:\/\//i, ''));
+    return URL_BARE_RE.test(t);
+  };
+  /** normalisasi isian website → selalu menyimpan protokol (https://) */
+  const normUrl = v => {
+    const t = String(v || '').trim();
+    if (!t) return '';
+    if (/^https?:\/\//i.test(t)) return t.replace(/\s+/g, '');
+    return 'https://' + t.replace(/^\/+/, '').replace(/\s+/g, '');
+  };
+  /** tampilan isian website pada form → tanpa protokol */
+  const urlForInput = v => String(v || '').trim().replace(/^https?:\/\//i, '');
   /** bentuk pendidikan resmi → preset tingkat kelas (agar master kelas tetap konsisten) */
   const BENTUK_JENJANG = { SMK: 'SMK', SMA: 'SMA/MA', MA: 'SMA/MA', SMP: 'SMP/MTs', MTS: 'SMP/MTs', SD: 'SD/MI', MI: 'SD/MI', PAUD: 'PAUD/TK' };
   const backPath = (req, def) => {
@@ -247,7 +275,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             </div>
             <div class="row2">
               ${fld('Email Resmi Sekolah', 'sekolah_email', ident.email, 'Format email akan divalidasi otomatis.', 'type="email" maxlength="120" placeholder="info@sekolah.sch.id"')}
-              ${fld('Website Sekolah', 'sekolah_website', ident.website, 'Diawali <code>https://</code>, contoh: https://smkpgricikoneng.sch.id', 'maxlength="150" placeholder="https://sekolah.sch.id"')}
+              ${fld('Website Sekolah', 'sekolah_website', urlForInput(ident.website), 'Isi <b>tanpa</b> <code>https://</code> — contoh: <b>www.sekolah.sch.id</b> (protokol ditambahkan otomatis).', 'maxlength="150" placeholder="www.sekolah.sch.id"')}
             </div>
             <div class="field"><label>Alamat Lengkap Sekolah</label>
               <textarea name="sekolah_alamat" rows="3" ${ro ? 'readonly' : ''} placeholder="Jalan, kelurahan, kecamatan, kabupaten, kode pos">${esc(s.sekolah_alamat || '')}</textarea>
@@ -360,12 +388,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent('Format email sekolah tidak valid (contoh: info@sekolah.sch.id).'));
     }
     if (req.body.sekolah_website !== undefined && !isUrl(String(req.body.sekolah_website || '').trim())) {
-      return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent('Format website tidak valid — diawali https:// (contoh: https://sekolah.sch.id).'));
+      return res.redirect(req.BASE + '/sekolah?err=' + encodeURIComponent('Format website tidak valid — tulis tanpa https:// (contoh: www.sekolah.sch.id).'));
     }
     // ---- identitas umum & kontak ----
     const keys = ['sekolah_nama', 'sekolah_alamat', 'sekolah_kepala', 'sekolah_nip_kepala', 'sekolah_bendahara', 'sekolah_nip_bendahara',
       'sekolah_telp', 'sekolah_email', 'sekolah_website', 'sekolah_status', 'sekolah_kepemilikan'];
     for (const k of keys) if (req.body[k] !== undefined) dbm.setSetting(k, String(req.body[k]).trim());
+    // website disimpan lengkap dengan protokol agar tautan pada kop/footer tetap valid
+    if (req.body.sekolah_website !== undefined) dbm.setSetting('sekolah_website', normUrl(req.body.sekolah_website));
     if (req.body.sekolah_npsn !== undefined) {
       const npsn = saas && saas.npsnNormalize ? saas.npsnNormalize(req.body.sekolah_npsn) : String(req.body.sekolah_npsn || '').trim();
       dbm.setSetting('sekolah_npsn', npsn);
@@ -449,7 +479,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const publishedOn = String(s.portal_aktif || '1') === '1';
     const pegawaiOn = String(s.portal_pegawai_aktif || '1') === '1';
     const slipOn = String(s.portal_slip_aktif || '1') === '1';
-    const swRow = (name, on, label, sub, href, extra = '') => `<div class="publ-row">
+    /* ---- alamat publik efektif (mengikuti slug kanonik sekolah, boleh dua bagian) ----
+       Dulu tautan sakelar memakai slug internal ("/portal") sehingga bisa menunjuk alamat
+       yang sudah tidak dipakai. Sekarang selalu memakai slug portal yang aktif. */
+    const hostAbs = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
+    const slugCanon = String(t.portal_slug || '').trim().toLowerCase();
+    const publicUrl = (kind, fallback) => {
+      const path = slugCanon
+        ? '/' + slugCanon + (kind === 'pegawai' ? '/portal-pegawai' : kind === 'slip' ? '/portal-slip' : '')
+        : '/' + (fallback || 'portal');
+      const short = (c.base || '') + path;
+      return { short, full: hostAbs ? hostAbs + path : short };
+    };
+    const swRow = (name, on, label, sub, link, extra = '') => `<div class="publ-row">
       <label class="sw">
         <input type="checkbox" name="${name}" value="1" ${on ? 'checked' : ''} ${ro ? 'disabled' : ''}>
         <span class="sw-track"></span>
@@ -457,7 +499,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <span class="sw-state">${on ? 'ON' : 'OFF'}</span>
       </label>
       <div class="publ-meta">
-        <a class="url-chip" href="${esc(href)}" target="_blank" rel="noopener">${ui.icon('link')}${esc(href.replace(/^https?:\/\/[^/]+/, ''))}</a>
+        <a class="url-chip" href="${esc(link.full)}" target="_blank" rel="noopener">${ui.icon('link')}${esc(link.full.replace(/^https?:\/\/[^/]+/, ''))}</a>
         <span class="small muted">${sub}${extra}</span>
       </div>
     </div>`;
@@ -486,9 +528,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <form method="post" action="${c.base}/sekolah/portal-publik/simpan">
             <input type="hidden" name="simpan_publikasi" value="1">
             <div class="publ-list">
-              ${swRow('portal_aktif', publishedOn, 'Publikasikan Halaman Portal', 'Portal cek tagihan iuran siswa (orang tua/wali).', `${c.base}/${dbm.portalSlugs().siswa}`)}
-              ${swRow('portal_pegawai_aktif', pegawaiOn, 'Portal Piutang Pegawai', 'Cek sisa piutang pegawai (verifikasi OTP WhatsApp).', `${c.base}/${dbm.portalSlugs().pegawai}`)}
-              ${swRow('portal_slip_aktif', slipOn, 'Portal Slip Gaji Pegawai', 'Unduh slip gaji pegawai (verifikasi OTP WhatsApp).', `${c.base}/${dbm.portalSlugs().slip}`)}
+              ${swRow('portal_aktif', publishedOn, 'Publikasikan Halaman Portal', 'Portal cek tagihan iuran siswa (orang tua/wali).', publicUrl('siswa', dbm.portalSlugs().siswa))}
+              ${swRow('portal_pegawai_aktif', pegawaiOn, 'Portal Piutang Pegawai', 'Cek sisa piutang pegawai (verifikasi OTP WhatsApp).', publicUrl('pegawai', dbm.portalSlugs().pegawai))}
+              ${swRow('portal_slip_aktif', slipOn, 'Portal Slip Gaji Pegawai', 'Unduh slip gaji pegawai (verifikasi OTP WhatsApp).', publicUrl('slip', dbm.portalSlugs().slip))}
             </div>
             <div class="hint" style="margin:10px 0 14px 0">Bila sakelar dimatikan, halaman tersebut otomatis tidak dapat dibuka.
               Seluruh pengaturan &amp; data tetap tersimpan dan langsung aktif lagi saat sakelar dinyalakan.</div>

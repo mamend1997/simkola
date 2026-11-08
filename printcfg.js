@@ -123,6 +123,96 @@ const LEGACY_LABELS = {
 /** teks tempat default pada baris "Cikoneng, 2 November 2026" */
 const TEMPAT_DEFAULT = 'Cikoneng';
 
+/* ==================================================================
+   DUA TEMPLATE KOP SURAT TERPISAH
+   ------------------------------------------------------------------
+   kop_kwitansi → semua KWITANSI (BKU, iuran, pinjaman kegiatan aset)
+   kop_laporan  → semua LAPORAN (BKU, rekap transaksi, ledger, laporan
+                  iuran, leger/slip honor, honor ekskul, arus kas, dst.)
+   Masing-masing: sumber (auto/manual), baris teks + ukuran/tebal/miring
+   per baris, logo kop sendiri + lebar/tinggi, serta gaya garis pemisah.
+   Bila belum diatur, dipakai pengaturan kop GLOBAL lama (kop_*) agar
+   instalasi lama tidak berubah.
+   ================================================================== */
+const KOP_JENIS = ['kwitansi', 'laporan'];
+const KOP_LABEL = {
+  kwitansi: 'Kop Kwitansi Transaksi',
+  laporan: 'Kop Laporan Keuangan'
+};
+const KOP_DESC = {
+  kwitansi: 'Berlaku pada kwitansi BKU, bukti pembayaran iuran, dan kwitansi pinjaman kegiatan (aset riil).',
+  laporan: 'Berlaku pada cetakan BKU, rekap transaksi, ledger aset, laporan iuran, leger/slip honor, dan honor ekskul.'
+};
+const KOP_GARIS = ['single', 'double', 'none'];
+const KOP_GARIS_LABEL = { single: 'Garis Tunggal', double: 'Garis Ganda', none: 'Tanpa Garis' };
+const KOP_UNIT = { kwitansi: 'px', laporan: 'pt' };
+const KOP_MAX_BARIS = 8;
+
+function kopKind(jenis) { return jenis === 'kwitansi' ? 'kwitansi' : 'laporan'; }
+function kopSettingKey(jenis) { return 'kop_' + kopKind(jenis); }
+/** konfigurasi kop efektif (per jenis, fallback ke kop global lama) */
+function readKop(dbm, jenis) {
+  const ui = require('./ui');
+  let all = {};
+  try { all = dbm.settingsAll(); } catch (e) { all = {}; }
+  return ui.kopCfg(all, kopKind(jenis));
+}
+/**
+ * Simpan template kop satu jenis dari body form.
+ * opts.logo = URL logo hasil unggahan (bila ada berkas baru), opts.hapusLogo = true.
+ * Semua nilai divalidasi sebelum ditulis (tidak ada penyimpanan separuh).
+ */
+function saveKopFromBody(dbm, jenis, body, opts = {}) {
+  const j = kopKind(jenis);
+  const cur = readKop(dbm, j);
+  const ui = require('./ui');
+  const DEF = ui.KOP_DEFAULT[j] || {};
+  // template jenis ini belum pernah disimpan → jangan mewarisi ukuran kop global
+  // (satuan kwitansi px, laporan pt, sehingga angka warisan bisa terlalu besar)
+  let punyaSendiri = false;
+  try { punyaSendiri = !!String(dbm.getSetting(kopSettingKey(j), '') || '').trim(); } catch (e) { }
+  const defFont = punyaSendiri ? cur.font : DEF.font;
+  const defFontBesar = punyaSendiri ? cur.font_besar : DEF.font_besar;
+  const rawNum = (v, min, max, def) => {
+    const n = Number(String(v === undefined || v === null ? '' : v).replace(',', '.'));
+    if (!Number.isFinite(n) || n <= 0) return def;
+    return Math.min(max, Math.max(min, n));
+  };
+  const sumber = String(body.sumber || '') === 'auto' ? 'auto' : (String(body.sumber || '') === 'manual' ? 'manual' : cur.sumber);
+  const garis = KOP_GARIS.includes(String(body.garis || '')) ? String(body.garis) : cur.garis;
+  const NL = String.fromCharCode(10), CR = String.fromCharCode(13);
+  const baris = String(body.text === undefined ? (cur.baris || []).join(NL) : body.text)
+    .split(CR).join('').split(NL).map(x => x.trim()).filter(Boolean);
+  const format = [];
+  for (let i = 1; i <= KOP_MAX_BARIS; i++) {
+    const sizeRaw = String(body['size_' + i] === undefined ? '' : body['size_' + i]).replace(',', '.');
+    const size = Number(sizeRaw);
+    format.push({
+      size: Number.isFinite(size) && size > 0 ? Math.min(48, Math.max(5, size)) : null,
+      bold: !!body['bold_' + i],
+      italic: !!body['italic_' + i]
+    });
+  }
+  const maxW = j === 'kwitansi' ? 140 : 220;
+  const cfg = {
+    sumber,
+    baris: baris.slice(0, KOP_MAX_BARIS),
+    format,
+    logo: opts.hapusLogo ? '' : (opts.logo || cur.logo || ''),
+    logo_w: rawNum(body.logo_w, 12, maxW, cur.logo_w),
+    logo_h: rawNum(body.logo_h, 12, maxW, cur.logo_h),
+    garis,
+    font: rawNum(body.font, 5, 36, defFont),
+    font_besar: rawNum(body.font_besar, 5, 48, defFontBesar)
+  };
+  dbm.setSetting(kopSettingKey(j), JSON.stringify(cfg));
+  return cfg;
+}
+/** hapus template kop satu jenis → kembali memakai kop global lama */
+function resetKop(dbm, jenis) {
+  try { dbm.setSetting(kopSettingKey(jenis), ''); } catch (e) { }
+}
+
 function normOrient(v) {
   const s = String(v || '').toLowerCase();
   return ORIENT.includes(s) ? s : '';
@@ -204,5 +294,7 @@ function pageRule(o, opts = {}) {
 
 module.exports = {
   ORIENT, ORIENT_LABEL, DOCS, docOf, readAll, saveFromBody, labels, orient, pageRule, normOrient,
-  fill, tempat, tempatTanggal, TEMPAT_DEFAULT
+  fill, tempat, tempatTanggal, TEMPAT_DEFAULT,
+  KOP_JENIS, KOP_LABEL, KOP_DESC, KOP_GARIS, KOP_GARIS_LABEL, KOP_UNIT, KOP_MAX_BARIS,
+  kopKind, kopSettingKey, readKop, saveKopFromBody, resetKop
 };

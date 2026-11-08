@@ -148,6 +148,7 @@ const ICONS = {
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
   link: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
   coins: '<ellipse cx="9" cy="6" rx="6" ry="3"/><path d="M3 6v5c0 1.7 2.7 3 6 3s6-1.3 6-3V6"/><path d="M3 11v5c0 1.7 2.7 3 6 3"/><ellipse cx="16" cy="15" rx="5" ry="2.5"/><path d="M11 15v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/>',
+  qris: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14h1M14 20h1M18 18h3v3h-3z"/>',
   swap: '<path d="M7 4 3 8l4 4"/><path d="M3 8h13a4 4 0 0 1 0 8h-1"/><path d="m17 20 4-4-4-4"/>',
   whatsapp: '<path d="M12 21a9 9 0 1 0-7.8-4.5L3 21l4.6-1.2A9 9 0 0 0 12 21Z"/><path d="M8.8 8.4c.3-.7.6-.7.9-.7h.6c.2 0 .5 0 .7.5l.7 1.6c.1.2.1.4 0 .6l-.5.6c-.1.2-.2.3 0 .6.5.9 1.3 1.7 2.2 2.2.3.2.4.1.6 0l.6-.6c.2-.2.4-.1.6 0l1.6.8c.4.2.4.4.4.6v.5c0 .4-.3 1-.8 1.3-.5.4-1.2.6-2 .4-1.3-.3-2.6-1-3.7-2.1-1.1-1.1-1.8-2.4-2.1-3.7-.2-.8 0-1.5.4-2Z"/>',
   send: '<path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4Z"/>',
@@ -203,6 +204,8 @@ const NAV = [
       { href: '/iuran/transaksi', key: 'iuran', activeKey: 'iuran_trx', label: 'Transaksi Iuran', icon: 'receipt' },
       { href: '/iuran/antrean', key: 'iuran', activeKey: 'iuran_queue', label: 'Antrean Posting Iuran', icon: 'clock' },
       { href: '/iuran/pengingat', key: 'iuran', activeKey: 'iuran_pengingat', label: 'Jadwal Pengingat Tagihan', icon: 'whatsapp' },
+      // Beasiswa SPP dipindahkan dari menu Kepegawaian ke kelompok Grup Iuran
+      { href: '/beasiswa', key: 'beasiswa', label: 'Beasiswa SPP', icon: 'target' },
       // SPP dipisahkan dari menu Piutang dan diletakkan paling bawah pada kelompok Grup Iuran
       { href: '/spp', key: 'piutang', activeKey: 'spp', label: 'SPP', icon: 'target' }
     ]
@@ -220,8 +223,7 @@ const NAV = [
       { href: '/payroll/slip', key: 'payroll', activeKey: 'payroll_slip', label: 'Slip Gaji Pegawai', icon: 'printer' },
       { href: '/payroll/kolom', key: 'payroll', activeKey: 'payroll_kolom', label: 'Pengaturan Kolom Leger', icon: 'settings' },
       { href: '/ekskul', key: 'ekskul', label: 'Honor Pembina Ekskul', icon: 'target' },
-      { href: '/ekskul/antrean', key: 'ekskul', activeKey: 'ekskul_queue', label: 'Antrean Posting Ekskul', icon: 'clock' },
-      { href: '/beasiswa', key: 'beasiswa', label: 'Beasiswa SPP', icon: 'target' }
+      { href: '/ekskul/antrean', key: 'ekskul', activeKey: 'ekskul_queue', label: 'Antrean Posting Ekskul', icon: 'clock' }
     ]
   },
   {
@@ -258,6 +260,13 @@ const NAV = [
     id: 'bantuan', group: 'Bantuan', icon: 'info', items: [
       { href: '/petunjuk', key: 'panduan', label: 'Petunjuk Pengguna', icon: 'book' },
       { href: '/bantuan', key: 'catatan', activeKey: 'bantuan', label: 'Bantuan & Tiket Kendala', icon: 'inbox' }
+    ]
+  },
+  {
+    // dokumen resmi layanan — teksnya diatur terpusat oleh Super Admin Pusat
+    id: 'legal', group: 'Legalitas Layanan', icon: 'shield', defaultOpen: true, items: [
+      { href: '/legal/tos', key: 'legal', activeKey: 'legal_tos', label: 'Syarat & Ketentuan Layanan', icon: 'file' },
+      { href: '/legal/sla', key: 'legal', activeKey: 'legal_sla', label: 'Service Level Agreement (SLA)', icon: 'shield' }
     ]
   }
 ];
@@ -353,7 +362,9 @@ function navOrdered(cfg) {
   return groups;
 }
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light' }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appSub = '', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light' }) {
+  // sub-judul di bawah nama aplikasi ("Sistem Keuangan") — dapat diubah sekolah & Super Admin
+  const brandSub = String(appSub || '').trim() || 'Sistem Keuangan';
   const initials = (user?.nama || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
   const hidden = navVisibility(navHidden);
   const linkOf = (i) => {
@@ -367,10 +378,11 @@ function layout({ title, sub = '', user, active, base = '', content, query, role
   const groups = navOrdered(navCfg);
   let nav = '';
   for (const g of groups) {
-    const featureOn = (i) => !features || i.key === 'layanan' || features.includes(i.key);
+    // menu layanan & legalitas selalu tampil untuk semua paket (dokumen resmi + status langganan)
+    const featureOn = (i) => !features || i.key === 'layanan' || i.key === 'legal' || features.includes(i.key);
     const items = g.items.filter(i => featureOn(i) && !hidden.has(i.href) && (!can || (i.action ? can(i.key, i.action) : can(i.key))));
     if (!items.length) continue;
-    const isOpen = items.some(i => active === (i.activeKey || i.key));
+    const isOpen = !!g.defaultOpen || items.some(i => active === (i.activeKey || i.key));
     if (items.length === 1) {
       nav += `<div class="nav-single">${linkOf(items[0])}</div>`;
       continue;
@@ -404,7 +416,7 @@ ${themeCss(tema)}
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       ${brandMark}
-      <div><div class="brand-name">${esc(appName)}</div><div class="brand-sub">Sistem Keuangan</div></div>
+      <div style="min-width:0"><div class="brand-name">${esc(appName)}</div><div class="brand-sub">${esc(brandSub)}</div></div>
     </div>
     ${impersonate ? `<div class="demo-chip" style="background:#EEF2FF;color:#4338CA;border-color:#C7D2FE">${icon('shield', 'i-sm')} Mode bantuan Super Admin</div>` : ''}
     <nav class="nav">${nav}</nav>
@@ -615,25 +627,167 @@ function chartLineSPP(rows, opts = {}) {
   </div>`;
 }
 
-function kop(settings) {
+/* ==================================================================
+   KOP SURAT DINAMIS
+   ------------------------------------------------------------------
+   Sumber data kop dapat dipilih di menu Desain Templat Cetak:
+     · 'manual' → teks baris ditulis sendiri (settings `kop_baris`)
+     · 'auto'   → otomatis dari Identitas Sekolah (nama, NPSN, bentuk,
+                  status, kepemilikan, alamat & kontak)
+   Ukuran font (pt) dan tebal tiap baris dapat diatur per baris
+   (`kop_format` = [{"size":12,"bold":1}, …]).
+   Logo kop dapat diunggah terpisah (`kop_logo`) tanpa mengubah logo
+   utama sekolah (`sekolah_logo`).
+   ================================================================== */
+function kopFormatOf(s) {
+  let raw = s && s.kop_format;
+  if (typeof raw === 'string' && raw.trim()) {
+    try { raw = JSON.parse(raw); } catch (e) { raw = []; }
+  }
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(x => (x && typeof x === 'object') ? x : {});
+  if (typeof raw === 'object') {
+    // dukung format objek {"1":{size,bold}, "2":{...}} (indeks mulai 1)
+    const out = [];
+    for (const k of Object.keys(raw)) {
+      const i = Number(k) - 1;
+      if (i >= 0) out[i] = (raw[k] && typeof raw[k] === 'object') ? raw[k] : {};
+    }
+    return out;
+  }
+  return [];
+}
+/** susun baris kop otomatis dari Identitas Sekolah */
+function autoKopLines(s) {
+  const g = k => String((s && s[k]) || '').trim();
+  const baris = [];
+  const kep = g('sekolah_kepemilikan');
+  const bentuk = g('sekolah_bentuk');
+  const status = g('sekolah_status');
+  const bentukLabel = BENTUK_LABEL && BENTUK_LABEL[bentuk] ? BENTUK_LABEL[bentuk] : bentuk;
+  if (kep) baris.push({ teks: kep, size: null, bold: false });
+  const l2 = [bentukLabel, status].filter(Boolean).join(' — ');
+  if (l2) baris.push({ teks: l2, size: null, bold: false });
+  const kop = baris.length ? baris : [];
+  const nama = g('sekolah_nama') || 'NAMA SEKOLAH';
+  const kontak = [];
+  const telp = g('sekolah_telp');
+  const email = g('sekolah_email');
+  const website = g('sekolah_website').replace(/^https?:\/\//i, '');
+  const npsn = g('sekolah_npsn');
+  if (telp) kontak.push('Telp. ' + telp);
+  if (email) kontak.push('Email: ' + email);
+  if (website) kontak.push(website);
+  if (npsn) kontak.push('NPSN: ' + npsn);
+  const alamat = g('sekolah_alamat').split('\n').map(x => x.trim()).filter(Boolean).join(' · ');
+  const alamatBaris = [alamat, kontak.join(' · ')].filter(Boolean).join(' · ');
+  return kop.concat([
+    { teks: nama, size: null, bold: true, nama: true },
+    { teks: alamatBaris, size: null, bold: false }
+  ]).filter(l => String(l.teks || '').trim());
+}
+/* ---------- dua template kop terpisah ----------
+   `kop_kwitansi` = kop untuk SEMUA kwitansi (BKU, iuran, pinjaman kegiatan)
+   `kop_laporan`  = kop untuk laporan/cetakan (BKU, rekap transaksi, ledger, laporan iuran, leger, ekskul)
+   Bila salah satu belum diatur, dipakai pengaturan kop GLOBAL lama (kop_sumber/kop_baris/
+   kop_format/kop_logo/kop_font) sehingga instalasi lama tidak berubah. */
+const KOP_DEFAULT = {
+  // ukuran font kop kwitansi dalam PIXEL (kertas kecil 210×99 mm), laporan dalam POINT
+  kwitansi: { sumber: 'auto', baris: [], format: [], logo: '', logo_w: 34, logo_h: 34, garis: 'single', font: 9, font_besar: 11.5 },
+  laporan: { sumber: 'auto', baris: [], format: [], logo: '', logo_w: 76, logo_h: 76, garis: 'double', font: 10, font_besar: 15 }
+};
+const KOP_GARIS = ['single', 'double', 'none'];
+const KOP_GARIS_LABEL = { single: 'Garis Tunggal', double: 'Garis Ganda', none: 'Tanpa Garis' };
+function kopKeyOf(jenis) { return jenis === 'kwitansi' ? 'kop_kwitansi' : 'kop_laporan'; }
+/** true bila sekolah sudah menyimpan template kop khusus jenis ini (bukan warisan global) */
+function hasKopCfg(settings, jenis = 'laporan') {
+  const raw = (settings || {})[kopKeyOf(jenis)];
+  if (raw === undefined || raw === null || raw === '') return false;
+  if (typeof raw === 'string') { try { const o = JSON.parse(raw); return !!o && typeof o === 'object'; } catch (e) { return false; } }
+  return typeof raw === 'object';
+}
+/** konfigurasi kop efektif untuk satu jenis dokumen (per-jenis → fallback global lama) */
+function kopCfg(settings, jenis = 'laporan') {
   const s = settings || {};
-  const logo = s.sekolah_logo
-    ? `<img src="${esc(s.sekolah_logo)}" alt="Logo" width="64" height="64" decoding="async"${logoSrcset(s, '(max-width:600px) 56px, 72px')}>`
-    : `<div class="kop-logo-ph">${esc((s.sekolah_nama || 'S').trim().charAt(0))}</div>`;
-  // baris kop boleh memakai variabel dinamis: {npsn}, {telp}, {email}, {website}, {bentuk}, {status}, {kepemilikan}
-  const lines = String(s.kop_baris || '').split('\n').map(x => fillIdentitas(x, s).trim()).filter(Boolean);
-  const f = Number(s.kop_font || 10) || 10;
-  const fb = Number(s.kop_font_besar || 15) || 15;
-  const kontak = identitasKontak(s);
+  const j = jenis === 'kwitansi' ? 'kwitansi' : 'laporan';
+  let raw = s[kopKeyOf(j)];
+  if (typeof raw === 'string' && raw.trim()) {
+    try { raw = JSON.parse(raw); } catch (e) { raw = null; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) raw = null;
+  const legacy = {
+    sumber: String(s.kop_sumber || 'manual') === 'auto' ? 'auto' : 'manual',
+    baris: String(s.kop_baris || '').replace(/\r/g, '').split('\n').map(x => x).filter(x => String(x).trim()),
+    format: kopFormatOf(s),
+    logo: String(s.kop_logo || ''),
+    font: Number(s.kop_font || KOP_DEFAULT[j].font) || KOP_DEFAULT[j].font,
+    font_besar: Number(s.kop_font_besar || KOP_DEFAULT[j].font_besar) || KOP_DEFAULT[j].font_besar
+  };
+  const cfg = Object.assign({}, KOP_DEFAULT[j], legacy, raw || {});
+  cfg.sumber = String(cfg.sumber) === 'auto' ? 'auto' : 'manual';
+  cfg.baris = Array.isArray(cfg.baris) ? cfg.baris.map(x => String(x == null ? '' : x)) : String(cfg.baris || '').split('\n');
+  cfg.format = Array.isArray(cfg.format) ? cfg.format : [];
+  cfg.logo = String(cfg.logo || '') || (raw ? '' : legacy.logo);
+  const num = (v, d) => { const n = Number(String(v == null ? '' : v).replace(',', '.')); return Number.isFinite(n) && n > 0 ? n : d; };
+  cfg.logo_w = num(cfg.logo_w, KOP_DEFAULT[j].logo_w);
+  cfg.logo_h = num(cfg.logo_h, KOP_DEFAULT[j].logo_h);
+  cfg.font = num(cfg.font, KOP_DEFAULT[j].font);
+  cfg.font_besar = num(cfg.font_besar, KOP_DEFAULT[j].font_besar);
+  cfg.garis = KOP_GARIS.includes(String(cfg.garis)) ? String(cfg.garis) : KOP_DEFAULT[j].garis;
+  return cfg;
+}
+/** daftar baris kop final (sudah memakai ukuran/tebal/miring per baris) */
+function kopLines(settings, jenis = 'laporan') {
+  const s = settings || {};
+  const cfg = kopCfg(s, jenis);
+  let list;
+  if (cfg.sumber === 'auto') {
+    list = autoKopLines(s).map(l => ({ teks: l.teks, size: l.size || (l.nama ? cfg.font_besar : cfg.font), bold: !!l.bold }));
+  } else {
+    const arr = cfg.baris.map(x => fillIdentitas(String(x || ''), s).trim()).filter(Boolean);
+    // baris ke-4 = nama sekolah (paling besar & tebal) seperti perilaku lama
+    list = arr.map((t, i) => ({ teks: t, size: i === 3 ? cfg.font_besar : cfg.font, bold: i === 3 }));
+  }
+  const fmt = cfg.format;
+  return list.map((it, i) => {
+    const o = fmt[i] && typeof fmt[i] === 'object' ? fmt[i] : {};
+    const size = Number(o.size) > 0 ? Number(o.size) : it.size;
+    const bold = (o.bold === undefined || o.bold === null || o.bold === '')
+      ? it.bold
+      : (o.bold === true || Number(o.bold) === 1);
+    const italic = (o.italic === true || Number(o.italic) === 1);
+    return { teks: it.teks, size, bold, italic };
+  });
+}
+/** logo kop: memakai logo kop khusus (per jenis) bila diunggah, selain itu logo sekolah */
+function kopLogo(settings, jenis = 'laporan') {
+  const s = settings || {};
+  const cfg = kopCfg(s, jenis);
+  return String(cfg.logo || s.sekolah_logo || '').trim();
+}
+/** CSS garis bawah kop sesuai pilihan (tunggal / ganda / tanpa garis) */
+function kopBorder(kind, color = '#2A1A12', weight = 3) {
+  if (kind === 'none') return 'none';
+  if (kind === 'single') return `${Math.max(1, weight - 1.5)}px solid ${color}`;
+  return `${weight}px double ${color}`;
+}
+/** kop LAPORAN (default) atau kop KWITANSI dalam tata letak penuh */
+function kop(settings, jenis = 'laporan') {
+  const s = settings || {};
+  const cfg = kopCfg(s, jenis);
+  const logoUrl = kopLogo(s, jenis);
+  const w = cfg.logo_w, h = cfg.logo_h;
+  const logo = logoUrl
+    ? `<img src="${esc(logoUrl)}" alt="Logo" width="${w}" height="${h}" style="width:${w}px;height:${h}px;flex:0 0 ${w}px" decoding="async"${logoSrcset(s, w + 'px')}>`
+    : `<div class="kop-logo-ph" style="width:${h}px;height:${h}px;flex:0 0 ${h}px">${esc((s.sekolah_nama || 'S').trim().charAt(0))}</div>`;
+  const lines = kopLines(s, jenis);
   if (lines.length) {
-    // baris ke-4 = nama sekolah (paling besar & tebal); sisanya mengikuti font size kecil
-    const txt = lines.map((l, i) => i === 3
-      ? `<div class="l2" style="font-size:${fb}pt">${esc(l)}</div>`
-      : `<div class="l1" style="font-size:${f}pt">${esc(l)}</div>`).join('');
-    return `<div class="kop">${logo}<div class="kop-txt">${txt}</div></div>`;
+    const txt = lines.map(l => `<div class="${l.bold ? 'l2' : 'l1'}" style="font-size:${l.size}pt${l.bold ? ';font-weight:800' : ''}${l.italic ? ';font-style:italic' : ''}">${esc(l.teks)}</div>`).join('');
+    return `<div class="kop" style="border-bottom:${kopBorder(cfg.garis, '#2A1A12', 3)}">${logo}<div class="kop-txt">${txt}</div></div>`;
   }
   const alamat = esc(s.sekolah_alamat || '').replace(/\n/g, '<br>');
-  return `<div class="kop">${logo}<div class="kop-txt">
+  const kontak = identitasKontak(s);
+  return `<div class="kop" style="border-bottom:${kopBorder(cfg.garis, '#2A1A12', 3)}">${logo}<div class="kop-txt">
     <div class="l2">${esc(s.sekolah_nama || 'NAMA SEKOLAH')}</div>
     <div class="l3">${alamat}</div>
     ${kontak ? `<div class="l3">${esc(kontak)}</div>` : ''}
@@ -641,36 +795,53 @@ function kop(settings) {
 }
 /**
  * Kop sekolah RINGKAS untuk kwitansi (1/3 F4 · 210 × 99 mm).
- * Urutan baris kop_baris: 1 yayasan … 4 nama sekolah … terakhir alamat/kontak.
+ * Memakai template `kop_kwitansi` (sumber manual/otomatis, ukuran & tebal per baris,
+ * logo + ukuran logo, garis pemisah).
  * Hanya 3 baris yang dipakai agar tinggi kop ±10 mm dan isi kwitansi tetap muat 1 halaman.
  */
 function kwitansiKop(settings) {
   const s = settings || {};
+  const cfg = kopCfg(s, 'kwitansi');
+  // template khusus tersimpan → ukuran font/logo mengikuti pengaturan; warisan global → pakai CSS kompak lama
+  const explicit = hasKopCfg(s, 'kwitansi');
+  const px = v => explicit ? ` style="font-size:${v}px"` : '';
   const nama = String(s.sekolah_nama || 'NAMA SEKOLAH').trim();
   const inisial = (nama.replace(/^(SMA|SMK|SMP|SD|MA|MTs|S)\s+/i, '').charAt(0) || nama.charAt(0) || 'S').toUpperCase();
-  const logo = s.sekolah_logo
-    ? `<img src="${esc(s.sekolah_logo)}" alt="Logo" width="34" height="34" decoding="async"${logoSrcset(s, '34px')}>`
-    : `<div class="kwit-kop-ph">${esc(inisial)}</div>`;
-  const lines = String(s.kop_baris || '').split('\n').map(x => fillIdentitas(x, s).trim()).filter(Boolean);
+  const logoUrl = kopLogo(s, 'kwitansi');
+  const w = cfg.logo_w, h = cfg.logo_h;
+  const logo = logoUrl
+    ? `<img src="${esc(logoUrl)}" alt="Logo" width="${w}" height="${h}" style="width:${w}px;height:${h}px;flex:0 0 ${w}px" decoding="async"${logoSrcset(s, w + 'px')}>`
+    : `<div class="kwit-kop-ph" style="width:${Math.max(w, h)}px;height:${Math.max(w, h)}px">${esc(inisial)}</div>`;
+  const lines = kopLines(s, 'kwitansi');
+  if (explicit && lines.length) {
+    const txt = lines.map(l => `<div style="font-size:${l.size}px;line-height:1.22${l.bold ? ';font-weight:800' : ''}${l.italic ? ';font-style:italic' : ''}">${esc(l.teks)}</div>`).join('');
+    return `<div class="kwit-kop" style="border-bottom:${kopBorder(cfg.garis, '#1F1B3A', 2.4)}">${logo}<div class="kwit-kop-txt">${txt}</div></div>`;
+  }
   const alamatSetting = String(fillIdentitas(s.sekolah_alamat || '', s)).replace(/[\r\n]+/g, ' ').trim();
-  let yayasan = '', namaBaris = '', alamat = '';
-  if (lines.length >= 4) {
-    yayasan = lines[0];
-    namaBaris = lines[3];
-    alamat = lines[lines.length - 1] !== namaBaris ? lines[lines.length - 1] : alamatSetting;
+  let yayasan = '', namaBaris = '', alamat = '', namaSize = cfg.font_besar, yayasanSize = cfg.font, alamatSize = cfg.font;
+  if (lines.length >= 2) {
+    const namaIdx = lines.findIndex(l => l.bold) >= 0 ? lines.findIndex(l => l.bold) : lines.length - 1;
+    namaBaris = lines[namaIdx].teks;
+    namaSize = lines[namaIdx].size || cfg.font_besar;
+    yayasan = namaIdx > 0 ? lines[0].teks : '';
+    yayasanSize = namaIdx > 0 ? (lines[0].size || cfg.font) : cfg.font;
+    const last = lines[lines.length - 1];
+    alamat = last && last.teks !== namaBaris ? last.teks : alamatSetting;
+    alamatSize = last && last.teks !== namaBaris ? (last.size || cfg.font) : cfg.font;
   } else if (lines.length) {
-    namaBaris = lines[0];
-    alamat = lines.slice(1).join(' · ') || alamatSetting;
+    namaBaris = lines[0].teks;
+    namaSize = lines[0].size || cfg.font_besar;
+    alamat = alamatSetting;
   } else {
     namaBaris = nama;
     alamat = alamatSetting;
   }
   const kontak = identitasKontak(s, ' · ');
   const alamatBaris = [alamat, kontak].filter(Boolean).join(' · ');
-  return `<div class="kwit-kop">${logo}<div class="kwit-kop-txt">
-    ${yayasan ? `<div class="kwit-kop-y">${esc(yayasan)}</div>` : ''}
-    <div class="kwit-kop-nama">${esc(namaBaris || nama)}</div>
-    ${alamatBaris ? `<div class="kwit-kop-l">${esc(alamatBaris)}</div>` : ''}
+  return `<div class="kwit-kop" style="border-bottom:${kopBorder(cfg.garis, '#1F1B3A', 2.4)}">${logo}<div class="kwit-kop-txt">
+    ${yayasan ? `<div class="kwit-kop-y"${px(yayasanSize)}>${esc(yayasan)}</div>` : ''}
+    <div class="kwit-kop-nama"${px(namaSize)}>${esc(namaBaris || nama)}</div>
+    ${alamatBaris ? `<div class="kwit-kop-l"${px(alamatSize)}>${esc(alamatBaris)}</div>` : ''}
   </div></div>`;
 }
 
@@ -839,4 +1010,4 @@ function importErrorModal(errors, opts = {}) {
   }).replace(`class="modal" id="${id}"`, `class="modal show" id="${id}"`);
 }
 
-module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage, fillIdentitas, identitasKontak, identitasFooter, modeOf, BENTUK_LABEL, logoSrcset, fontLinks, logoPreconnect, originOf };
+module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, kopLines, kopCfg, kopFormatOf, kopKeyOf, hasKopCfg, KOP_DEFAULT, KOP_GARIS, KOP_GARIS_LABEL, kopBorder, autoKopLines, kopLogo, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage, fillIdentitas, identitasKontak, identitasFooter, modeOf, BENTUK_LABEL, logoSrcset, fontLinks, logoPreconnect, originOf };

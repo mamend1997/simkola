@@ -97,16 +97,19 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ---------- 2. desain cetak: kolom tempat ---------- */
   await page.goto(base + '/desain-cetak');
+  /* ronde 34: pengaturan kertas & tempat berada pada tab tersendiri */
+  await page.locator('[data-tab-btn="kertas"]').click();
   ok('kartu "Tempat pada Tanggal Cetak" tampil', await page.locator('input[name=print_tempat]').count() === 1);
   await page.fill('input[name=print_tempat]', 'Ciamis');
-  await Promise.all([page.waitForNavigation(), page.click('button.btn-primary:has-text("Simpan Pengaturan Desain")')]);
+  await Promise.all([page.waitForNavigation(), page.click('button.btn-primary:has-text("Simpan Kertas")')]);
   ok('simpan tempat berhasil', /disimpan/.test(await page.locator('main.content').innerText()));
   await page.goto(`${base}/transaksi/${trx.id}/kwitansi`);
   ok('kwitansi mengikuti tempat baru', /Ciamis, \d{1,2} \w+ \d{4}/.test(await page.locator('.kwit-sign').innerText()));
   // kembalikan
   await page.goto(base + '/desain-cetak');
+  await page.locator('[data-tab-btn="kertas"]').click();
   await page.fill('input[name=print_tempat]', 'Cikoneng');
-  await Promise.all([page.waitForNavigation(), page.click('button.btn-primary:has-text("Simpan Pengaturan Desain")')]);
+  await Promise.all([page.waitForNavigation(), page.click('button.btn-primary:has-text("Simpan Kertas")')]);
 
   /* ---------- 3. portal slip: ikon tanda seru proporsional ---------- */
   await page.goto(`${base}/portal-slip/hasil?token=${tok}`);

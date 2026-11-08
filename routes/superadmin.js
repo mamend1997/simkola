@@ -72,6 +72,7 @@ module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPo
     { href: '/super-admin/menu-default', label: 'Default Tampilan Menu', icon: 'menu' },
     { href: '/super-admin/branding', label: 'Branding Sistem', icon: 'school' },
     { href: '/super-admin/qris', label: 'QRIS & Harga', icon: 'tag' },
+    { href: '/super-admin/legal', label: 'Legalitas & SLA', icon: 'file' },
     { href: '/super-admin/tiket', label: 'Pusat Tiket', icon: 'inbox' },
     { href: '/super-admin/pengumuman', label: 'Pengumuman & Maintenance', icon: 'bell' },
     { href: '/super-admin/petunjuk', label: 'Master Petunjuk', icon: 'book' },
@@ -646,9 +647,12 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       <td class="mono" style="font-weight:700">${esc(p.school_code)}</td>
       <td>${p.durasi >= 365 ? '12 Bulan' : '1 Bulan'}</td>
       <td class="num">${rupiah(p.nominal)}</td>
+      <td>${ui.badge(p.channel === 'gateway' ? ('QRIS Otomatis · ' + esc(p.provider || 'gateway')) : 'QRIS Manual', p.channel === 'gateway' ? 'green' : 'blue')}
+        ${p.order_id ? `<div class="t-sub mono">${esc(p.order_id)}</div>` : ''}</td>
       <td>${p.bukti_url
         ? `<button type="button" class="btn btn-sm" data-proof="${esc(p.bukti_url)}">${ui.icon('search')}Lihat Bukti</button>`
-        : '<span class="muted small">tanpa bukti</span>'}</td>
+        : (p.qr_url ? `<a class="btn btn-sm" href="${esc(p.qr_url)}" target="_blank" rel="noopener">${ui.icon('qris')}QRIS</a>`
+          : (p.qr_string ? `<span class="mono t-sub" style="font-size:10px;word-break:break-all">${esc(String(p.qr_string).slice(0, 40))}…</span>` : '<span class="muted small">tanpa bukti</span>'))}</td>
       <td>${ui.badge((saas.PAY_STATUS[p.status] || {}).label || p.status, (saas.PAY_STATUS[p.status] || {}).color || 'gray')}
         ${p.alasan ? `<div class="t-sub">${esc(p.alasan)}</div>` : ''}</td>
       <td class="nowrap">
@@ -669,7 +673,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         <div class="flex" style="gap:6px">
           ${['pending', 'approved', 'rejected', 'all'].map(s => `<a class="btn btn-sm ${filter === s ? 'btn-primary' : ''}" href="${req.BASE}/super-admin/pembayaran?status=${s}">${s === 'all' ? 'Semua' : (saas.PAY_STATUS[s] || {}).label}</a>`).join('')}
         </div></div>
-      <div class="table-wrap"><table><thead><tr><th>Sekolah</th><th>Kode</th><th>Durasi</th><th class="num">Nominal</th><th>Bukti Transfer</th><th>Status</th><th>Aksi</th></tr></thead>
+      <div class="table-wrap"><table><thead><tr><th>Sekolah</th><th>Kode</th><th>Durasi</th><th class="num">Nominal</th><th>Metode</th><th>Bukti / QRIS</th><th>Status</th><th>Aksi</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">Tidak ada pengajuan pada filter ini.</td></tr>`}</tbody></table></div>
     </div>
     <div class="card">
@@ -734,10 +738,11 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       <div class="card">
         <div class="card-head"><div><h3>QRIS / DANA Bisnis</h3><div class="sub">Tampil otomatis di halaman checkout seluruh sekolah</div></div></div>
         <form method="post" action="${req.BASE}/super-admin/qris">
-          <div class="field"><label>Gambar Barcode QRIS (.png / .jpg / .jpeg, maks 5 MB)</label>
-            <input type="file" accept="image/png,image/jpeg" data-b64="qris_b64" data-max="5">
+          <div class="field"><label>Gambar Barcode QRIS (.png / .jpg / .webp / .svg, maks 5 MB)</label>
+            <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/*" data-b64="qris_b64" data-max="5">
             <input type="hidden" name="qris_b64" id="qris_b64">
-            <div class="hint" id="qris_b64-info">Kosongkan bila tidak ingin mengganti gambar yang sudah ada.</div></div>
+            <div class="hint" id="qris_b64-info">Kosongkan bila tidak ingin mengganti gambar yang sudah ada.
+              Gambar raster otomatis dikonversi ke <b>WebP</b> oleh aplikasi — format itu juga diterima di sini.</div></div>
           <div class="row2">
             <div class="field"><label>Nama Pemilik Rekening / QRIS</label><input type="text" name="qris_nama" value="${esc(saas.get('qris_nama', ''))}" placeholder="Yayasan Pendidikan Contoh"></div>
             <div class="field"><label>Nomor Rekening / DANA</label><input type="text" name="qris_nomor" value="${esc(saas.get('qris_nomor', ''))}" placeholder="0812xxxx / 1234567890"></div>
@@ -757,12 +762,61 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         </form>
       </div>
       <div>
+        ${(() => {
+          const pay = saas.payConfig('');
+          const cfg = saas.gatewayCfg();
+          const absBase = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (req.BASE ? '(domain ini)' + req.BASE : '(domain ini)');
+          return `<div class="card mb-3" data-pay-methods="1">
+            <div class="card-head"><div><h3>${ui.icon('qris', 'i-sm')} Metode Pembayaran Hybrid</h3>
+              <div class="sub">Aktifkan QRIS otomatis (payment gateway) &/atau QRIS manual</div></div></div>
+            <form method="post" action="${req.BASE}/super-admin/qris/pay">
+              <label class="opt" style="margin-bottom:8px">
+                <input type="checkbox" name="pay_gateway_aktif" value="1" ${pay.gateway_aktif ? 'checked' : ''} data-pay-gateway>
+                <span><b>QRIS Otomatis (Payment Gateway)</b><br><span class="t-sub">QRIS dinamis + verifikasi status otomatis lewat callback.</span></span>
+              </label>
+              <label class="opt" style="margin-bottom:8px">
+                <input type="checkbox" name="pay_manual_aktif" value="1" ${pay.manual_aktif ? 'checked' : ''} data-pay-manual>
+                <span><b>QRIS Manual (Transfer / Unggah Bukti)</b><br><span class="t-sub">Gambar QRIS statis + verifikasi manual Super Admin.</span></span>
+              </label>
+              <div class="row2">
+                <div class="field"><label>Provider Gateway</label>
+                  <select name="pay_gateway_provider" data-pay-provider>
+                    ${pay.providers.map(p => `<option value="${esc(p.key)}" ${p.key === pay.provider ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+                  </select></div>
+                <div class="field"><label>Mode</label>
+                  <select name="pay_gateway_mode" data-pay-mode>
+                    <option value="sandbox" ${pay.mode === 'sandbox' ? 'selected' : ''}>Sandbox / Uji Coba</option>
+                    <option value="production" ${pay.mode === 'production' ? 'selected' : ''}>Production (Live)</option>
+                  </select></div>
+              </div>
+              <div class="field"><label>Merchant Code / Merchant ID</label>
+                <input type="text" name="pay_gateway_merchant" placeholder="${cfg.merchant ? '•••• (tersimpan)' : 'mis. D1234'}"></div>
+              <div class="field"><label>Server Key / API Key</label>
+                <input type="password" name="pay_gateway_key" autocomplete="new-password"
+                  placeholder="${cfg.key ? '•••••••• (tersimpan — isi hanya bila ingin mengganti)' : 'tempel kunci gateway'}"></div>
+              <div class="row2">
+                <div class="field"><label>Client Key / Callback Token</label>
+                  <input type="text" name="pay_gateway_key2" placeholder="${cfg.key2 ? '•••• (tersimpan)' : 'opsional'}"></div>
+                <div class="field"><label>Kedaluwarsa QRIS (menit)</label>
+                  <input type="number" name="pay_gateway_expire_menit" min="5" max="1440" value="${pay.expire_menit}"></div>
+              </div>
+              <div class="field"><label>URL Callback (daftarkan di dashboard provider)</label>
+                <input type="text" readonly value="${esc(absBase)}/pay/callback"></div>
+              <div class="alert info">${ui.icon('info')}<div>${pay.provider === 'sandbox'
+              ? 'Provider <b>Simulasi</b> tidak menghubungi jaringan: QR dibuat lokal & dapat disimulasikan lunas untuk pengujian.'
+              : 'Pastikan URL callback di atas terdaftar pada dashboard provider agar pembayaran terverifikasi real-time.'}</div></div>
+              <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Metode Pembayaran</button></div>
+            </form>
+          </div>`;
+        })()}
         <div class="card mb-3">
           <div class="card-head"><div><h3>Pratinjau QRIS</h3><div class="sub">Yang dilihat sekolah saat checkout</div></div></div>
           ${img ? `<div style="text-align:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px">
               <img src="${esc(img)}" alt="QRIS" loading="lazy" decoding="async" style="max-width:100%;max-height:300px;object-fit:contain"></div>`
         : `<div class="alert warn">${ui.icon('alert')}<div>Belum ada gambar QRIS. Halaman checkout sekolah akan menampilkan instruksi manual.</div></div>`}
           <div class="list mt-2">
+            <div class="list-row"><div><div class="mt">QRIS Otomatis</div><div class="nm">${String(saas.get('pay_gateway_aktif')) === '1' ? 'Aktif · ' + esc((saas.payConfig('').provider_label || '')) : 'Nonaktif'}</div></div></div>
+            <div class="list-row"><div><div class="mt">QRIS Manual</div><div class="nm">${String(saas.get('pay_manual_aktif', '1')) === '1' ? 'Aktif' : 'Nonaktif'}</div></div></div>
             <div class="list-row"><div><div class="mt">Nama Pemilik</div><div class="nm">${esc(saas.get('qris_nama', '-'))}</div></div></div>
             <div class="list-row"><div><div class="mt">Nomor</div><div class="nm mono">${esc(saas.get('qris_nomor', '-'))}</div></div></div>
           </div>
@@ -780,6 +834,35 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     res.html(shell(req, { title: 'QRIS & Harga Layanan', sub: 'Metode pembayaran perpanjangan SaaS', active: '/super-admin/qris', content, user: u }));
   });
 
+  /* ---------------- metode pembayaran hybrid (sakelar + kredensial) ---------------- */
+  post('/super-admin/qris/pay', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const b = req.body || {};
+    try {
+      const provider = saas.paygw.PROVIDER_KEYS.includes(String(b.pay_gateway_provider || '')) ? String(b.pay_gateway_provider) : 'sandbox';
+      const mode = ['sandbox', 'production'].includes(String(b.pay_gateway_mode || '')) ? String(b.pay_gateway_mode) : 'sandbox';
+      const gatewayOn = String(b.pay_gateway_aktif || '') === '1';
+      const manualOn = String(b.pay_manual_aktif || '') === '1';
+      if (!gatewayOn && !manualOn) throw new Error('Minimal satu metode pembayaran harus aktif agar sekolah dapat memperpanjang layanan.');
+      if (gatewayOn && provider !== 'sandbox' && !String(b.pay_gateway_key || '').trim() && !String(saas.get('pay_gateway_key', '')).trim()) {
+        throw new Error('Kunci gateway wajib diisi sebelum mengaktifkan QRIS otomatis (provider ' + provider + ').');
+      }
+      saas.set('pay_gateway_aktif', gatewayOn ? '1' : '0');
+      saas.set('pay_manual_aktif', manualOn ? '1' : '0');
+      saas.set('pay_gateway_provider', provider);
+      saas.set('pay_gateway_mode', mode);
+      saas.set('pay_gateway_expire_menit', String(Math.max(5, Math.min(1440, Number(b.pay_gateway_expire_menit) || 60))));
+      if (b.pay_gateway_merchant !== undefined) saas.set('pay_gateway_merchant', String(b.pay_gateway_merchant || '').trim());
+      if (String(b.pay_gateway_key || '').trim()) saas.set('pay_gateway_key', String(b.pay_gateway_key).trim());
+      if (b.pay_gateway_key2 !== undefined) saas.set('pay_gateway_key2', String(b.pay_gateway_key2 || '').trim());
+      saas.logSaas(u, 'EDIT PEMBAYARAN', 'saas',
+        `Metode pembayaran: gateway ${gatewayOn ? 'ON' : 'OFF'} (${provider}/${mode}), manual ${manualOn ? 'ON' : 'OFF'}`);
+      res.redirect(req.BASE + flash('/super-admin/qris', 'ok', 'Metode pembayaran diperbarui.'));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/qris', 'err', e.message));
+    }
+  });
+
   post('/super-admin/qris', async (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     const b = req.body || {};
@@ -788,12 +871,30 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       const ht = lib.parseMoney ? lib.parseMoney(b.harga_tahun) : Number(b.harga_tahun);
       if (Number(hb) < 0 || Number(ht) < 0) throw new Error('Harga tidak boleh negatif.');
       let img = String(saas.get('qris_image', ''));
-      const b64 = String(b.qris_b64 || '');
+      const b64 = String(b.qris_b64 || '').trim();
       if (b64) {
-        const m = b64.match(/^data:(image\/(png|jpe?g));base64,/i);
-        if (!m) throw new Error('Gambar QRIS harus berformat PNG atau JPG.');
-        const ext = m[2].toLowerCase().replace('jpeg', 'jpg');
-        img = await uploadMedia(b64, `qris-${Date.now()}.${ext}`);
+        /* ---- unggah QRIS ----
+           Dulu hanya PNG/JPG yang diterima, padahal aplikasi mengonversi gambar raster
+           ke WebP sebelum diunggah → unggahan selalu gagal. Sekarang format ditentukan
+           dari MIME data URL DAN sidik jari berkas (magic bytes) sebagai cadangan. */
+        const mm = b64.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,([\s\S]*)$/i);
+        const raw = Buffer.from(mm ? mm[2] : b64, 'base64');
+        if (!raw.length) throw new Error('Berkas gambar QRIS kosong atau gagal dibaca.');
+        if (raw.length > 5 * 1024 * 1024) throw new Error('Ukuran gambar QRIS melebihi 5 MB. Perkecil gambar terlebih dahulu.');
+        const sniff = (() => {
+          if (raw[0] === 0x89 && raw[1] === 0x50) return { ext: 'png', mime: 'image/png' };
+          if (raw[0] === 0xFF && raw[1] === 0xD8) return { ext: 'jpg', mime: 'image/jpeg' };
+          if (raw.slice(0, 4).toString('ascii') === 'RIFF' && raw.slice(8, 12).toString('ascii') === 'WEBP') return { ext: 'webp', mime: 'image/webp' };
+          if (/^\s*<\?xml|^\s*<svg/i.test(raw.slice(0, 200).toString('utf8'))) return { ext: 'svg', mime: 'image/svg+xml' };
+          if (raw.slice(0, 4).toString('ascii') === 'GIF8') return { ext: 'gif', mime: 'image/gif' };
+          return null;
+        })();
+        const declared = (mm && mm[1] ? String(mm[1]).toLowerCase() : '');
+        const allowed = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'image/gif': 'gif' };
+        const ext = (sniff && sniff.ext) || allowed[declared] || '';
+        if (!ext) throw new Error('Berkas bukan gambar yang valid (gunakan PNG, JPG, WebP, atau SVG).');
+        img = await uploadMedia(b64.startsWith('data:') ? b64 : `data:${sniff ? sniff.mime : 'image/png'};base64,${b64}`,
+          `qris-${Date.now()}.${ext}`, { jenis: 'logo', tenantId: 1 });
       }
       saas.set('qris_image', img);
       saas.set('qris_nama', String(b.qris_nama || ''));
@@ -807,6 +908,88 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       res.redirect(req.BASE + flash('/super-admin/qris', 'ok', 'Pengaturan QRIS & harga disimpan.'));
     } catch (e) {
       res.redirect(req.BASE + flash('/super-admin/qris', 'err', e.message));
+    }
+  });
+
+  /* ================= LEGALITAS & SLA (dokumen publik) ================= */
+  get('/super-admin/legal', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const g = (k, d) => String(saas.get(k, '') || d || '');
+    const legal = require('./legal');
+    const def = (legal.DEFAULTS || {});
+    const content = `
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>Dokumen Legalitas Layanan</h3>
+          <div class="sub">Tampil sebagai halaman publik di <code>/syarat-ketentuan</code> dan <code>/sla</code></div></div></div>
+        <form method="post" action="${req.BASE}/super-admin/legal">
+          <div class="field"><label>Kontak Resmi / Email Dukungan</label>
+            <input type="text" name="legal_kontak" value="${esc(g('legal_kontak'))}" maxlength="120" placeholder="support@sekolah.sch.id / 0812xxxx">
+            <div class="hint">Ditampilkan pada kedua dokumen sebagai kontak resmi layanan.</div></div>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Terms of Service (Syarat &amp; Ketentuan)</h3>
+            <div class="sub">Nomor urut otomatis menjadi judul bagian</div></div>
+            <a class="btn btn-sm" target="_blank" href="${req.BASE}/syarat-ketentuan">${ui.icon('eye')}Lihat</a></div>
+          <div class="field"><label>Judul Dokumen</label>
+            <input type="text" name="legal_tos_judul" value="${esc(g('legal_tos_judul', 'Syarat & Ketentuan Layanan'))}" maxlength="90"></div>
+          <div class="field"><label>Isi Dokumen</label>
+            <textarea name="legal_tos" rows="12" style="font-family:ui-monospace,monospace;font-size:12px"
+              placeholder="${esc((def.tos || '').slice(0, 120))}">${esc(g('legal_tos'))}</textarea>
+            <div class="hint">Mulai baris dengan <code>1. </code>, <code>2. </code> untuk membuat judul bagian. Kosongkan untuk memakai contoh bawaan.</div></div>
+          <hr class="sep">
+          <div class="card-head" style="padding:0 0 8px"><div><h3>Service Level Agreement (SLA)</h3>
+            <div class="sub">Janji tingkat layanan kepada sekolah</div></div>
+            <a class="btn btn-sm" target="_blank" href="${req.BASE}/sla">${ui.icon('eye')}Lihat</a></div>
+          <div class="field"><label>Judul Dokumen</label>
+            <input type="text" name="legal_sla_judul" value="${esc(g('legal_sla_judul', 'Service Level Agreement (SLA)'))}" maxlength="90"></div>
+          <div class="field"><label>Isi Dokumen</label>
+            <textarea name="legal_sla" rows="12" style="font-family:ui-monospace,monospace;font-size:12px"
+              placeholder="${esc((def.sla || '').slice(0, 120))}">${esc(g('legal_sla'))}</textarea></div>
+          <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Dokumen Legalitas</button></div>
+        </form>
+      </div>
+      <div>
+        <div class="card mb-3">
+          <div class="card-head"><div><h3>Tautan Publik</h3><div class="sub">Dapat dibuka tanpa login</div></div></div>
+          <div class="list">
+            <a class="list-row" target="_blank" href="${req.BASE}/syarat-ketentuan"><div><div class="nm">Syarat &amp; Ketentuan</div>
+              <div class="mt mono">/syarat-ketentuan</div></div><span class="ml-auto">${ui.icon('link')}</span></a>
+            <a class="list-row" target="_blank" href="${req.BASE}/sla"><div><div class="nm">Service Level Agreement</div>
+              <div class="mt mono">/sla</div></div><span class="ml-auto">${ui.icon('link')}</span></a>
+          </div>
+          <p class="help">Dokumen ini dipakai bersama seluruh sekolah. Cantumkan juga tautannya pada halaman pendaftaran bila diperlukan.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>Status Dokumen</h3></div></div>
+          <div class="list">
+            <div class="list-row"><div><div class="mt">Syarat &amp; Ketentuan</div><div class="nm">${g('legal_tos') ? 'Kustom' : 'Contoh bawaan'}</div></div></div>
+            <div class="list-row"><div><div class="mt">SLA</div><div class="nm">${g('legal_sla') ? 'Kustom' : 'Contoh bawaan'}</div></div></div>
+            <div class="list-row"><div><div class="mt">Kontak</div><div class="nm mono">${esc(g('legal_kontak') || '-')}</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    res.html(shell(req, { title: 'Legalitas & SLA', sub: 'Syarat & Ketentuan Layanan dan Service Level Agreement', active: '/super-admin/legal', content, user: u }));
+  });
+
+  post('/super-admin/legal', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const b = req.body || {};
+    try {
+      const now = lib.stampID ? lib.stampID() : lib.nowStamp();
+      const put = (k, max) => {
+        if (b[k] === undefined) return;
+        saas.set(k, String(b[k] || '').replace(/\r/g, '').slice(0, max || 20000));
+      };
+      put('legal_tos_judul', 90);
+      put('legal_sla_judul', 90);
+      put('legal_kontak', 120);
+      if (b.legal_tos !== undefined) { put('legal_tos', 20000); saas.set('legal_tos_updated', now); }
+      if (b.legal_sla !== undefined) { put('legal_sla', 20000); saas.set('legal_sla_updated', now); }
+      saas.logSaas(u, 'EDIT LEGALITAS', 'saas', 'Memperbarui dokumen Syarat & Ketentuan / SLA');
+      res.redirect(flash(req.BASE + '/super-admin/legal', 'ok', 'Dokumen legalitas disimpan.'));
+    } catch (e) {
+      res.redirect(flash(req.BASE + '/super-admin/legal', 'err', e.message));
     }
   });
 
@@ -826,6 +1009,10 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           <div class="field"><label>Nama Aplikasi Default</label>
             <input type="text" name="saas_nama" value="${esc(saas.appName())}" required maxlength="40" placeholder="SIMKEU">
             <div class="hint">Tampil pada portal login utama, judul tab, dan panel Super Admin.</div></div>
+          <div class="field"><label>Sub-Judul Aplikasi Default (baris kecil di bawah nama aplikasi)</label>
+            <input type="text" name="saas_sub" value="${esc(saas.appSub())}" maxlength="60" placeholder="Sistem Keuangan">
+            <div class="hint">Dipakai seluruh sekolah yang <b>belum mengisi</b> sub-judulnya sendiri di menu
+              <b>Tema &amp; Branding Aplikasi</b>. Kosongkan untuk kembali ke <b>Sistem Keuangan</b>.</div></div>
           <div class="field"><label>Logo Default Sistem (PNG/JPG/SVG, maks 5 MB)</label>
             <input type="file" accept="image/*" data-b64="logoB64" data-max="5">
             <div class="hint" id="logoB64-info">Kosongkan bila tidak ingin mengganti.</div></div>
@@ -899,7 +1086,8 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
             ${logo ? `<img src="${esc(logo)}" alt="Logo" width="130" height="130" loading="lazy" decoding="async" style="max-width:130px;max-height:130px;object-fit:contain">`
         : `<div style="width:110px;height:110px;border-radius:26px;background:linear-gradient(135deg,#6366F1,#8B5CF6);display:grid;place-items:center;margin:0 auto;color:#fff">${ui.icon('wallet')}</div>`}
             <div style="font-weight:800;font-size:19px;margin-top:12px">${esc(saas.appName())}</div>
-            <div class="small muted">Sistem Informasi Manajemen Keuangan Sekolah</div>
+            <div class="small muted" style="text-transform:uppercase;letter-spacing:.14em;font-size:10.5px">${esc(saas.appSub())}</div>
+            <div class="small muted" style="margin-top:6px">dipakai sebagai default sub-judul sekolah</div>
           </div>
           <div class="list mt-2">
             <div class="list-row"><div><div class="mt">Favicon default</div><div class="nm mono small">${fav ? esc(fav.split('/').pop()) : '(otomatis dari logo)'}</div></div></div>
@@ -925,6 +1113,10 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     try {
       const nama = String(b.saas_nama || '').trim();
       if (nama) saas.set('saas_nama', nama);
+      if (b.saas_sub !== undefined) {
+        const sub = String(b.saas_sub || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        saas.set('saas_sub', sub || 'Sistem Keuangan');
+      }
       if (b.logo_b64) {
         const url = await uploadMedia(b.logo_b64, 'branding-logo-' + Date.now() + '.png', { jenis: 'logo', tenantId: 1 });
         saas.set('saas_logo', url);
@@ -1055,11 +1247,12 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           <div class="field"><label>Custom Slug</label>
             <div class="flex" style="gap:6px;align-items:center">
               <span class="small muted nowrap">/</span>
-              <input type="text" name="portal_slug" value="${esc(slug)}" style="flex:1" maxlength="40"
-                pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9]" placeholder="slug-sekolah">
+              <input type="text" name="portal_slug" value="${esc(slug)}" style="flex:1" maxlength="81"
+                pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9](/[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9])?" placeholder="slug-sekolah">
               <span class="small muted nowrap">/portal</span>
             </div>
-            <div class="hint">Huruf kecil, angka, dan tanda hubung (-), 3–40 karakter, harus unik antar sekolah.
+            <div class="hint">Huruf kecil, angka, dan tanda hubung (-), tiap bagian 3–40 karakter, harus unik antar sekolah.
+              Boleh dua bagian mengikuti format default (mis. <code>sdn-1-cikoneng/tagihan</code>).
               Kosongkan untuk <b>menghapus</b> halaman publik sekolah ini.</div></div>
           <div class="field"><label>Status Akses Publik</label>
             <select name="status">${statusOptions(st)}</select></div>
@@ -1090,6 +1283,30 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       <div class="sa-kpi"><div class="l">Private</div><div class="v" style="color:#D97706">${stats.privat}</div></div>
       <div class="sa-kpi"><div class="l">Punya Slug</div><div class="v">${stats.slug}</div></div>
       <div class="sa-kpi"><div class="l">Custom Domain</div><div class="v">${stats.domain}</div></div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-head"><div><h3>Format Default Slug Portal Publik</h3>
+        <div class="sub">Pola alamat portal otomatis untuk sekolah yang baru mendaftar</div></div>
+        ${ui.badge(saas.slugFormat ? saas.slugFormat() : '{sekolah}', 'orange', 'plain')}</div>
+      <form method="post" action="${req.BASE}/super-admin/portal-publik/format">
+        <div class="row2">
+          <div class="field"><label>Pola Alamat</label>
+            <select name="portal_slug_format">
+              <option value="{sekolah}" ${(saas.slugFormat ? saas.slugFormat() : '{sekolah}') === '{sekolah}' ? 'selected' : ''}>/&#123;nama-sekolah-slug&#125; — satu bagian</option>
+              <option value="{sekolah}/{custom}" ${(saas.slugFormat ? saas.slugFormat() : '') === '{sekolah}/{custom}' ? 'selected' : ''}>/&#123;nama-sekolah-slug&#125;/&#123;custom-slug&#125; — dua bagian</option>
+            </select>
+            <div class="hint">Contoh hasil: <code>/${esc(saas.slugFromName ? saas.slugFromName('SDN 1 Cikoneng', 0) : 'sdn-1-cikoneng')}</code>.
+              Slug selalu dibuat unik otomatis (ditambah <code>-2</code>, <code>-3</code>, … bila bentrok dengan sekolah lain).</div></div>
+          <div class="field"><label>Slug Kustom Bawaan (untuk pola dua bagian)</label>
+            <input type="text" name="portal_slug_custom_default" maxlength="40"
+              value="${esc(saas.slugCustomDefault ? saas.slugCustomDefault() : 'tagihan')}" placeholder="tagihan"
+              pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9]">
+            <div class="hint">Bagian kedua alamat portal. Dapat diubah per sekolah pada tombol <b>Slug</b> di tabel bawah.</div></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Format Slug</button></div>
+      </form>
+      <p class="help">Perubahan format hanya berlaku untuk <b>sekolah baru</b>; slug sekolah yang sudah ada tidak diubah otomatis.</p>
     </div>
 
     <div class="card mb-3">
@@ -1137,6 +1354,31 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       const warn = info.key === 'aktif' && !String(t.portal_slug || '').trim()
         ? ' Slug sekolah masih kosong — isi slug agar halaman publik dapat dibuka.' : '';
       res.redirect(flash(back, 'ok', `${t.nama}: status akses publik kini ${info.label}.${warn}`));
+    } catch (e) {
+      res.redirect(flash(back, 'err', e.message));
+    }
+  });
+
+  /* ================= FORMAT DEFAULT SLUG PORTAL PUBLIK (dipakai saat sekolah baru mendaftar) ================= */
+  post('/super-admin/portal-publik/format', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const back = req.BASE + '/super-admin/portal-publik';
+    try {
+      const b = req.body || {};
+      const fmt = String(b.portal_slug_format || '').trim().toLowerCase();
+      const errF = saas.slugFormatError ? saas.slugFormatError(fmt) : null;
+      if (errF) throw new Error(errF);
+      const custom = String(b.portal_slug_custom_default || '').trim().toLowerCase();
+      if (custom && !/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(custom)) {
+        throw new Error('Slug kustom bawaan hanya boleh huruf kecil, angka, dan tanda hubung (-), 3–40 karakter.');
+      }
+      saas.set('portal_slug_format', fmt || (saas.SLUG_FORMAT_DEFAULT || '{sekolah}'));
+      if (b.portal_slug_custom_default !== undefined) {
+        saas.set('portal_slug_custom_default', custom || (saas.SLUG_CUSTOM_DEFAULT || 'tagihan'));
+      }
+      saas.logSaas(u, 'EDIT FORMAT SLUG', 'portal',
+        `Format default slug portal: ${saas.slugFormat()} · contoh ${saas.slugFromName('SDN 1 Cikoneng', 0)}`);
+      res.redirect(flash(back, 'ok', `Format default slug disimpan: ${saas.slugFormat()} — contoh /${saas.slugFromName('SDN 1 Cikoneng', 0)}`));
     } catch (e) {
       res.redirect(flash(back, 'err', e.message));
     }

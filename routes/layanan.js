@@ -154,6 +154,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
     const nama = saas.get('qris_nama', '');
     const nomor = saas.get('qris_nomor', '');
     const instruksi = saas.get('qris_instruksi', '') || 'Unggah bukti transfer setelah membayar. Verifikasi maksimal 1x24 jam kerja.';
+    /* konfigurasi metode pembayaran hybrid (QRIS otomatis + QRIS manual) */
+    const absBase = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '')
+      || `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0]}://${String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')}${c.base}`;
+    const pay = saas.payConfig(absBase);
 
     const content = `<div class="split">
       <div class="card">
@@ -164,7 +168,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
         : pending
           ? `<div class="alert warn">${ui.icon('clock')}<div><b>Menunggu verifikasi.</b> Pengajuan tanggal ${esc(tglID(pending.dibuat_at))} (${esc(durasiLabel(pending.durasi))}) masih diproses. Form dikunci untuk mencegah pengiriman ganda.</div></div>
              <a class="btn btn-block" href="${c.base}/info-layanan">Lihat Status Pengajuan</a>`
-          : `<form method="post" action="${c.base}/perpanjang">
+          : `${pay.gateway_aktif ? `<div class="card mb-2" style="border-color:#BBE7D6;background:#F4FCF8" data-metode="gateway">
+              <div class="card-head"><div><h3>${ui.icon('qris', 'i-sm')} QRIS Otomatis (Payment Gateway)</h3>
+                <div class="sub">QRIS dinamis · pembayaran terverifikasi otomatis${pay.provider === 'sandbox' ? ' · mode simulasi' : ''}</div></div>
+                ${ui.badge('Otomatis', 'green')}</div>
+              <form method="post" action="${c.base}/perpanjang/qris">
+                <div class="field"><label>Paket Langganan</label>
+                  <select name="paket">
+                    ${pkgList.map(p => `<option value="${esc(p.kode)}" ${p.kode === paketTujuan.kode ? 'selected' : ''}>${esc(p.nama)} — ${rupiah(p.harga_bulan)}/bln${p.kode === t.paket ? ' (paket aktif)' : ''}</option>`).join('')}
+                  </select></div>
+                <div class="field"><label>Durasi</label>
+                  <div class="opt-list">
+                    <label class="opt"><input type="radio" name="durasi" value="30" checked><span><b>1 Bulan</b> (+30 hari)</span></label>
+                    <label class="opt"><input type="radio" name="durasi" value="365"><span><b>12 Bulan</b> (+365 hari)</span></label>
+                  </div></div>
+                <button class="btn btn-primary btn-block">${ui.icon('qris')}Buat QRIS Dinamis</button>
+              </form>
+            </div>` : ''}
+            ${pay.manual_aktif ? `<div data-metode="manual">
+            <div class="card-head" style="padding:0 0 8px"><div><h3>QRIS Manual (Transfer / Unggah Bukti)</h3>
+              <div class="sub">Pindai QRIS statis, lalu unggah bukti — diverifikasi manual Super Admin</div></div></div>
+            <form method="post" action="${c.base}/perpanjang">
               <div class="field"><label>Paket Langganan</label>
                 <select name="paket">
                   ${pkgList.map(p => `<option value="${esc(p.kode)}" ${p.kode === paketTujuan.kode ? 'selected' : ''}>${esc(p.nama)} — ${rupiah(p.harga_bulan)}/bln${p.kode === t.paket ? ' (paket aktif)' : ''}</option>`).join('')}
@@ -186,11 +210,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
                 <div class="field"><label>Catatan</label><input type="text" name="catatan" placeholder="Opsional, mis. no. referensi"></div>
               </div>
               <button class="btn btn-primary btn-block">${ui.icon('upload')}Kirim Konfirmasi Pembayaran</button>
-            </form>`}
+            </form></div>` : ''}`}
       </div>
       <div>
         <div class="card mb-3">
-          <div class="card-head"><div><h3>Pembayaran QRIS / DANA</h3><div class="sub">Scan atau simpan gambar berikut</div></div></div>
+          <div class="card-head"><div><h3>Pembayaran QRIS / DANA</h3><div class="sub">Scan atau simpan gambar berikut</div></div>
+            ${pay.manual_aktif ? ui.badge('Manual · aktif', 'green') : ui.badge('Manual · nonaktif', 'gray')}</div>
           ${qris
         ? `<div style="text-align:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
                  <img src="${esc(qris)}" alt="QRIS" loading="lazy" decoding="async" style="max-width:100%;max-height:340px;object-fit:contain">
@@ -216,6 +241,137 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
       </div>
     </div>`;
     page(req, res, { title: 'Perpanjangan Masa Aktif', sub: 'Checkout pembayaran QRIS manual', active: 'layanan', content });
+  });
+
+  /* ---------------- QRIS OTOMATIS: buat tagihan dinamis ---------------- */
+  post('/perpanjang/qris', async (req, res) => {
+    guard(req, res, 'dashboard', 'view');
+    const c = ctx(req);
+    const t = req.tenant;
+    try {
+      const durasi = Number(req.body.durasi) === 365 ? 365 : 30;
+      const paket = String(req.body.paket || '').trim().toLowerCase();
+      const absBase = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '')
+        || `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0]}://${String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')}${c.base}`;
+      const py = await saas.bayarGateway(t.id, {
+        durasi, paket, oleh: req.user, base_url: absBase
+      });
+      dbm.logAudit(req.user, 'PENGAJUAN', 'layanan', `Membuat QRIS otomatis ${durasi} hari (order ${py.order_id})`);
+      res.redirect(req.BASE + '/perpanjang/qris?order=' + encodeURIComponent(py.order_id));
+    } catch (e) {
+      res.redirect(req.BASE + flashUrl('/perpanjang', 'err', e.message));
+    }
+  });
+
+  /* ---------------- QRIS OTOMATIS: halaman pembayaran ---------------- */
+  get('/perpanjang/qris', (req, res) => {
+    guard(req, res, 'dashboard', 'view');
+    const c = ctx(req);
+    const t = req.tenant;
+    const order = String(req.query.get('order') || '').trim();
+    const py = order ? saas.gatewayRow(order) : null;
+    if (!py || Number(py.tenant_id) !== Number(t.id)) {
+      return res.redirect(req.BASE + flashUrl('/perpanjang', 'err', 'Transaksi QRIS tidak ditemukan.'));
+    }
+    const pay = saas.payConfig('');
+    const qrImg = String(py.qr_url || '');
+    const qrTxt = String(py.qr_string || '');
+    const approved = py.status === 'approved';
+    const content = `<div class="split">
+      <div class="card">
+        <div class="card-head"><div><h3>${ui.icon('qris', 'i-sm')} Pembayaran QRIS Otomatis</h3>
+          <div class="sub">Order <b class="mono">${esc(py.order_id)}</b> · ${esc(pay.provider_label)}</div></div>
+          ${ui.badge(approved ? 'Lunas' : 'Menunggu', approved ? 'green' : 'amber')}</div>
+        ${approved
+        ? `<div class="alert ok">${ui.icon('check')}<div><b>Pembayaran terverifikasi.</b> Masa aktif layanan sudah diperpanjang otomatis.</div></div>
+           <a class="btn btn-primary btn-block" href="${c.base}/info-layanan">Lihat Info Layanan</a>`
+        : `<div style="display:grid;place-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
+             ${qrImg ? `<img src="${esc(qrImg)}" alt="QRIS" style="max-width:100%;max-height:320px;object-fit:contain">`
+        : `<div class="mono" style="word-break:break-all;font-size:11px;padding:18px;text-align:center">${esc(qrTxt || 'QR tidak tersedia')}</div>`}
+           </div>
+           <div class="list mt-2">
+             <div class="list-row"><div><div class="mt">Nominal</div><div class="nm">${rupiah(py.nominal)}</div></div></div>
+             <div class="list-row"><div><div class="mt">Durasi</div><div class="nm">${esc(durasiLabel(py.durasi))}</div></div></div>
+             <div class="list-row"><div><div class="mt">Kedaluwarsa</div><div class="nm">${esc(py.expires_at ? String(py.expires_at).slice(0, 16).replace('T', ' ') : '-')}</div></div></div>
+             <div class="list-row"><div><div class="mt">Status gateway</div><div class="nm" id="gwStatus">${esc(py.gateway_status || 'PENDING')}</div></div></div>
+           </div>
+           <div class="alert info mt-2">${ui.icon('info')}<div>Halaman ini memeriksa status pembayaran secara otomatis. Setelah dibayar, masa aktif diperpanjang tanpa menunggu verifikasi manual.</div></div>
+           <div class="flex mt-2" style="gap:10px;flex-wrap:wrap">
+             <button type="button" class="btn" id="btnCekStatus">${ui.icon('refresh')}Cek Status Sekarang</button>
+             ${pay.provider === 'sandbox' ? `<button type="button" class="btn btn-primary" id="btnSimulasi">${ui.icon('check')}Simulasikan Lunas</button>` : ''}
+             <a class="btn" href="${c.base}/perpanjang">Kembali</a>
+           </div>`}
+      </div>
+      <div>
+        <div class="card">
+          <div class="card-head"><div><h3>Ringkasan Tagihan</h3></div></div>
+          <div class="list">
+            <div class="list-row"><div><div class="mt">Invoice</div><div class="nm mono">${esc(py.no_invoice || '-')}</div></div></div>
+            <div class="list-row"><div><div class="mt">Paket</div><div class="nm">${esc(pkgName(py.paket_tujuan || t.paket))}</div></div></div>
+            <div class="list-row"><div><div class="mt">Nominal</div><div class="nm"><b>${rupiah(py.nominal)}</b></div></div></div>
+            <div class="list-row"><div><div class="mt">Metode</div><div class="nm">QRIS Otomatis · ${esc(pay.provider_label)}</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      (function(){
+        var order = ${JSON.stringify(py.order_id)};
+        var base = ${JSON.stringify(c.base)};
+        function setStatus(t){ var el=document.getElementById('gwStatus'); if(el) el.textContent=t; }
+        function cek(){
+          fetch(base + '/perpanjang/status?order=' + encodeURIComponent(order), { credentials:'same-origin', cache:'no-store' })
+            .then(function(r){ return r.json(); })
+            .then(function(j){
+              if (j.paid) { location.reload(); return; }
+              setStatus(j.gateway_status || 'PENDING');
+            }).catch(function(){});
+        }
+        var b1=document.getElementById('btnCekStatus'); if(b1) b1.addEventListener('click', cek);
+        var b2=document.getElementById('btnSimulasi');
+        if(b2) b2.addEventListener('click', function(){
+          fetch(base + '/perpanjang/simulasi', { method:'POST', credentials:'same-origin',
+            headers:{'Content-Type':'application/json'}, body: JSON.stringify({ order: order }) })
+            .then(function(r){ return r.json(); })
+            .then(function(j){ if(j.ok){ location.reload(); } else { alert(j.error || 'Gagal'); } })
+            .catch(function(){ alert('Gagal menghubungi server'); });
+        });
+        setInterval(cek, 6000);
+      })();
+    </script>`;
+    page(req, res, { title: 'Pembayaran QRIS Otomatis', sub: 'Selesaikan pembayaran untuk memperpanjang layanan', active: 'layanan', content });
+  });
+
+  /* ---------------- QRIS OTOMATIS: status (JSON untuk polling) ---------------- */
+  get('/perpanjang/status', async (req, res) => {
+    guard(req, res, 'dashboard', 'view');
+    const t = req.tenant;
+    const order = String(req.query.get('order') || '').trim();
+    const row = order ? saas.gatewayRow(order) : null;
+    if (!row || Number(row.tenant_id) !== Number(t.id)) return res.json({ ok: false, error: 'Transaksi tidak ditemukan.' }, 404);
+    try {
+      const r = await saas.gatewaySync(order);
+      return res.json({ ok: true, status: r.status, paid: !!r.paid, gateway_status: r.gateway_status || '', error: r.error || '' });
+    } catch (e) {
+      return res.json({ ok: false, error: e.message }, 400);
+    }
+  });
+
+  /* ---------------- QRIS OTOMATIS: simulasi lunas (provider sandbox) ---------------- */
+  post('/perpanjang/simulasi', async (req, res) => {
+    guard(req, res, 'dashboard', 'view');
+    const t = req.tenant;
+    const json = b => res.json(b);
+    const errJ = (code, msg) => res.json({ ok: false, error: msg }, code);
+    try {
+      const cfg = saas.gatewayCfg();
+      if (cfg.provider !== 'sandbox') return errJ(400, 'Simulasi hanya tersedia pada provider sandbox.');
+      const row = saas.gatewayRow(String(req.body.order || ''));
+      if (!row || Number(row.tenant_id) !== Number(t.id)) return errJ(404, 'Transaksi tidak ditemukan.');
+      const r = saas.gatewayMarkPaid(row.order_id, 'Simulasi Gateway');
+      dbm.logAudit(req.user, 'PENGAJUAN', 'layanan', `Simulasi pembayaran QRIS lunas (order ${row.order_id})`);
+      return json({ ok: true, paid: true, pesan: 'Pembayaran simulasi terverifikasi.' });
+    } catch (e) { return errJ(400, e.message); }
   });
 
   get('/perpanjang/qris-unduh', async (req, res) => {

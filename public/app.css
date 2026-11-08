@@ -329,7 +329,7 @@ table.matrix input[type=checkbox]{width:15px;height:15px}
 .kop img{width:76px; height:76px; object-fit:contain; flex:0 0 76px}
 .kop .kop-logo-ph{width:76px;height:76px;border-radius:50%;border:2px solid var(--o-500);display:grid;place-items:center;color:var(--o-600);font-weight:800;font-size:20px;flex:0 0 76px}
 .kop .kop-txt{text-align:center; flex:1}
-.kop .kop-txt .l1{font-size:13px; letter-spacing:.1em; text-transform:uppercase; font-weight:600}
+.kop .kop-txt .l1{font-size:13px; letter-spacing:.045em; font-weight:600}
 .kop .kop-txt .l2{font-size:20px; font-weight:800; letter-spacing:.01em; line-height:1.2; margin:2px 0 3px}
 .kop .kop-txt .l3{font-size:11.5px; line-height:1.45}
 .doc-title{text-align:center; margin:6px 0 4px}
@@ -358,8 +358,8 @@ table.doc-tbl tfoot td{background:#FDF6F0; font-weight:700}
   display:grid; place-items:center; color:var(--o-700); font-weight:800; font-size:14px; background:#FFF7F1
 }
 .kwit-kop .kwit-kop-txt{flex:1; min-width:0; line-height:1.1}
-.kwit-kop .kwit-kop-y{font-size:9px; letter-spacing:.02em; text-transform:uppercase; color:#4A3A30}
-.kwit-kop .kwit-kop-nama{font-size:11.5px; font-weight:800; text-transform:uppercase; letter-spacing:.02em; line-height:1.1}
+.kwit-kop .kwit-kop-y{font-size:9px; letter-spacing:.01em; color:#4A3A30}
+.kwit-kop .kwit-kop-nama{font-size:11.5px; font-weight:800; letter-spacing:.01em; line-height:1.1}
 .kwit-kop .kwit-kop-l{font-size:9px; color:#4A3A30}
 .kwit-foot{font-size:7.6px; color:#6B5B51; margin:2mm 0 0; text-align:center; line-height:1.15}
 .print-only{display:none}
@@ -561,6 +561,28 @@ tr.inline-edit-row .inline-uraian{min-width:220px}
   .table-scroll,.table-wrap.sticky-head,.table-wrap{max-height:none !important;overflow:visible !important;border:0}
   .table-scroll table thead th,.table-wrap table thead th,.payroll-table thead th{position:static !important;box-shadow:none}
   .table-scroll table tfoot td{position:static !important}
+}
+
+/* ============ cetak: baris JUMLAH/TOTAL hanya sekali, di halaman terakhir ============
+   Mesin cetak Chrome/Edge mengulang <tfoot> (footer group tabel) di SETIAP halaman
+   saat tabel panjang dipecah (multi-page). Akibatnya baris JUMLAH / TOTAL / GRAND
+   TOTAL tercetak berulang di bawah setiap halaman, seolah-olah tabel terus berlanjut.
+   Perbaikannya: saat mencetak, footer group diperlakukan sebagai row-group biasa
+   (display:table-row-group). Baris total lalu mengalir tepat setelah baris data
+   terakhir, sehingga hanya muncul SEKALI di halaman terakhir — kolomnya tetap sejajar
+   karena masih di dalam tabel yang sama.
+   <thead> dibiarkan display:table-header-group agar judul kolom TETAP berulang di
+   setiap halaman (perilaku yang memang diinginkan).
+   Aturan ini global: berlaku untuk halaman /cetak/* (docPage/printPage), leger, slip,
+   maupun tabel layar yang dicetak langsung lewat tombol Cetak browser.          */
+@media print{
+  table>tfoot{display:table-row-group !important}
+  table>tfoot>tr{page-break-inside:avoid !important; break-inside:avoid !important}
+  /* baris total yang sengaja ditaruh di <tbody> (mis. rekap) juga dijaga utuh */
+  tr.row-total,tr.total-row,tr.tr-total,tr.jumlah-row,tr.grand-total{
+    page-break-inside:avoid !important; break-inside:avoid !important;
+  }
+  table>thead{display:table-header-group}
 }
 
 /* ============ switch tahun pelajaran di header ============ */
@@ -1135,3 +1157,28 @@ html[data-mode="dark"] .welcome-ico{background:#14432B;color:#4ADE80}
 .portal-preview .pv-token .pv-title{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .portal-preview .pv-token .badge{flex:0 0 auto}
 html[data-mode="dark"] .portal-preview .pv-token{background:#241F35;border-top-color:#3A3450}
+
+/* ===== tab & pratinjau kop (Desain Templat Cetak) ===== */
+.tabbar{display:flex;gap:6px;margin:0 0 18px;border-bottom:1px solid var(--line);overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tabbar button{display:flex;align-items:center;gap:7px;padding:10px 15px;font-size:13px;font-weight:600;color:var(--muted);
+  background:none;border:0;border-bottom:2px solid transparent;white-space:nowrap;cursor:pointer;border-radius:10px 10px 0 0;font-family:inherit}
+.tabbar button:hover{background:var(--o-50);color:var(--o-700)}
+.tabbar button.on{color:var(--o-700);border-bottom-color:var(--o-500);background:var(--o-50)}
+.tabbar button svg{width:15px;height:15px;flex:0 0 15px}
+.kopv-wrap{padding:14px 16px;border:1px dashed var(--line-2);border-radius:12px;background:#fff;overflow-x:auto}
+.kopv-inner{display:flex;align-items:center;gap:14px;padding-bottom:10px;min-width:0}
+.kopv-inner img{object-fit:contain}
+.kopv-ph{display:grid;place-items:center;border-radius:50%;border:2px solid var(--o-500);color:var(--o-600);
+  font-weight:800;background:#FFF7ED;font-size:18px}
+.kopv-txt{flex:1;text-align:center;line-height:1.28;color:#1F1B3A;min-width:0;overflow-wrap:anywhere}
+.ki-kop .kwit-kop{margin:0 0 3px;padding-bottom:2px}
+.ki-kop .kwit-kop-nama{line-height:1.15}
+html[data-mode="dark"] .kopv-wrap{background:#fff;border-color:#6B6485}
+html[data-mode="dark"] .tabbar button:hover,html[data-mode="dark"] .tabbar button.on{background:#2A2440}
+
+/* toolbars pada layar sempit: grup kontrol di dalam .toolbar boleh turun baris
+   (mis. filter periode + tombol kirim slip pada Data Pegawai) */
+@media (max-width:560px){
+  .toolbar .flex{flex-wrap:wrap;min-width:0}
+  .toolbar .flex>*{min-width:0;max-width:100%}
+}

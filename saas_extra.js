@@ -121,25 +121,68 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     const r = S.prepare('SELECT id FROM tenants WHERE lower(COALESCE(portal_slug,\'\'))=?').get(s);
     return !!(r && Number(r.id) !== Number(exceptId || 0));
   }
+  /* ---------- format default slug portal publik (diatur Super Admin) ----------
+     Super Admin memilih pola alamat portal untuk sekolah baru:
+       '{sekolah}'          → /sdn-1-jakarta
+       '{sekolah}/{custom}' → /sdn-1-jakarta/tagihan   (pola dua segmen)
+     Token: {sekolah} = slug nama sekolah, {custom} = slug kustom (bawaan 'tagihan'). */
+  const SLUG_FORMAT_DEFAULT = '{sekolah}';
+  const SLUG_CUSTOM_DEFAULT = 'tagihan';
+  const SLUG_SEG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+  function slugFormat() {
+    const raw = String(get('portal_slug_format', '') || '').trim().toLowerCase() || SLUG_FORMAT_DEFAULT;
+    return (raw === '{sekolah}' || raw === '{sekolah}/{custom}') ? raw : SLUG_FORMAT_DEFAULT;
+  }
+  function slugFormatError(raw) {
+    const s = String(raw || '').trim().toLowerCase();
+    if (!s) return null;                      // kosong = kembali ke default
+    if (s !== '{sekolah}' && s !== '{sekolah}/{custom}') {
+      return 'Format slug hanya boleh "{sekolah}" atau "{sekolah}/{custom}".';
+    }
+    return null;
+  }
+  function slugCustomDefault() {
+    const v = slugify(get('portal_slug_custom_default', '') || SLUG_CUSTOM_DEFAULT);
+    return (v && v.length >= 3) ? v.slice(0, 40) : SLUG_CUSTOM_DEFAULT;
+  }
+  function slugFromFormat(nama, custom) {
+    const school = slugify(nama);
+    if (slugFormat() !== '{sekolah}/{custom}') return school;
+    return school + '/' + slugify(custom || slugCustomDefault());
+  }
   function portalSlugError(raw, exceptId) {
     const s = String(raw || '').trim().toLowerCase();
     if (!s) return 'Alamat portal wajib diisi.';
-    if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) {
-      return 'Alamat portal hanya boleh huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.';
+    const parts = s.split('/');
+    if (parts.length > 2) return 'Alamat portal maksimal dua bagian (contoh: nama-sekolah/tagihan).';
+    for (const seg of parts) {
+      if (!SLUG_SEG_RE.test(seg)) {
+        return 'Alamat portal hanya boleh huruf kecil, angka, dan tanda hubung (-), tiap bagian 3–40 karakter.';
+      }
     }
-    if (RESERVED.has(s)) return 'Alamat "' + s + '" dipakai halaman lain aplikasi. Pilih alamat lain.';
+    if (parts.length === 1 && RESERVED.has(parts[0])) {
+      return 'Alamat "' + parts[0] + '" dipakai halaman lain aplikasi. Pilih alamat lain.';
+    }
     if (portalSlugTaken(s, exceptId)) return 'Alamat "' + s + '" sudah dipakai sekolah lain. Pilih alamat unik.';
     return null;
   }
-  /** slug unik dari nama sekolah: "SDN 1 Jakarta" → "sdn-1-jakarta", tambah -2 bila bentrok */
-  function slugFromName(nama, exceptId) {
-    const base = slugify(nama);
+  /** slug unik dari nama sekolah (mengikuti format default): "SDN 1 Jakarta" → "sdn-1-jakarta" */
+  function slugFromName(nama, exceptId, custom) {
+    const base = slugFromFormat(nama, custom);
     if (!portalSlugError(base, exceptId)) return base;
+    const parts = base.split('/');
+    const head = parts[0];
     for (let i = 2; i <= 99; i++) {
-      const cand = (base.slice(0, 36) + '-' + i).replace(/-+/g, '-');
+      const cand = [(head.slice(0, 34) + '-' + i).replace(/-+/g, '-')].concat(parts.slice(1)).join('/');
       if (!portalSlugError(cand, exceptId)) return cand;
     }
-    return (base.slice(0, 30) + '-' + Date.now().toString(36).slice(-4));
+    if (parts.length === 2) {
+      for (let i = 2; i <= 99; i++) {
+        const cand = [head, (parts[1].slice(0, 34) + '-' + i).replace(/-+/g, '-')].join('/');
+        if (!portalSlugError(cand, exceptId)) return cand;
+      }
+    }
+    return head.slice(0, 26) + '-' + Date.now().toString(36).slice(-4) + (parts[1] ? '/' + parts[1] : '');
   }
   function setPortalSlug(id, slug, user) {
     const t = tenantById(id);
@@ -359,6 +402,19 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     const s = String(slug || '').trim().toLowerCase();
     if (!s) return null;
     return S.prepare('SELECT * FROM tenants WHERE lower(COALESCE(portal_slug,\'\'))=?').get(s) || null;
+  }
+  /**
+   * Cari sekolah dari BAGIAN NAMA pada slug portal.
+   * Slug kanonik boleh dua bagian ("nama-sekolah/tagihan"); permintaan seperti
+   * /nama-sekolah/portal harus tetap menemukan sekolah tersebut (dulu 404).
+   */
+  function tenantByPortalPrefix(slug) {
+    const s = String(slug || '').trim().toLowerCase();
+    if (!s) return null;
+    const exact = tenantByPortalSlug(s);
+    if (exact) return exact;
+    return S.prepare("SELECT * FROM tenants WHERE lower(COALESCE(portal_slug,'')) LIKE ? ORDER BY id LIMIT 1")
+      .get(s + '/%') || null;
   }
   /** cek DNS: CNAME ke target platform ATAU A record ke IP server (dicek bersamaan) */
   async function checkDns(domain, opts = {}) {
@@ -710,7 +766,8 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
 
   return {
     RESERVED, slugify, slugFromName, portalSlugTaken, portalSlugError, setPortalSlug,
-    tenantByPortalSlug, normalizeDomain, domainError, setCustomDomain, tenantByDomain, checkDns,
+    SLUG_FORMAT_DEFAULT, SLUG_CUSTOM_DEFAULT, slugFormat, slugFormatError, slugCustomDefault, slugFromFormat,
+    tenantByPortalSlug, tenantByPortalPrefix, normalizeDomain, domainError, setCustomDomain, tenantByDomain, checkDns,
     PORTAL_STATUS, PORTAL_TEXT_DEFAULT, PORTAL_TITLE_MAX, PORTAL_SUBTITLE_MAX, PORTAL_TOKEN_TITLE_MAX,
     portalStatusOf, portalStatusInfo, setPortalStatus, clearPortalSlug,
     PORTAL_SWITCH, portalKindOf, tenantPortalSwitches, tenantPortalPublished,

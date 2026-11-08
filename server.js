@@ -247,6 +247,8 @@ function page(req, res, { title, sub = '', active, content }) {
     navCfg: dbm.navUi(),
     tema: dbm.temaWarnaGlobal(),
     appName: dbm.appNamaGlobal(),
+    // sub-judul bilah samping: isian sekolah → default Branding Sistem Super Admin → bawaan
+    appSub: dbm.appSub() || (saas && saas.appSub ? saas.appSub() : dbm.APP_SUB_DEFAULT),
     appLogo: dbm.appLogoGlobal(),
     appLogoSmall: dbm.mainSetting('app_logo_small', ''),
     mode: String(c.settings.mode_tema || 'light') === 'dark' ? 'dark' : 'light',
@@ -379,7 +381,7 @@ require('./routes/bku_detail')({ get, post, dbm, lib, ui, page, ctx, guard, can,
 require('./routes/import')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/laporan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas });
 require('./routes/sistem')({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMatrix, uploadMedia, flashUrl });
-require('./routes/desain')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
+require('./routes/desain')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, uploadMedia });
 require('./routes/akademik')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/kelas_tingkat')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/iuran')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
@@ -396,6 +398,8 @@ require('./routes/backup_tg')({ get, post, dbm, lib, ui, page, ctx, guard, can, 
 require('./routes/tiket')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, saas, uploadMedia });
 require('./routes/superadmin')({ get, post, dbm, lib, ui, saas, queue, uploadMedia, renderError, refreshPortalMap: portalMapRebuild });
 require('./routes/superadmin_db')({ get, post, dbm, lib, ui, saas });
+/* dokumen legalitas: halaman publik (ToS/SLA) + menu sidebar panel sekolah (/legal/tos, /legal/sla) */
+require('./routes/legal')({ get, dbm, lib, ui, saas, page, ctx, guard });
 
 /* ---------------- halaman status (suspend / fitur nonaktif) ---------------- */
 function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {
@@ -470,6 +474,15 @@ function portalSlugMap(force = false) {
     const slug = String(t.portal_slug || '').trim().toLowerCase();
     if (slug && !map[slug]) map[slug] = { path: '/portal', tenantId: t.id, canonical: true };
   }
+  // 1b) bagian NAMA SEKOLAH dari slug kanonik dua bagian ("sekolah/tagihan")
+  //     supaya alamat /<nama-sekolah>/portal & /<nama-sekolah> tetap dikenali.
+  for (const t of tenants) {
+    const slug = String(t.portal_slug || '').trim().toLowerCase();
+    const first = slug.split('/')[0];
+    if (slug.includes('/') && first && !map[first]) {
+      map[first] = { path: '/portal', tenantId: t.id, canonical: true, schoolPart: slug };
+    }
+  }
   // 2) slug portal pada pengaturan sekolah (alamat lama tetap didukung)
   for (const t of tenants) {
     try {
@@ -486,10 +499,51 @@ function portalSlugMap(force = false) {
   return map;
 }
 function portalMapRebuild() { return portalSlugMap(true); }
+/**
+ * Cocokkan slug portal dari segmen URL. Slug kanonik boleh dua bagian
+ * ("nama-sekolah/tagihan") sehingga dua segmen dicoba lebih dulu.
+ * → { key, hit, consumed } atau null
+ */
+function slugLookup(map, segs) {
+  const list = Array.isArray(segs) ? segs : [];
+  if (!list.length) return null;
+  if (list.length >= 2) {
+    const k2 = list[0] + '/' + list[1];
+    if (map[k2]) return { key: k2, hit: map[k2], consumed: 2 };
+  }
+  if (map[list[0]]) return { key: list[0], hit: map[list[0]], consumed: 1 };
+  return null;
+}
+/** sub-halaman portal siswa yang boleh menempel langsung pada slug (mis. /<slug>/hasil) */
+const PORTAL_SUB_ROUTES = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama']);
+/**
+ * Ubah sisa path setelah slug menjadi path portal kanonik.
+ * '' → /portal · 'portal' → /portal · 'hasil' → /portal/hasil ·
+ * 'portal-pegawai/hasil' → /portal-pegawai/hasil
+ */
+function portalRestToPath(rest) {
+  const r = String(rest || '').replace(/^\/+/, '');
+  if (!r) return '/portal';
+  if (/^(portal|portal-pegawai|portal-slip)(\/|$)/.test(r)) return '/' + r;
+  const first = r.split('/')[0];
+  if (PORTAL_SUB_ROUTES.has(first)) return '/portal/' + r;
+  return null;
+}
+/** alamat portal aktif satu sekolah (mengikuti slug kanonik, boleh dua bagian) */
+function tenantPortalPath(tenant, kind) {
+  const slug = String((tenant && tenant.portal_slug) || '').trim().toLowerCase();
+  if (!slug) return '';
+  const suffix = kind === 'pegawai' ? '/portal-pegawai' : kind === 'slip' ? '/portal-slip' : '';
+  return '/' + slug + suffix;
+}
 
 const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/login'];
 function isPublicPath(pathname) {
   if (['/login', '/register', '/daftar', '/logout'].includes(pathname)) return true;
+  /* callback payment gateway (diverifikasi lewat signature, tanpa sesi) */
+  if (pathname === '/pay/callback') return true;
+  // dokumen legalitas layanan dapat dibuka tanpa login
+  if (['/syarat-ketentuan', '/sla'].includes(pathname)) return true;
   // halaman sukses pendaftaran (kredensial) — tanpa sesi, token sekali pakai
   return pathname === '/daftar/sukses';
 }
@@ -626,6 +680,36 @@ const server = http.createServer(async (req, res) => {
   }
   const hostTenant = dom && dom.verified ? dom.tenant : null;
 
+  /* ---- CALLBACK PAYMENT GATEWAY (QRIS otomatis) ----
+     Dipanggil server gateway tanpa sesi; keaslian diverifikasi signature/token. */
+  if (pathname0 === '/pay/callback') {
+    try {
+      const body = await readBody(req);
+      const cfg = saas.gatewayCfg();
+      if (!saas.paygw.verifyCallback(cfg, body, req.headers || {})) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Signature callback tidak valid.' }));
+      }
+      const parsed = saas.paygw.parseCallback(cfg, body);
+      const row = parsed.order_id ? saas.gatewayRow(parsed.order_id) : null;
+      if (!row) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Transaksi tidak ditemukan.' }));
+      }
+      if (!parsed.paid) {
+        saas.db.prepare('UPDATE saas_payments SET gateway_status=? WHERE id=?').run(parsed.status || 'PENDING', row.id);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, paid: false }));
+      }
+      const r = saas.gatewayMarkPaid(parsed.order_id, 'Payment Gateway');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, paid: true, sudah: r.sudah }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: e.message }));
+    }
+  }
+
   // ---- favicon: logo sekolah (bila ada konteks sekolah), selain itu branding default ----
   if (pathname0 === '/favicon.ico' || pathname0 === '/favicon.svg' || pathname0 === '/favicon.png') {
     const segsFav = pathname0.split('/').filter(Boolean);
@@ -724,7 +808,9 @@ const server = http.createServer(async (req, res) => {
       const tByCode = kode ? saas.tenantByCode(kode) : null;
       const canonical = ['/portal', '/portal-pegawai', '/portal-slip'];
       const subRoutes = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama']);
-      const slugMap = (function () { const m = portalSlugMap(); return m[first] ? m : portalSlugMap(true); })();
+      const slugMap = (function () { const m = portalSlugMap(); return slugLookup(m, segs) ? m : portalSlugMap(true); })();
+      // slug kanonik boleh dua bagian ("nama-sekolah/tagihan") → cocokkan 2 segmen lebih dulu
+      const hitSlug = slugLookup(slugMap, segs);
 
       // bentuk URL: /<slug>/portal, /portal/<slug>, /<slug>/portal-pegawai/<...>
       let portalPath = null, portalTenant = null;
@@ -746,19 +832,21 @@ const server = http.createServer(async (req, res) => {
       }
       // /portal/<slug>  (kecuali sub-route internal seperti /portal/siswa)
       if (!portalPath && first === 'portal' && segs[1] && !subRoutes.has(segs[1])) {
-        const t = saas.tenantByPortalSlug(segs[1]);
+        // cocokkan slug dua bagian lebih dulu ("/portal/sekolah/tagihan"), lalu satu bagian
+        const t2 = segs[2] ? saas.tenantByPortalSlug(segs[1] + '/' + segs[2]) : null;
+        const t = t2 || saas.tenantByPortalPrefix(segs[1]);
         if (!t) return R.html(notFoundSchool(base, segs[1]), 404);
-        portalPath = '/portal' + (segs.length > 2 ? '/' + segs.slice(2).join('/') : '');
+        const sisa = t2 ? 3 : 2;
+        portalPath = '/portal' + (segs.length > sisa ? '/' + segs.slice(sisa).join('/') : '');
         portalTenant = t;
       }
       // alamat per sekolah: /<slug> (kanonik → /portal) atau /<slug-portal-lama>
       if (!portalPath) {
-        const hit = slugMap[first];
+        const hit = hitSlug ? hitSlug.hit : null;
         if (hit) {
-          const rest = pathname0.slice(first.length + 1);   // '' | 'portal' | 'siswa' | 'portal-pegawai/x'
+          const rest = pathname0.slice(hitSlug.key.length + 1);   // '' | 'portal' | 'hasil' | 'portal-pegawai/x'
           if (hit.canonical) {
-            if (!rest) portalPath = '/portal';
-            else if (/^(portal|portal-pegawai|portal-slip)(\/|$)/.test(rest)) portalPath = '/' + rest;
+            portalPath = portalRestToPath(rest);
           } else {
             portalPath = hit.path + (rest ? '/' + rest : '');
           }
@@ -767,18 +855,24 @@ const server = http.createServer(async (req, res) => {
       }
       // /<slug>/portal...
       if (!portalPath && segs.length >= 2) {
-        const rest = '/' + segs.slice(1).join('/');
-        const isPortalShape = ['/portal', '/portal-pegawai', '/portal-slip'].some(c => rest === c || rest.startsWith(c + '/'));
-        if (isPortalShape) {
-          const t = saas.tenantByPortalSlug(segs[0]);
-          if (!t) return R.html(notFoundSchool(base, segs[0]), 404);
+        for (const prefixLen of [2, 1]) {
+          if (segs.length <= prefixLen) continue;
+          const rest = '/' + segs.slice(prefixLen).join('/');
+          const isPortalShape = ['/portal', '/portal-pegawai', '/portal-slip'].some(c => rest === c || rest.startsWith(c + '/'));
+          if (!isPortalShape) continue;
+          const t = saas.tenantByPortalPrefix(segs.slice(0, prefixLen).join('/'));
+          if (!t) {
+            if (prefixLen === 1) return R.html(notFoundSchool(base, segs[0]), 404);
+            continue;
+          }
           portalPath = rest;
           portalTenant = t;
+          break;
         }
       }
       if (!portalPath && kode) {
-        const hit = slugMap[first];
-        if (hit) { portalPath = hit.path + pathname0.slice(first.length + 1); portalTenant = saas.tenantById(hit.tenantId); }
+        const hit = hitSlug ? hitSlug.hit : null;
+        if (hit) { portalPath = hit.path + pathname0.slice(hitSlug.key.length + 1); portalTenant = saas.tenantById(hit.tenantId); }
       }
       if (portalPath) {
         const t = tByCode || portalTenant || saas.tenantById(1);
@@ -794,7 +888,7 @@ const server = http.createServer(async (req, res) => {
           if (defaultPathHit) {
             const alias = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return { on: true }; } })();
             if (!alias.on) {
-              const active = `/${alias.slug}`;
+              const active = '/' + (dbm.portalSlugs().siswa || alias.slug);
               return R.html(portalMovedPage({
                 base, tenant: t, activeUrl: base + active, activeLabel: active
               }), 404);
@@ -821,6 +915,22 @@ const server = http.createServer(async (req, res) => {
     return await dbm.runAsTenant(tenant, async () => {
       let pathname = pathname0;
       try { pathname = dbm.portalRewrite(pathname0) || pathname0; } catch (e) { }
+      /* alamat per sekolah juga berlaku untuk pengguna yang sudah login:
+         /<nama-sekolah>/portal, /<nama-sekolah>/<custom>, /<nama-sekolah>/hasil, dst.
+         Sebelumnya bentuk ini jatuh ke router aplikasi dan dijawab 404. */
+      try {
+        const segsP = pathname0.split('/').filter(Boolean);
+        const slugCanon = String((tenant && tenant.portal_slug) || '').trim().toLowerCase();
+        if (segsP.length && slugCanon) {
+          const first = slugCanon.split('/')[0];
+          const key2 = segsP.length >= 2 ? (segsP[0] + '/' + segsP[1]).toLowerCase() : '';
+          const consumed = (key2 && key2 === slugCanon) ? 2 : (segsP[0].toLowerCase() === first ? 1 : 0);
+          if (consumed) {
+            const mapped = portalRestToPath(segsP.slice(consumed).join('/'));
+            if (mapped) pathname = mapped;
+          }
+        }
+      } catch (e) { }
       req.tenant = tenant;
       req.sessionRow = session.row;
       return await dbm.runWithMeta({ ip: clientIp(req), tenantId: tenant.id, tenantNama: tenant.nama }, async () => {
@@ -875,7 +985,7 @@ const server = http.createServer(async (req, res) => {
           if (/^\/portal(\/|$)/.test(pathname0)) {
             const alias = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return { on: true }; } })();
             if (!alias.on) {
-              const active = `/${alias.slug}`;
+              const active = '/' + (dbm.portalSlugs().siswa || alias.slug);
               return R.html(portalMovedPage({ base, tenant, activeUrl: base + active, activeLabel: active }), 404);
             }
           }

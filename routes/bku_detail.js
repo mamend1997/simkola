@@ -80,18 +80,20 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const bolehHapus = fullManage && !terkunci;
     const bolehAjukan = !fullManage && c.can('transaksi', 'create') && !terkunci;
 
-    // pagination: halaman panjang (ratusan baris) tidak dirender sekaligus → HTML jauh lebih ringan
-    const perPage = 100;
-    const totalHal = Math.max(1, Math.ceil(d.rows.length / perPage));
-    const hal = Math.min(totalHal, Math.max(1, Number(req.query.get('hal') || 1)));
-    const pageRows = d.rows.slice((hal - 1) * perPage, hal * perPage);
+    /* SATU HALAMAN BERURUTAN DI DALAM SCROLLABLE BOX (tanpa pagination):
+       seluruh transaksi BKU dirender berurutan dan digeser di dalam kotak tabel
+       (vertikal & horizontal). Modal edit/hapus/koreksi tetap dirender hanya saat
+       diminta (?edit=/?hapus=/?koreksi=) agar HTML tidak membengkak. */
+    const perPage = 0;
+    const totalHal = 1;
+    const hal = 1;
+    const pageRows = d.rows;
     const keepQs = new URLSearchParams();
     if (from) keepQs.set('from', from);
     if (to) keepQs.set('to', to);
     if (q) keepQs.set('q', q);
     if (jenis) keepQs.set('jenis', jenis);
     if (sort === 'asc') keepQs.set('sort', 'asc');
-    if (hal > 1) keepQs.set('hal', String(hal));
     const keepStr = keepQs.toString();
     const pageHref = extra => `${c.base}/bku/${b.id}` + (() => { const u = new URLSearchParams(keepQs); for (const [k, v] of extra) u.set(k, v); const t = u.toString(); return t ? '?' + t : ''; })();
     // modal hanya dirender saat diminta (edit/hapus/koreksi per baris)
@@ -105,31 +107,47 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       LEFT JOIN transaksi t ON t.id=k.transaksi_id WHERE k.bku_id=? ORDER BY k.id DESC LIMIT 30`).all(b.id);
     const pendingKoreksi = koreksi.filter(k => k.status === 'pending');
 
-    const editForm = (t, mid) => `<form method="post" action="${c.base}/bku/${b.id}/trx/simpan" id="f${mid}">
+    /* Form edit transaksi disamakan tampilannya dengan form Transaksi Masuk / Transaksi Keluar
+       (urutan field, kartu radio metode, kode rekening + nominal sebaris, uraian + terbilang). */
+    const editForm = (t, mid) => `<form method="post" action="${c.base}/bku/${b.id}/trx/simpan" id="f${mid}" data-trx-form>
       <input type="hidden" name="id" value="${t.id}">
       <input type="hidden" name="back" value="${esc(pageHref([]))}">
-      <div class="alert info">${ui.icon('info')}<div>Setelah disimpan, seluruh <b>saldo berjalan</b> baris berikutnya dihitung ulang otomatis.</div></div>
+      <div class="alert ${t.jenis === 'pemasukan' ? 'ok' : 'warn'}" style="margin-bottom:16px">${ui.icon(t.jenis === 'pemasukan' ? 'up' : 'down')}
+        <div><b>${t.jenis === 'pemasukan' ? 'Edit Pemasukan / Penerimaan Kas' : 'Edit Pengeluaran / Belanja'}</b><br>
+        <span class="small">Nomor bukti tetap <b>${esc(t.no_bukti || '-')}</b> — setelah disimpan seluruh <b>saldo berjalan</b> baris berikutnya dihitung ulang.</span></div></div>
       <div class="row2">
-        <div class="field"><label>Tanggal</label><input type="date" name="tanggal" value="${esc(t.tanggal)}" required></div>
-        <div class="field"><label>No. Bukti</label><input name="no_bukti" value="${esc(t.no_bukti || '')}"></div>
+        <div class="field"><label>Buku Kas (BKU)</label>
+          <input value="${esc(b.nama)}" readonly></div>
+        <div class="field"><label>Tanggal Transaksi</label><input type="date" name="tanggal" value="${esc(t.tanggal)}" required></div>
+      </div>
+      <div class="field"><label>Jenis Transaksi</label>
+        <div class="radio-cards">
+          <input type="radio" name="metode" id="${mid}_tunai" value="tunai" ${t.metode !== 'transfer' ? 'checked' : ''}>
+          <label for="${mid}_tunai"><span class="dot"></span> Tunai (Kas)</label>
+          <input type="radio" name="metode" id="${mid}_transfer" value="transfer" ${t.metode === 'transfer' ? 'checked' : ''}>
+          <label for="${mid}_transfer"><span class="dot"></span> Transfer / Bank</label>
+        </div>
       </div>
       <div class="row2">
         <div class="field"><label>Jenis</label><select name="jenis" class="js-jenis">
           <option value="pemasukan" ${t.jenis === 'pemasukan' ? 'selected' : ''}>Pemasukan (Debet)</option>
           <option value="pengeluaran" ${t.jenis === 'pengeluaran' ? 'selected' : ''}>Pengeluaran (Kredit)</option></select></div>
-        <div class="field"><label>Metode</label><select name="metode">
-          <option value="tunai" ${t.metode === 'tunai' ? 'selected' : ''}>Tunai</option>
-          <option value="transfer" ${t.metode === 'transfer' ? 'selected' : ''}>Transfer / Bank</option></select></div>
+        <div class="field"><label>No. Bukti</label><input name="no_bukti" value="${esc(t.no_bukti || '')}"></div>
       </div>
       <div class="row2">
-        <div class="field"><label>Nominal (Rp)</label>${ui.moneyInput('nominal', t.nominal, 'required')}</div>
-        <div class="field"><label>Kategori / Kode Rekening</label>
+        <div class="field"><label>Kode Rekening</label>
           <select name="coa_id"><option value="">— Tanpa kode rekening —</option>
-          ${coaList.map(x => `<option value="${x.id}" ${String(t.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}</select></div>
+          ${coaList.map(x => `<option value="${x.id}" ${String(t.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}</select>
+          <div class="hint">Rekening ditampilkan sesuai jenis transaksi.</div></div>
+        <div class="field"><label>Nominal (Rp)</label>${ui.moneyInput('nominal', t.nominal, 'class="js-nominal" required placeholder="0"')}</div>
       </div>
-      <div class="field"><label>Keterangan / Uraian</label><textarea name="uraian" required>${esc(t.uraian)}</textarea></div>
-      <div class="field"><label>Nama Penerima / Penyetor</label><input name="nama_pihak" value="${esc(t.nama_pihak || '')}"></div>
-      <div class="field"><label>Alasan Koreksi (wajib, dicatat di audit log)</label><input name="alasan" required placeholder="Contoh: salah input nominal, koreksi tanggal"></div>
+      <div class="field"><label>Uraian / Keterangan</label><textarea name="uraian" required>${esc(t.uraian)}</textarea>
+        <div class="hint">Terbilang: <b class="js-terbilang" style="color:var(--o-700)"></b></div></div>
+      <div class="row2">
+        <div class="field"><label>Nama Penerima / Penyetor</label><input name="nama_pihak" value="${esc(t.nama_pihak || '')}"></div>
+        <div class="field"><label>Alasan Koreksi (wajib, dicatat di audit log)</label>
+          <input name="alasan" required placeholder="Contoh: salah input nominal, koreksi tanggal"></div>
+      </div>
     </form>`;
 
     const hapusForm = (t, mid) => `<form method="post" action="${c.base}/bku/${b.id}/trx/simpan" id="f${mid}">
@@ -292,13 +310,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td class="num">${rupiah(d.totalIn)}</td><td class="num">${rupiah(d.totalOut)}</td>
         <td class="num">${rupiah(d.closing)}</td><td></td>
       </tr></tfoot></table></div>` : ui.emptyState('Belum ada transaksi pada filter ini', 'Ubah filter tanggal atau import data dari Excel.')}
-      ${d.rows.length > perPage ? `<div class="bulk-bar">
-        <div class="small muted">Menampilkan baris <b>${(hal - 1) * perPage + 1}–${Math.min(hal * perPage, d.rows.length)}</b> dari <b>${d.rows.length}</b> transaksi (${perPage} baris/halaman).</div>
-        <div class="toolbar">
-          ${hal > 1 ? `<a class="btn btn-sm" href="${pageHref([['hal', hal - 1]])}#daftar">${ui.icon('up')}Sebelumnya</a>` : ''}
-          <span class="small muted">Halaman ${hal} / ${totalHal}</span>
-          ${hal < totalHal ? `<a class="btn btn-sm" href="${pageHref([['hal', hal + 1]])}#daftar">Berikutnya${ui.icon('down')}</a>` : ''}
-        </div></div>` : ''}
+      ${d.rows.length ? `<div class="small muted" style="margin-top:8px">${d.rows.length} baris ditampilkan berurutan dalam satu kotak — geser ke atas/bawah dan ke samping untuk melihat seluruh kolom.</div>` : ''}
       <p class="help mt-2">Kolom <b>Saldo Berjalan</b> dihitung dari Saldo Awal + akumulasi Pemasukan − Pengeluaran secara berurutan (tanggal, lalu urutan input). Setiap koreksi/hapus langsung menghitung ulang seluruh baris setelahnya.</p>
     </div>
 

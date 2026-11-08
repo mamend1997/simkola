@@ -78,8 +78,14 @@ const today = new Date().toISOString().slice(0, 10);
   ok('NPSN kurang dari 8 digit ditolak', r.status === 303 && /err=/.test(r.loc), decode(r.loc));
   r = await req('POST', '/sekolah', { sekolah_npsn: '20211525', sekolah_email: 'bukan-email' });
   ok('email tidak valid ditolak', /err=/.test(r.loc) && /email/i.test(decode(r.loc)), decode(r.loc));
+  /* ronde 33: website diisi TANPA https:// — protokol ditambahkan otomatis saat disimpan */
   r = await req('POST', '/sekolah', { sekolah_npsn: '20211525', sekolah_website: 'sekolah.sch.id' });
-  ok('website tanpa https:// ditolak', /err=/.test(r.loc) && /website/i.test(decode(r.loc)), decode(r.loc));
+  ok('website tanpa https:// diterima', /ok=/.test(r.loc), decode(r.loc));
+  ok('website disimpan dengan protokol https://',
+    String((db.prepare("SELECT v FROM settings WHERE k='sekolah_website'").get() || {}).v || '') === 'https://sekolah.sch.id',
+    String((db.prepare("SELECT v FROM settings WHERE k='sekolah_website'").get() || {}).v || ''));
+  r = await req('POST', '/sekolah', { sekolah_npsn: '20211525', sekolah_website: 'bukan url' });
+  ok('website benar-benar tidak valid tetap ditolak', /err=/.test(r.loc) && /website/i.test(decode(r.loc)), decode(r.loc));
 
   r = await req('POST', '/sekolah', {
     sekolah_nama: 'SMK PGRI Cikoneng', sekolah_npsn: '20211525', sekolah_bentuk: 'SMK',
@@ -265,8 +271,8 @@ const today = new Date().toISOString().slice(0, 10);
   const cssNV = await fetch(base + '/assets/app.css');
   ok('aset tanpa versi: cache singkat + revalidate', /max-age=3600/.test(String(cssNV.headers.get('cache-control'))) && /must-revalidate/.test(String(cssNV.headers.get('cache-control'))), String(cssNV.headers.get('cache-control')));
   const jsMin = await (await fetch(base + '/assets/app.js?v=999')).text();
-  /* ambang dinaikkan di ronde 30 (fitur kredensial pendaftaran menambah ~1,5 KB JS) */
-  ok('app.js terkirim dalam bentuk minified', jsMin.length < 80000 && /function/.test(jsMin), String(jsMin.length));
+  /* ambang dinaikkan di ronde 30 (kredensial pendaftaran) & ronde 34 (pratinjau kop + tab desain cetak) */
+  ok('app.js terkirim dalam bentuk minified', jsMin.length < 88000 && /function/.test(jsMin), String(jsMin.length));
   cookie = '';
   r = await req('GET', '/login', null, { cookie: '' });
   ok('halaman login: preconnect + dns-prefetch', /rel="preconnect" href="https:\/\/fonts.googleapis.com"/.test(r.text) && /rel="dns-prefetch"/.test(r.text));

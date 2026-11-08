@@ -7,7 +7,7 @@
  */
 const printcfg = require('../printcfg');
 
-module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) => {
+module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, uploadMedia }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, nowStamp, num } = lib;
 
@@ -16,11 +16,120 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   /* ==================================================================
      1. PUSAT DESAIN & ORIENTASI CETAK
      ================================================================== */
+  /* ---------- form kop per jenis dokumen (kwitansi / laporan) ---------- */
+  function kopPane(c, jenis, ro) {
+    const NL = String.fromCharCode(10);
+    const cur = printcfg.readKop(dbm, jenis);
+    const unit = printcfg.KOP_UNIT[jenis] || 'pt';
+    // baris kop otomatis dari Identitas Sekolah (dipakai pratinjau saat sumber = auto)
+    const autoLines = ui.autoKopLines(c.settings).map(l => ({ teks: l.teks, size: l.size || null, bold: !!l.bold, nama: !!l.nama }));
+    const fmt = Array.from({ length: printcfg.KOP_MAX_BARIS }).map((_, i) => {
+      const o = (cur.format || [])[i] || {};
+      return {
+        size: Number(o.size) > 0 ? Number(o.size) : '',
+        bold: !!(o.bold === true || Number(o.bold) === 1),
+        italic: !!(o.italic === true || Number(o.italic) === 1)
+      };
+    });
+    const logoUrl = String(cur.logo || '');
+    const logoMain = String(c.settings.sekolah_logo || '');
+    const locked = ro ? 'disabled' : '';
+    const roAttr = ro ? 'readonly' : '';
+    const hid = `kopLogo_${jenis}`;
+    const jsonSafe = JSON.stringify(autoLines).replace(/</g, '\\u003c');
+    return `<form method="post" action="${c.base}/desain-cetak/kop" class="kop-form" data-kop-form="${jenis}">
+      <input type="hidden" name="jenis" value="${jenis}">
+      <script type="application/json" data-kopv-auto="${jenis}">${jsonSafe}</script>
+      <div class="card mb-3">
+        <div class="card-head"><div><h3>${esc(printcfg.KOP_LABEL[jenis])}</h3>
+          <div class="sub">${esc(printcfg.KOP_DESC[jenis])}</div></div>
+          ${ui.badge(jenis === 'kwitansi' ? 'kwitansi' : 'laporan', jenis === 'kwitansi' ? 'orange' : 'blue', 'plain')}</div>
+        <div class="row2">
+          <div class="field"><label>Sumber Data Kop</label>
+            <select name="sumber" data-kopv-sumber ${locked}>
+              <option value="manual" ${cur.sumber === 'manual' ? 'selected' : ''}>Manual — teks ditulis sendiri</option>
+              <option value="auto" ${cur.sumber === 'auto' ? 'selected' : ''}>Otomatis — dari Identitas Sekolah</option>
+            </select>
+            <div class="hint">Opsi <b>Otomatis</b> menyusun baris kop dari menu
+              <a href="${c.base}/sekolah">Identitas Sekolah</a> (nama, bentuk/status, kepemilikan, alamat, telepon, email,
+              website, NPSN) sehingga perubahan identitas langsung ikut.</div></div>
+          <div class="field"><label>Garis Pemisah Kop</label>
+            <select name="garis" ${locked}>
+              ${printcfg.KOP_GARIS.map(g => `<option value="${g}" ${cur.garis === g ? 'selected' : ''}>${esc(printcfg.KOP_GARIS_LABEL[g])}</option>`).join('')}
+            </select>
+            <div class="hint">Garis bawah pemisah antara kop dan isi dokumen.</div></div>
+        </div>
+        <div data-kopv-manual="${jenis}" style="display:${cur.sumber === 'auto' ? 'none' : ''}">
+          <div class="field"><label>Kustom Teks Kop (satu baris = satu baris kop)</label>
+            <textarea name="text" data-kopv-text rows="7" style="font-family:ui-monospace,monospace;font-size:12px" ${roAttr}
+              placeholder="YAYASAN PENDIDIKAN&#10;NPSN : {npsn}&#10;Bentuk: {bentuk}&#10;{nama}&#10;{alamat} · Telp. {telp}">${esc((cur.baris || []).join(NL))}</textarea>
+            <div class="hint">Baris yang ditandai <b>Tebal</b> dianggap sebagai baris nama sekolah (baris ke-4 otomatis tebal bila tidak ada pilihan lain).
+              Variabel dinamis: <code>{nama}</code> <code>{npsn}</code> <code>{bentuk}</code> <code>{status}</code>
+              <code>{kepemilikan}</code> <code>{alamat}</code> <code>{telp}</code> <code>{email}</code> <code>{website}</code>.</div></div>
+        </div>
+        <div class="card-head" style="padding:0 0 8px"><div><h3 style="font-size:14px">Ukuran Font &amp; Gaya per Baris</h3>
+          <div class="sub">Contoh: Baris 1 ${unit === 'px' ? '10px' : '10pt'}, Baris 2 ${unit === 'px' ? '14px' : '14pt'} Tebal, Baris 3 ${unit === 'px' ? '9px' : '9pt'} Miring.
+            Kosongkan = mengikuti ukuran dasar di bawah.</div></div></div>
+        <div class="row3">
+          ${fmt.map((f, i) => `<div class="field"><label>Baris ${i + 1}</label>
+            <div class="flex" style="gap:6px;align-items:center;flex-wrap:wrap">
+              <input type="number" step="0.5" min="5" max="48" name="size_${i + 1}" value="${f.size ? esc(f.size) : ''}"
+                placeholder="auto" style="width:78px" data-kopv-size ${roAttr}>
+              <span class="small muted">${esc(unit)}</span>
+              <label class="check" style="margin:0"><input type="checkbox" name="bold_${i + 1}" value="1" ${f.bold ? 'checked' : ''} data-kopv-bold ${locked}> Tebal</label>
+              <label class="check" style="margin:0"><input type="checkbox" name="italic_${i + 1}" value="1" ${f.italic ? 'checked' : ''} data-kopv-italic ${locked}> Miring</label>
+            </div></div>`).join('')}
+        </div>
+        <div class="row2">
+          <div class="field"><label>Ukuran Font Dasar (${esc(unit)})</label>
+            <input type="number" step="0.5" min="5" max="36" name="font" value="${esc(cur.font)}" data-kopv-font ${roAttr}></div>
+          <div class="field"><label>Ukuran Font Nama Sekolah (${esc(unit)})</label>
+            <input type="number" step="0.5" min="5" max="48" name="font_besar" value="${esc(cur.font_besar)}" data-kopv-font-besar ${roAttr}></div>
+        </div>
+        <div class="row3">
+          <div class="field"><label>Logo Kop (terpisah dari logo utama)</label>
+            <input type="hidden" name="logo_b64" id="${hid}">
+            <input type="file" accept="image/*" data-b64="${hid}" data-max="5" ${locked}>
+            <div class="hint" id="${hid}-info">${logoUrl
+        ? 'Logo kop khusus sudah terpasang. Unggah baru untuk mengganti.'
+        : (logoMain ? 'Belum ada logo kop khusus — sementara memakai logo sekolah.' : 'Belum ada logo. Unggah logo kop (PNG transparan disarankan).')}</div>
+            <img id="${hid}-preview" alt="" style="display:none">
+            ${logoUrl && !ro ? `<label class="check" style="margin-top:6px"><input type="checkbox" name="hapus_logo" value="1"> Hapus logo kop khusus (kembali ke logo sekolah)</label>` : ''}</div>
+          <div class="field"><label>Lebar Logo (px)</label>
+            <input type="number" step="1" min="12" max="${jenis === 'kwitansi' ? 140 : 220}" name="logo_w" value="${esc(cur.logo_w)}" data-kopv-logo-w ${roAttr}>
+            <div class="hint">Contoh: ${jenis === 'kwitansi' ? '34' : '76'} px (bawaan).</div></div>
+          <div class="field"><label>Tinggi Logo (px)</label>
+            <input type="number" step="1" min="12" max="${jenis === 'kwitansi' ? 140 : 220}" name="logo_h" value="${esc(cur.logo_h)}" data-kopv-logo-h ${roAttr}>
+            <div class="hint">Logo tidak dipaksa stretch — rasio asli tetap terjaga.</div></div>
+        </div>
+        <div class="card-head" style="padding:0 0 8px"><div><h3 style="font-size:14px">Pratinjau Langsung</h3>
+          <div class="sub">Perubahan teks, ukuran font, logo, dan garis kop terlihat seketika.</div></div>
+          <div class="toolbar"><button type="button" class="btn btn-sm" data-kopv-refresh>${ui.icon('refresh')}Segarkan</button></div></div>
+        <div class="kopv-wrap">
+          <div class="kopv" data-kopv="${jenis}" data-kopv-logo="${esc(logoUrl || logoMain)}">
+            <div class="kopv-empty">Pratinjau dimuat…</div>
+          </div>
+        </div>
+        <div class="form-actions" style="border:0;padding-top:12px">
+          ${ro ? '' : `<button class="btn btn-primary" name="simpan" value="1">${ui.icon('save')}Simpan ${esc(printcfg.KOP_LABEL[jenis])}</button>
+          <button class="btn" name="reset" value="1" data-confirm-click="Kembalikan ${esc(printcfg.KOP_LABEL[jenis])} ke pengaturan kop global lama?">Kembalikan ke Kop Global</button>`}
+        </div>
+      </div>
+    </form>`;
+  }
+
   get('/desain-cetak', (req, res) => {
     guard(req, res, 'sekolah', 'view');
     const c = ctx(req);
     const cfg = printcfg.readAll(dbm);
     const ro = !isSuper(req) && !c.can('sekolah', 'edit');
+    const NL = String.fromCharCode(10);
+    /* 8 slot pengaturan font per baris kop global (kosong = otomatis) */
+    const fmtRaw = ui.kopFormatOf(c.settings) || [];
+    const kopFmtFields = Array.from({ length: 8 }).map((_, i) => {
+      const o = fmtRaw[i] || {};
+      return { size: Number(o.size) > 0 ? Number(o.size) : '', bold: !!(o.bold === true || Number(o.bold) === 1) };
+    });
     const cards = printcfg.DOCS.map(d => {
       const cur = cfg[d.key] || { orient: d.orient, labels: {} };
       return `<div class="card mb-3">
@@ -42,68 +151,155 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </div>
       </div>`;
     }).join('');
-    const content = `<div class="card mb-3">
-        <div class="card-head"><div><h3>Pusat Desain &amp; Orientasi Cetak</h3>
-          <div class="sub">Sesuaikan redaksional (teks/label) setiap dokumen cetak dan orientasi kertas bawaannya</div></div>
-          <div class="toolbar">${ro ? ui.badge('Hanya Lihat', 'gray') : ''}
-            <a class="btn btn-sm" href="${c.base}/sekolah">${ui.icon('settings')}Identitas Sekolah</a></div></div>
+
+    /* ---- tab 3: redaksional & orientasi dokumen ---- */
+    const paneRedaksi = `<form method="post" action="${c.base}/desain-cetak">
+      <div class="card mb-3">
+        <div class="card-head"><div><h3>Redaksional &amp; Orientasi Dokumen</h3>
+          <div class="sub">Teks/label setiap dokumen cetak serta orientasi kertas bawaannya</div></div>
+          ${ui.badge(`${printcfg.DOCS.length} dokumen`, 'gray', 'plain')}</div>
         <div class="alert info">${ui.icon('info')}<div>Perubahan berlaku pada <b>semua cetakan</b> (kwitansi, slip honor, honor ekskul, leger, dan laporan).
           Kosongkan sebuah kolom untuk kembali ke teks default. Orientasi default dapat ditimpa per-cetak lewat tombol
           <b>Portrait / Landscape</b> di halaman cetak.</div></div>
-        <form method="post" action="${c.base}/desain-cetak">
-          <div class="card mb-3">
-            <div class="card-head"><div><h3>Kop Surat Resmi</h3>
-              <div class="sub">Teks &amp; ukuran font kop pada semua dokumen cetak</div></div>
-              ${ui.badge('semua cetakan', 'orange', 'plain')}</div>
-            <div class="field"><label>Teks Kop Surat (satu baris = satu baris kop)</label>
-              <textarea name="kop_baris" rows="7" style="font-family:ui-monospace,monospace;font-size:12px" ${ro ? 'readonly' : ''}>${esc(c.settings.kop_baris || '')}</textarea>
-              <div class="hint">Baris ke-4 otomatis ditampilkan paling besar &amp; tebal (nama sekolah). Variabel dinamis:
-                <code>{nama}</code> <code>{npsn}</code> <code>{bentuk}</code> <code>{status}</code> <code>{kepemilikan}</code>
-                <code>{alamat}</code> <code>{telp}</code> <code>{email}</code> <code>{website}</code>.</div></div>
-            <div class="row2">
-              <div class="field"><label>Ukuran Font Teks Kop (pt)</label><input type="number" step="0.5" min="6" max="24" name="kop_font" value="${esc(c.settings.kop_font || 10)}" ${ro ? 'readonly' : ''}></div>
-              <div class="field"><label>Ukuran Font Nama Sekolah (pt)</label><input type="number" step="0.5" min="8" max="36" name="kop_font_besar" value="${esc(c.settings.kop_font_besar || 15)}" ${ro ? 'readonly' : ''}></div>
-            </div>
-            <div class="doc" style="padding:12px;border:1px dashed var(--line-2);border-radius:12px;background:#fff">
-              ${ui.kop(c.settings)}
-            </div>
-          </div>
-          <div class="card mb-3">
-            <div class="card-head"><div><h3>Ukuran Kuitansi</h3>
-              <div class="sub">Kertas kwitansi transaksi &amp; bukti piutang (milimeter)</div></div>
-              ${ui.badge('1/3 F4 · 210 × 99 mm', 'gray', 'plain')}</div>
-            <div class="row3">
-              <div class="field"><label>Panjang (mm)</label><input type="number" step="0.5" min="60" name="kwitansi_w_mm" value="${esc(c.settings.kwitansi_w_mm || 210)}" ${ro ? 'readonly' : ''}></div>
-              <div class="field"><label>Tinggi (mm)</label><input type="number" step="0.5" min="30" name="kwitansi_h_mm" value="${esc(c.settings.kwitansi_h_mm || 99)}" ${ro ? 'readonly' : ''}></div>
-              <div class="field"><label>Margin (mm)</label><input type="number" step="0.5" min="0" name="kwitansi_margin_mm" value="${esc(c.settings.kwitansi_margin_mm || 6)}" ${ro ? 'readonly' : ''}></div>
-            </div>
-            <div class="hint">Ukuran di atas dipakai untuk kwitansi iuran. Kwitansi transaksi memiliki pengaturan margin sendiri
-              (<code>kw_trx_*</code>) dan dapat diubah lewat tautan <b>Ukuran Kertas</b> pada setiap kwitansi.</div>
-          </div>
-          <div class="card mb-3">
-            <div class="card-head"><div><h3>Tempat pada Tanggal Cetak</h3>
-              <div class="sub">Dipakai di semua dokumen: kwitansi, bukti piutang, laporan, berita acara, dll.</div></div>
-              ${ui.badge('semua dokumen', 'orange', 'plain')}</div>
-            <div class="row2">
-              <div class="field"><label>Teks Tempat</label>
-                <input type="text" name="print_tempat" value="${esc(c.settings.print_tempat || printcfg.TEMPAT_DEFAULT)}"
-                  placeholder="${esc(printcfg.TEMPAT_DEFAULT)}" ${ro ? 'readonly' : ''}>
-                <div class="hint">Contoh hasil cetak: <b>${esc(c.settings.print_tempat || printcfg.TEMPAT_DEFAULT)}, ${esc(tglID(lib.todayISO()))}</b>.
-                  Kosongkan untuk kembali ke <b>${esc(printcfg.TEMPAT_DEFAULT)}</b>.</div></div>
-              <div class="field"><label>Baris Tanggal Kwitansi Pengeluaran</label>
-                <div class="catatan-locked-nama" style="min-height:38px">${esc(printcfg.fill(printcfg.labels(dbm, 'kwitansi_trx').nilai_dari_keluar || 'Bendahara {sekolah}', { sekolah: c.settings.sekolah_nama || 'Sekolah' }))}</div>
-                <div class="hint">Contoh isi baris <b>${esc(printcfg.labels(dbm, 'kwitansi_trx').dari_keluar || 'Telah diterima dari')}</b> pada kwitansi pengeluaran
-                  (ubah teksnya di kartu <b>Kwitansi Transaksi</b> di bawah).</div></div>
-            </div>
-          </div>
-          ${cards}
-          <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Pengaturan Desain</button>`}</div>
-        </form>
-      </div>`;
-    page(req, res, { title: 'Desain Templat Cetak', sub: 'Redaksional dokumen & orientasi kertas default', active: 'desain_cetak', content });
+      </div>
+      ${cards}
+      <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Redaksional</button>`}</div>
+    </form>`;
+
+    /* ---- tab 4: kertas, tempat & kop global lama ---- */
+    const paneKertas = `<form method="post" action="${c.base}/desain-cetak">
+      <div class="card mb-3">
+        <div class="card-head"><div><h3>Kop Surat Resmi Global (semua dokumen)</h3>
+          <div class="sub">Dipakai sebagai bawaan bila salah satu tab kop di atas belum diatur</div></div>
+          ${ui.badge('bawaan', 'gray', 'plain')}</div>
+        <input type="hidden" name="kop_logo_b64" id="kopLogoB64">
+        <div class="row2">
+          <div class="field"><label>Sumber Data Kop Surat</label>
+            <select name="kop_sumber" data-kop-sumber ${ro ? 'disabled' : ''}>
+              <option value="manual" ${String(c.settings.kop_sumber || 'manual') !== 'auto' ? 'selected' : ''}>Manual — teks ditulis sendiri</option>
+              <option value="auto" ${String(c.settings.kop_sumber) === 'auto' ? 'selected' : ''}>Otomatis — dari Identitas Sekolah</option>
+            </select>
+            <div class="hint">Opsi <b>Otomatis</b> menyusun kop dari nama sekolah, bentuk/status, kepemilikan, alamat, telepon,
+              email, website &amp; NPSN pada menu <a href="${c.base}/sekolah">Identitas Sekolah</a> (perubahan identitas langsung ikut).</div></div>
+          <div class="field"><label>Logo Kop Surat (terpisah dari logo utama)</label>
+            <input type="file" accept="image/*" data-b64="kopLogoB64" data-max="5" ${ro ? 'disabled' : ''}>
+            <div class="hint" id="kopLogoB64-info">${c.settings.kop_logo
+        ? 'Logo kop khusus sudah terpasang. Unggah baru untuk mengganti.'
+        : 'Kosongkan untuk memakai logo sekolah.'}</div>
+            ${c.settings.kop_logo && !ro ? `<label class="check" style="margin-top:6px"><input type="checkbox" name="kop_logo_hapus" value="1"> Hapus logo kop khusus (kembali ke logo sekolah)</label>` : ''}</div>
+        </div>
+        <div data-kop-manual style="display:${String(c.settings.kop_sumber) === 'auto' ? 'none' : ''}">
+          <div class="field"><label>Teks Kop Surat (satu baris = satu baris kop)</label>
+            <textarea name="kop_baris" rows="7" style="font-family:ui-monospace,monospace;font-size:12px" ${ro ? 'readonly' : ''}>${esc(c.settings.kop_baris || '')}</textarea>
+            <div class="hint">Baris ke-4 otomatis ditampilkan paling besar &amp; tebal (nama sekolah) kecuali diatur lain di bawah.
+              Variabel dinamis: <code>{nama}</code> <code>{npsn}</code> <code>{bentuk}</code> <code>{status}</code>
+              <code>{kepemilikan}</code> <code>{alamat}</code> <code>{telp}</code> <code>{email}</code> <code>{website}</code>.</div></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Ukuran Font Teks Kop (pt)</label><input type="number" step="0.5" min="6" max="24" name="kop_font" value="${esc(c.settings.kop_font || 10)}" ${ro ? 'readonly' : ''}></div>
+          <div class="field"><label>Ukuran Font Nama Sekolah (pt)</label><input type="number" step="0.5" min="8" max="36" name="kop_font_besar" value="${esc(c.settings.kop_font_besar || 15)}" ${ro ? 'readonly' : ''}></div>
+        </div>
+        <div class="card-head" style="padding:0 0 8px"><div><h3 style="font-size:14px">Ukuran Font &amp; Tebal per Baris Kop</h3>
+          <div class="sub">Contoh: Baris 1 12pt, Baris 2 14pt tebal. Kosongkan = otomatis mengikuti aturan di atas.</div></div></div>
+        <div class="row3">
+          ${kopFmtFields.map((f, i) => `<div class="field"><label>Baris ${i + 1}</label>
+            <div class="flex" style="gap:6px;align-items:center">
+              <input type="number" step="0.5" min="6" max="36" name="kop_size_${i + 1}" value="${f.size ? esc(f.size) : ''}"
+                placeholder="auto" style="width:80px" ${ro ? 'readonly' : ''}>
+              <span class="small muted">pt</span>
+              <label class="check" style="margin:0"><input type="checkbox" name="kop_bold_${i + 1}" value="1" ${f.bold ? 'checked' : ''} ${ro ? 'disabled' : ''}> Tebal</label>
+            </div></div>`).join('')}
+        </div>
+        <div class="doc" style="padding:12px;border:1px dashed var(--line-2);border-radius:12px;background:#fff">
+          ${ui.kop(c.settings)}
+        </div>
+        <p class="help">Kop global ini dipakai otomatis pada kwitansi transaksi, laporan iuran, Laporan BKU,
+          rekon/neraca, LRA, arus kas, buku pembantu, leger/slip honor dan dokumen ekskul
+          <b>bila tab Kop Kwitansi / Kop Laporan belum diatur</b>.</p>
+      </div>
+      <div class="card mb-3">
+        <div class="card-head"><div><h3>Ukuran Kuitansi</h3>
+          <div class="sub">Kertas kwitansi transaksi &amp; bukti piutang (milimeter)</div></div>
+          ${ui.badge('1/3 F4 · 210 × 99 mm', 'gray', 'plain')}</div>
+        <div class="row3">
+          <div class="field"><label>Panjang (mm)</label><input type="number" step="0.5" min="60" name="kwitansi_w_mm" value="${esc(c.settings.kwitansi_w_mm || 210)}" ${ro ? 'readonly' : ''}></div>
+          <div class="field"><label>Tinggi (mm)</label><input type="number" step="0.5" min="30" name="kwitansi_h_mm" value="${esc(c.settings.kwitansi_h_mm || 99)}" ${ro ? 'readonly' : ''}></div>
+          <div class="field"><label>Margin (mm)</label><input type="number" step="0.5" min="0" name="kwitansi_margin_mm" value="${esc(c.settings.kwitansi_margin_mm || 6)}" ${ro ? 'readonly' : ''}></div>
+        </div>
+        <div class="hint">Ukuran di atas dipakai untuk kwitansi iuran. Kwitansi transaksi memiliki pengaturan margin sendiri
+          (<code>kw_trx_*</code>) dan dapat diubah lewat tautan <b>Ukuran Kertas</b> pada setiap kwitansi.</div>
+      </div>
+      <div class="card mb-3">
+        <div class="card-head"><div><h3>Tempat pada Tanggal Cetak</h3>
+          <div class="sub">Dipakai di semua dokumen: kwitansi, bukti piutang, laporan, berita acara, dll.</div></div>
+          ${ui.badge('semua dokumen', 'orange', 'plain')}</div>
+        <div class="row2">
+          <div class="field"><label>Teks Tempat</label>
+            <input type="text" name="print_tempat" value="${esc(c.settings.print_tempat || printcfg.TEMPAT_DEFAULT)}"
+              placeholder="${esc(printcfg.TEMPAT_DEFAULT)}" ${ro ? 'readonly' : ''}>
+            <div class="hint">Contoh hasil cetak: <b>${esc(c.settings.print_tempat || printcfg.TEMPAT_DEFAULT)}, ${esc(tglID(lib.todayISO()))}</b>.
+              Kosongkan untuk kembali ke <b>${esc(printcfg.TEMPAT_DEFAULT)}</b>.</div></div>
+          <div class="field"><label>Baris Tanggal Kwitansi Pengeluaran</label>
+            <div class="catatan-locked-nama" style="min-height:38px">${esc(printcfg.fill(printcfg.labels(dbm, 'kwitansi_trx').nilai_dari_keluar || 'Bendahara {sekolah}', { sekolah: c.settings.sekolah_nama || 'Sekolah' }))}</div>
+            <div class="hint">Contoh isi baris <b>${esc(printcfg.labels(dbm, 'kwitansi_trx').dari_keluar || 'Telah diterima dari')}</b> pada kwitansi pengeluaran
+              (ubah teksnya di tab <b>Redaksional</b>).</div></div>
+        </div>
+      </div>
+      <div class="form-actions">${ro ? '' : `<button class="btn btn-primary">${ui.icon('save')}Simpan Kertas &amp; Tempat</button>`}</div>
+    </form>`;
+
+    const content = `<div class="card mb-3">
+        <div class="card-head"><div><h3>Desain Templat Cetak</h3>
+          <div class="sub">Dua template kop terpisah (kwitansi &amp; laporan), redaksional dokumen, orientasi, dan ukuran kertas</div></div>
+          <div class="toolbar">${ro ? ui.badge('Hanya Lihat', 'gray') : ''}
+            <a class="btn btn-sm" href="${c.base}/sekolah">${ui.icon('settings')}Identitas Sekolah</a></div></div>
+        <div class="alert info">${ui.icon('info')}<div><b>Kop terpisah per jenis dokumen.</b>
+          Saat mencetak <b>kwitansi</b> (BKU, iuran, pinjaman kegiatan) sistem otomatis memakai template
+          <b>Kop Kwitansi Transaksi</b>; saat mencetak <b>laporan/BKU/ledger/leger</b> sistem memakai template
+          <b>Kop Laporan Keuangan</b>.</div></div>
+      </div>
+      <div class="tabbar" data-tabgroup="desain">
+        <button type="button" data-tab-btn="kwitansi">${ui.icon('printer')}Kop Kwitansi Transaksi</button>
+        <button type="button" data-tab-btn="laporan">${ui.icon('file')}Kop Laporan Keuangan</button>
+        <button type="button" data-tab-btn="redaksi">${ui.icon('edit')}Redaksional &amp; Orientasi</button>
+        <button type="button" data-tab-btn="kertas">${ui.icon('settings')}Kertas, Tempat &amp; Kop Global</button>
+      </div>
+      <div data-tab-pane="kwitansi">${kopPane(c, 'kwitansi', ro)}</div>
+      <div data-tab-pane="laporan">${kopPane(c, 'laporan', ro)}</div>
+      <div data-tab-pane="redaksi">${paneRedaksi}</div>
+      <div data-tab-pane="kertas">${paneKertas}</div>`;
+    page(req, res, { title: 'Desain Templat Cetak', sub: 'Kop kwitansi & kop laporan terpisah, redaksional, orientasi & kertas', active: 'desain_cetak', content });
   });
 
-  post('/desain-cetak', (req, res) => {
+  /* ---------- simpan template kop per jenis (kwitansi / laporan) ---------- */
+  post('/desain-cetak/kop', async (req, res) => {
+    guard(req, res, 'sekolah', 'edit');
+    const jenis = printcfg.kopKind(req.body.jenis);
+    const back = req.BASE + '/desain-cetak#' + jenis;
+    if (req.body.reset) {
+      printcfg.resetKop(dbm, jenis);
+      dbm.logAudit(req.user, 'EDIT', 'sekolah', `Template ${printcfg.KOP_LABEL[jenis]} dikembalikan ke kop global`);
+      return res.redirect(back + '?ok=' + encodeURIComponent(`${printcfg.KOP_LABEL[jenis]} kembali memakai kop global.`));
+    }
+    let logo = '';
+    try {
+      const b64 = String(req.body.logo_b64 || '');
+      if (b64 && /^data:image\//i.test(b64)) {
+        const m = b64.match(/^data:image\/([a-z+]+);/i);
+        const ext = (m ? m[1] : 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+        logo = await uploadMedia(b64, `kop-${jenis}-${Date.now()}.${ext}`, { jenis: 'logo' });
+      }
+    } catch (e) {
+      return res.redirect(back + '?err=' + encodeURIComponent('Gagal mengunggah logo kop: ' + e.message));
+    }
+    const cfg = printcfg.saveKopFromBody(dbm, jenis, req.body, { logo, hapusLogo: !!req.body.hapus_logo });
+    dbm.logAudit(req.user, 'EDIT', 'sekolah',
+      `Template ${printcfg.KOP_LABEL[jenis]}: sumber ${cfg.sumber}, ${cfg.baris.length} baris, logo ${cfg.logo ? 'kustom' : 'sekolah'}, garis ${cfg.garis}`);
+    res.redirect(back + '?ok=' + encodeURIComponent(`${printcfg.KOP_LABEL[jenis]} disimpan.`));
+  });
+
+
+  post('/desain-cetak', async (req, res) => {
     guard(req, res, 'sekolah', 'edit');
     printcfg.saveFromBody(dbm, req.body);
     // kop surat & ukuran kuitansi (dipindah dari menu Identitas Sekolah)
@@ -112,6 +308,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       if (req.body[k] === undefined) continue;
       const v = Number(String(req.body[k]).replace(',', '.'));
       if (Number.isFinite(v) && v > 0) dbm.setSetting(k, v);
+    }
+    // ---- sumber data kop: otomatis (Identitas Sekolah) atau manual ----
+    if (req.body.kop_sumber !== undefined) {
+      dbm.setSetting('kop_sumber', String(req.body.kop_sumber) === 'auto' ? 'auto' : 'manual');
+    }
+    // ---- ukuran font & tebal per baris kop ----
+    const fmt = [];
+    for (let i = 1; i <= 8; i++) {
+      const sizeRaw = String(req.body['kop_size_' + i] === undefined ? '' : req.body['kop_size_' + i]).replace(',', '.');
+      const size = Number(sizeRaw);
+      const bold = req.body['kop_bold_' + i] ? true : false;
+      fmt.push({ size: Number.isFinite(size) && size > 0 ? size : null, bold });
+    }
+    dbm.setSetting('kop_format', JSON.stringify(fmt));
+    // ---- logo kop terpisah (opsional) ----
+    try {
+      if (req.body.kop_logo_hapus) dbm.setSetting('kop_logo', '');
+      const b64 = String(req.body.kop_logo_b64 || '');
+      if (b64 && /^data:image\//i.test(b64)) {
+        const m = b64.match(/^data:image\/([a-z+]+);/i);
+        const ext = (m ? m[1] : 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+        const url = await uploadMedia(b64, `logo-kop-${Date.now()}.${ext}`, { jenis: 'logo' });
+        dbm.setSetting('kop_logo', url);
+      }
+    } catch (e) {
+      return res.redirect(req.BASE + '/desain-cetak?err=' + encodeURIComponent('Gagal mengunggah logo kop: ' + e.message));
     }
     dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Memperbarui Pusat Desain & Orientasi Cetak');
     res.redirect(req.BASE + '/desain-cetak?ok=' + encodeURIComponent('Pengaturan desain templat cetak disimpan.'));

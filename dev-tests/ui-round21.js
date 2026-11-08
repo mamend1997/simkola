@@ -64,6 +64,8 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
   ok('manajer menu memuat baris drag', (await page.locator('tr.drag-row').count()) > 20);
   const grupIuran = page.locator('.menu-group[data-groupid="iuran"]');
   const sppRow = grupIuran.locator('tr.drag-row[data-href="/spp"]');
+  /* ronde 33: Beasiswa SPP kini berada di grup Iuran (di atas SPP) → perlu 3 langkah naik */
+  await sppRow.locator('[data-row-up]').click();
   await sppRow.locator('[data-row-up]').click();
   await sppRow.locator('[data-row-up]').click();
   const labelInput = sppRow.locator('input.menu-label-input');

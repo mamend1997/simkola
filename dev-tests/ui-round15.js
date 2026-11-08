@@ -91,17 +91,20 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ---------- 2. design center ---------- */
   await page.goto(base + '/desain-cetak', { waitUntil: 'load' });
+  /* ronde 34: halaman desain dibagi menjadi tab; kartu redaksional ada di tab "redaksi" */
+  await page.locator('[data-tab-btn="redaksi"]').click();
   ok('design center: kartu dokumen tampil', await page.locator('.card h3').count() >= 10);
   ok('design center: pilihan orientasi per dokumen', await page.locator('select[name="orient_kwitansi_trx"]').count() === 1);
   await page.selectOption('select[name="orient_kwitansi_trx"]', 'landscape');
-  await page.click('form[action="/desain-cetak"] button.btn-primary');
+  await page.click('[data-tab-pane="redaksi"] form[action="/desain-cetak"] button.btn-primary');
   await page.waitForLoadState('load');
   ok('design center: simpan tersimpan', /disimpan/.test(await page.locator('.alert').first().innerText()));
   const cfg = JSON.parse(db.prepare("SELECT v FROM settings WHERE k='print_design'").get().v);
   ok('design center: orientasi tersimpan di settings', cfg.docs.kwitansi_trx.orient === 'landscape');
   // kembalikan ke portrait
+  await page.locator('[data-tab-btn="redaksi"]').click();
   await page.selectOption('select[name="orient_kwitansi_trx"]', 'portrait');
-  await page.click('form[action="/desain-cetak"] button.btn-primary');
+  await page.click('[data-tab-pane="redaksi"] form[action="/desain-cetak"] button.btn-primary');
   await page.waitForLoadState('load');
 
   /* ---------- 3. toggle orientasi pada halaman cetak ---------- */

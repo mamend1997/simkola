@@ -3,6 +3,7 @@ const printcfg = require('../printcfg');
 const impcache = require('../impcache');
 /* ============ PAYROLL: Leger Honor Guru & TU, Slip Gaji, Posting BKU ============ */
 const X = require('../xlsx-read');
+const slipwa = require('../slipwa');
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
@@ -998,13 +999,30 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Total Potongan</div><div class="val" style="font-size:18px">${rupiah(tot.potongan)}</div><div class="meta">termasuk kasbon ${rupiah(tot.kasbon)}</div></div>
         <div class="kpi ic-green"><div class="ico">${ui.icon('check')}</div><div class="lbl">Total Diterima</div><div class="val" style="font-size:18px">${rupiah(tot.diterima)}</div><div class="meta">dibayarkan ke pegawai</div></div>
       </div>
-      ${rows.length ? `<div class="table-wrap sticky-head">
+      ${rows.length ? `<form id="fSlipWa" method="post" action="${c.base}/payroll/slip/wa">
+        <input type="hidden" name="periode" value="${esc(periode)}">
+      </form>
+      <div class="between mb-1">
+        <div class="small muted">Centang pegawai untuk mengirim slip honor via WhatsApp (tautan langsung, tanpa kode OTP).
+          Terpilih: <b data-check-count="slipIds">0</b> pegawai.</div>
+        <div class="toolbar">
+          <button type="button" class="btn btn-sm" data-check-all="slipIds">${ui.icon('check')}Pilih Semua</button>
+          <button type="button" class="btn btn-sm" data-check-none="slipIds">${ui.icon('x')}Hapus Ceklis</button>
+          <button class="btn btn-sm btn-green" type="submit" form="fSlipWa"
+            data-confirm-click="Kirim slip honor periode ${esc(dbm.periodeLabel(periode))} ke pegawai yang dicentang via WhatsApp?">
+            ${ui.icon('whatsapp')}Kirim Slip Honor Masal (WA) (<b data-check-count="slipIds">0</b>)
+          </button>
+        </div>
+      </div>
+      <div class="table-wrap sticky-head">
         <table class="slip-modern"><thead><tr>
+          <th style="width:34px"><input type="checkbox" data-check-all-box="slipIds" title="Pilih semua"></th>
           <th style="width:44px">No</th><th>Nama / Jabatan</th><th class="num">Jam Efektif</th>
           <th class="num">Penerimaan</th><th class="num">Potongan</th><th class="num">Kasbon</th>
-          <th class="num">TOTAL DITERIMA</th><th style="width:96px"></th>
+          <th class="num">TOTAL DITERIMA</th><th style="width:150px"></th>
         </tr></thead><tbody>
         ${rows.map((r, i) => `<tr>
+          <td><input type="checkbox" form="fSlipWa" name="id" data-check-item="slipIds" value="${r.id}"></td>
           <td class="num">${i + 1}</td>
           <td><div class="t-strong">${esc(r.nama)}</div><div class="t-sub">${esc(r.jabatan || '-')} ${r.tipe === 'tu' ? ui.badge('TU', 'blue', 'plain') : ui.badge('Guru', 'orange', 'plain')}</div></td>
           <td class="num">${String(Number(r.jam_efektif) || 0).replace('.', ',')}</td>
@@ -1012,10 +1030,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
           <td class="num" style="color:var(--red)">${rupiah(r.potongan)}</td>
           <td class="num">${Number(r.pot_kasbon) ? rupiah(r.pot_kasbon) : '—'}</td>
           <td class="num"><span class="slip-diterima${r.diterima < 0 ? ' neg' : ''}">${rupiah(r.diterima)}</span></td>
-          <td class="right nowrap"><a class="btn btn-sm" target="_blank" href="${c.base}/payroll/slip/cetak?periode=${periode}&id=${r.id}">${ui.icon('printer')}Slip</a></td>
+          <td class="right nowrap">
+            <a class="btn btn-sm" target="_blank" href="${c.base}/payroll/slip/cetak?periode=${periode}&id=${r.id}">${ui.icon('printer')}Slip</a>
+            <button class="btn btn-sm" type="submit" form="fSlipWa" name="only" value="${r.id}" title="Kirim slip ini via WhatsApp"
+              data-confirm-click="Kirim slip honor ${esc(r.nama)} via WhatsApp?">${ui.icon('whatsapp')}</button>
+          </td>
         </tr>`).join('')}
         </tbody><tfoot><tr>
-          <td colspan="3">TOTAL ${rows.length} PEGAWAI</td>
+          <td colspan="4">TOTAL ${rows.length} PEGAWAI</td>
           <td class="num">${rupiah(tot.penerimaan)}</td><td class="num">${rupiah(tot.potongan)}</td>
           <td class="num">${rupiah(tot.kasbon)}</td><td class="num"><span class="slip-diterima">${rupiah(tot.diterima)}</span></td><td></td>
         </tr></tfoot></table></div>`
@@ -1023,6 +1045,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       <p class="help mt-2">Slip memakai data tersimpan pada draf leger honor — perubahan pada draf langsung terlihat di slip, termasuk periode yang belum diposting ke BKU.</p>
     </div>`;
     page(req, res, { title: 'Slip Gaji Pegawai', sub: 'Slip honor per periode dari draf leger honor', active: 'payroll_slip', content });
+  });
+
+  /* ============ KIRIM SLIP HONOR MASAL VIA WHATSAPP (tautan tanpa OTP) ============ */
+  post('/payroll/slip/wa', (req, res) => {
+    guard(req, res, 'payroll', 'view');
+    const c = ctx(req);
+    const periode = normPeriode(req.body.periode) || defaultPeriode(c.ta);
+    const back = req.BASE + '/payroll/slip?periode=' + encodeURIComponent(periode);
+    const only = Number(req.body.only || 0);
+    const ids = only ? [only]
+      : [].concat(req.body.id || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return res.redirect(back + '&err=' + encodeURIComponent('Pilih minimal satu pegawai terlebih dahulu.'));
+    const rows = dbm.payrollRows(periode).filter(r => ids.includes(Number(r.id)));
+    if (!rows.length) return res.redirect(back + '&err=' + encodeURIComponent('Baris leger yang dipilih tidak ditemukan pada periode ini.'));
+    const r = slipwa.sendSlipWA({ dbm, req, periode, rows, user: req.user, pemicu: 'Kirim slip honor massal' });
+    const pesan = [
+      r.queued ? `${r.queued} slip honor dimasukkan ke antrean WhatsApp (terkirim bertahap oleh sistem).` : 'Tidak ada slip yang bisa dikirim.',
+      r.tanpaNomor.length ? `Tanpa nomor WhatsApp: ${r.tanpaNomor.join(', ')}.` : '',
+      r.tanpaPegawai.length ? `Belum ada di master pegawai: ${r.tanpaPegawai.join(', ')}.` : ''
+    ].filter(Boolean).join(' ');
+    res.redirect(back + (r.queued ? '&ok=' : '&err=') + encodeURIComponent(pesan));
   });
 
   /* ================= CETAK SLIP GAJI (A4 · 9 per halaman) ================= */

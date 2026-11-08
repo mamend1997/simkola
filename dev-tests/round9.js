@@ -148,11 +148,11 @@ const periode = today.slice(0, 7);
   const totalTrx = db.prepare('SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE b.tahun_ajaran_id=?').get(ta.id).c;
   r = await req('GET', `/transaksi?ta=${ta.id}`);
   ok('counter transaksi = jumlah aktual (>300)', totalTrx > 300 && new RegExp('Jumlah Transaksi</div><div class="val" style="font-size:19px">' + totalTrx + '<').test(r.text), `total=${totalTrx}`);
-  ok('pagination tampil', /class="pager"/.test(r.text) && /halaman 1\//.test(r.text));
-  r = await req('GET', `/transaksi?ta=${ta.id}&hal=2`);
-  ok('halaman 2 transaksi dapat dibuka', r.status === 200 && /halaman 2\//.test(r.text));
+  /* ronde 33: tabel rekap transaksi kini SATU HALAMAN BERURUTAN di dalam scrollable box */
+  ok('tanpa pagination (satu halaman berurutan)', !/class="pager"/.test(r.text) && /class="table-scroll tall" id="rekapTrx"/.test(r.text));
+  r = await req('GET', `/transaksi?ta=${ta.id}`);
   const totalLine = /Jumlah Transaksi<\/div><div class="val" style="font-size:19px">(\d+)</.exec(r.text);
-  ok('jumlah transaksi konsisten di halaman 2', totalLine && Number(totalLine[1]) === totalTrx, totalLine && totalLine[1]);
+  ok('jumlah transaksi konsisten (seluruh baris dirender)', totalLine && Number(totalLine[1]) === totalTrx, totalLine && totalLine[1]);
 
   /* ===== 6. portal siswa: autocomplete, datepicker, tanpa login petugas, feedback ===== */
   r = await req('GET', '/portal', null, { public: true });

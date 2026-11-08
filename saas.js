@@ -18,6 +18,8 @@ const path = require('path');
 const fs = require('fs');
 const lib = require('./lib');
 const dbm = require('./db');
+const paygw = require('./paygw');
+const clean = v => String(v === null || v === undefined ? '' : v).trim();
 
 const S = dbm.controlDb;
 S.pragma('journal_mode = WAL');
@@ -124,6 +126,17 @@ S.exec(SCHEMA);
   const cols = t => { try { return S.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
   const add = (t, name, ddl) => { if (!cols(t).includes(name)) { try { S.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${ddl}`); } catch (e) { } } };
   add('saas_payments', 'paket_tujuan', 'TEXT');
+  /* ---- pembayaran hybrid: kolom gateway QRIS dinamis ---- */
+  add('saas_payments', 'channel', "TEXT DEFAULT 'manual'");
+  add('saas_payments', 'provider', 'TEXT');
+  add('saas_payments', 'order_id', 'TEXT');
+  add('saas_payments', 'qr_string', 'TEXT');
+  add('saas_payments', 'qr_url', 'TEXT');
+  add('saas_payments', 'checkout_url', 'TEXT');
+  add('saas_payments', 'gateway_status', 'TEXT');
+  add('saas_payments', 'paid_at', 'TEXT');
+  add('saas_payments', 'expires_at', 'TEXT');
+  try { S.exec('CREATE INDEX IF NOT EXISTS idx_pay_order ON saas_payments(order_id)'); } catch (e) { }
   add('saas_packages', 'self_trial', 'INTEGER NOT NULL DEFAULT 0');
   add('saas_packages', 'trial_hari', 'INTEGER');
   add('tenants', 'npsn', 'TEXT');
@@ -199,6 +212,16 @@ const DEFAULT_SETTINGS = {
   qris_nama: '',
   qris_nomor: '',
   qris_instruksi: 'Setelah melakukan pembayaran, unggah bukti transfer pada halaman perpanjangan. Verifikasi dilakukan maksimal 1x24 jam kerja.',
+  /* ---- metode pembayaran hybrid ---- */
+  pay_gateway_aktif: '0',
+  pay_manual_aktif: '1',
+  pay_gateway_provider: 'sandbox',
+  pay_gateway_mode: 'sandbox',
+  pay_gateway_merchant: '',
+  pay_gateway_key: '',
+  pay_gateway_key2: '',
+  pay_gateway_callback: '',
+  pay_gateway_expire_menit: '60',
   harga_bulan: '150000',
   harga_tahun: '1500000',
   trial_hari: '7',
@@ -230,6 +253,12 @@ initSettings();
 try { dbm.migrateLegacyTimestamps(S, 'saas_settings'); } catch (e) { console.error('[tz-migrasi]', e.message); }
 
 function appName() { return String(get('saas_nama', 'SIMKEU Cloud') || 'SIMKEU Cloud').trim(); }
+/**
+ * Sub-judul aplikasi default (baris kecil di bawah nama aplikasi pada bilah samping).
+ * Dipakai sekolah yang belum mengisi sub-judulnya sendiri di menu Tema & Branding.
+ */
+const APP_SUB_DEFAULT = 'Sistem Keuangan';
+function appSub() { return String(get('saas_sub', APP_SUB_DEFAULT) || APP_SUB_DEFAULT).trim().slice(0, 60) || APP_SUB_DEFAULT; }
 function appLogo() { return String(get('saas_logo', '') || '').trim(); }
 function tema() { return String(get('saas_tema', '#4F46E5') || '#4F46E5').trim(); }
 function priceOf(durasi) {
@@ -754,6 +783,12 @@ function createTenant(input = {}) {
   const expires = input.expires_at ? String(input.expires_at).slice(0, 10)
     : (lifetime ? null : addDays(todayISO(), days));
   const now = lib.nowStamp();
+  // ---- default branding sistem (menu Branding Sistem Super Admin) ----
+  // Sekolah baru otomatis memakai nama aplikasi & logo default sistem; admin sekolah tetap bisa mengubahnya.
+  const sysNama = String(get('saas_nama', '') || 'SIMKEU').trim() || 'SIMKEU';
+  const sysLogo = String(get('saas_logo', '') || '').trim();
+  const appNama = String(input.app_nama || '').trim() || sysNama;
+  const logoAwal = String(input.logo || '').trim() || sysLogo;
 
   const info = S.prepare(`INSERT INTO tenants
     (school_code,nama,paket,status,is_lifetime_free,expires_at,registered_at,contact_nama,contact_email,contact_telp,alamat,
@@ -761,8 +796,8 @@ function createTenant(input = {}) {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(code, nama, paket, 'active', lifetime, expires, todayISO(),
       String(input.contact_nama || input.admin_nama || ''), email, String(input.contact_telp || ''),
-      String(input.alamat || ''), '', String(input.logo || ''),
-      String(input.app_nama || ''), String(input.tema || ''),
+      String(input.alamat || ''), '', logoAwal,
+      appNama, String(input.tema || ''),
       JSON.stringify(featDefault), lifetime ? 0 : (trial ? 1 : 0),
       String(input.catatan || ''), now, now);
   const id = Number(info.lastInsertRowid);
@@ -786,7 +821,8 @@ function createTenant(input = {}) {
     admin_nama: String(input.admin_nama || 'Administrator Sekolah'),
     alamat: String(input.alamat || ''),
     kepala: String(input.kepala || ''),
-    app_nama: String(input.app_nama || ''),
+    app_nama: appNama,
+    logo: logoAwal,
     tema: String(input.tema || '')
   });
   // preset tampilan menu default dari Super Admin (menu yang tampil, urutan & judul)
@@ -946,6 +982,97 @@ function submitPayment(tenantId, { durasi, bukti_url, pengirim, catatan, paket }
   logSaas(null, 'PENGAJUAN BAYAR', 'pembayaran',
     `${t.nama} mengirim bukti transfer ${d} hari · paket ${pkg ? pkg.nama : paketTujuan} (Rp ${nominal.toLocaleString('id-ID')})`, tenantId);
   return id;
+}
+
+/* ==================== PEMBAYARAN HYBRID: QRIS OTOMATIS ==================== */
+function gatewayCfg() {
+  return {
+    provider: clean(get('pay_gateway_provider')) || 'sandbox',
+    mode: clean(get('pay_gateway_mode')) || 'sandbox',
+    merchant: clean(get('pay_gateway_merchant')),
+    key: clean(get('pay_gateway_key')),
+    key2: clean(get('pay_gateway_key2')),
+    callback: clean(get('pay_gateway_callback')),
+    expire_menit: Math.max(5, Number(get('pay_gateway_expire_menit')) || 60)
+  };
+}
+/** konfigurasi aman untuk klien (tanpa kredensial) */
+function payConfig(baseUrl) {
+  const pub = paygw.publicConfig(get);
+  pub.callback_url = baseUrl ? `${String(baseUrl).replace(/\/$/, '')}/pay/callback` : '';
+  return pub;
+}
+
+/**
+ * Buat tagihan QRIS dinamis untuk perpanjangan sekolah.
+ * Baris saas_payments dibuat lebih dulu agar order dapat dilacak.
+ */
+async function bayarGateway(tenantId, { durasi, paket, pengirim, catatan, oleh, base_url }) {
+  const t = tenantById(tenantId);
+  if (!t) throw new Error('Sekolah tidak ditemukan.');
+  if (Number(t.is_lifetime_free)) throw new Error('Sekolah ini berstatus Lifetime — tidak perlu perpanjangan.');
+  if (String(get('pay_gateway_aktif')) !== '1') throw new Error('Metode QRIS otomatis sedang dinonaktifkan Super Admin.');
+  if (pendingPayment(tenantId)) throw new Error('Masih ada pengajuan yang menunggu verifikasi. Selesaikan dulu sebelum membuat QRIS baru.');
+  const d = Number(durasi) === 365 ? 365 : 30;
+  let paketTujuan = String(paket || '').trim().toLowerCase();
+  if (paketTujuan && !packageByKode(paketTujuan)) throw new Error('Paket tujuan tidak ditemukan.');
+  if (!paketTujuan) paketTujuan = String(t.paket || '');
+  const nominal = packagePrice(paketTujuan, d);
+  const cfg = gatewayCfg();
+  const oid = paygw.orderNo(t.id);
+  const now = lib.nowStamp();
+  const info = S.prepare(`INSERT INTO saas_payments
+    (tenant_id,paket_tujuan,no_invoice,jenis,durasi,nominal,status,bukti_url,pengirim,catatan,source,periode_mulai,dibuat_at,created_at,channel,provider,order_id,gateway_status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(tenantId, paketTujuan, '', 'perpanjangan', d, nominal, 'pending', '', String(pengirim || ''), String(catatan || ''),
+      'tenant', t.expires_at || todayISO(), now, now, 'gateway', cfg.provider, oid, 'PENDING');
+  const id = Number(info.lastInsertRowid);
+  S.prepare('UPDATE saas_payments SET no_invoice=? WHERE id=?').run(invoiceNo(id), id);
+
+  const charge = await paygw.createCharge(
+    { ...cfg, callback_url: base_url ? `${String(base_url).replace(/\/$/, '')}/pay/callback` : '', return_url: base_url || '' },
+    { order_id: oid, amount: nominal, label: `Langganan ${d} hari — ${t.nama}`, customer: { nama: t.nama, email: t.email || '' } }
+  );
+  if (!charge.ok) {
+    S.prepare("UPDATE saas_payments SET status='rejected', gateway_status='GAGAL', alasan=? WHERE id=?")
+      .run('Gagal membuat QRIS: ' + (charge.error || 'tidak diketahui'), id);
+    logSaas(null, 'BAYAR GATEWAY', 'pembayaran', `${t.nama} gagal membuat QRIS (${cfg.provider}): ${charge.error || '-'}`, tenantId);
+    throw new Error(charge.error || 'Gagal membuat QRIS pada payment gateway.');
+  }
+  S.prepare('UPDATE saas_payments SET qr_string=?,qr_url=?,checkout_url=?,expires_at=?,gateway_status=? WHERE id=?')
+    .run(clean(charge.qr_string), clean(charge.qr_url), clean(charge.checkout_url), clean(charge.expires_at), 'PENDING', id);
+  logSaas(null, 'BAYAR GATEWAY', 'pembayaran',
+    `${t.nama} membuat QRIS otomatis ${d} hari · Rp ${nominal.toLocaleString('id-ID')} (${cfg.provider}) — order ${oid}`, tenantId);
+  return paymentById(id);
+}
+
+function gatewayRow(order_id) {
+  return S.prepare('SELECT * FROM saas_payments WHERE order_id=?').get(clean(order_id)) || null;
+}
+
+/** tandai lunas (callback / polling / simulasi) — idempoten */
+function gatewayMarkPaid(order_id, oleh) {
+  const p = gatewayRow(order_id);
+  if (!p) throw new Error('Transaksi gateway tidak ditemukan.');
+  if (p.status === 'approved') return { payment: paymentById(p.id), sudah: true };
+  if (p.status !== 'pending') throw new Error('Transaksi ini sudah diproses (' + p.status + ').');
+  S.prepare("UPDATE saas_payments SET gateway_status='PAID', paid_at=? WHERE id=?").run(lib.nowStamp(), p.id);
+  const res = approvePayment(p.id, { nama: clean(oleh) || 'Payment Gateway' });
+  return { payment: paymentById(p.id), sudah: false, end: res.end };
+}
+
+/** cek status terkini ke gateway */
+async function gatewaySync(order_id) {
+  const p = gatewayRow(order_id);
+  if (!p) throw new Error('Transaksi gateway tidak ditemukan.');
+  if (p.status !== 'pending') return { status: p.status, paid: p.status === 'approved', payment: paymentById(p.id) };
+  const st = await paygw.checkStatus(gatewayCfg(), { order_id: p.order_id });
+  if (st.ok) S.prepare('UPDATE saas_payments SET gateway_status=? WHERE id=?').run(clean(st.status) || 'PENDING', p.id);
+  if (st.paid) {
+    const r = gatewayMarkPaid(p.order_id, 'Payment Gateway');
+    return { status: 'approved', paid: true, payment: r.payment };
+  }
+  return { status: p.status, paid: false, gateway_status: st.status || '', error: st.error || '' };
 }
 
 function approvePayment(id, user) {
@@ -1132,7 +1259,7 @@ module.exports = {
   db: S,
   C: S,
   FEATURES, FEATURE_MAP, PATH_FEATURES, PAKET, PAY_STATUS, SESSION_DAYS,
-  get, set, settings, appName, appLogo, tema, priceOf, defaultPriceMonth, trialDays,
+  get, set, settings, appName, appSub, appLogo, tema, priceOf, defaultPriceMonth, trialDays,
   featureDefaults, tenantFeatures, enabledKeys, blockedFeature, parseFeatures,
   DEFAULT_PACKAGES, packageRows, packageByKode, packageById, defaultPackage, packageLabels, packagePrice,
   packageSave, packageDelete, packageSetDefault, seedPackages, setPackage,
@@ -1143,6 +1270,7 @@ module.exports = {
   createTenant, updateTenant, setFeatures, setLifetime, extendTenant, deleteTenant,
   statusOf, isBlocked, todayISO, addDays, daysBetween, logSaas,
   paymentsOf, paymentsAll, paymentById, pendingPayment, latestRejected, submitPayment,
+  paygw, payConfig, gatewayCfg, bayarGateway, gatewayRow, gatewayMarkPaid, gatewaySync,
   approvePayment, rejectPayment, runDailyJobs, stats, invoiceNo,
   createSession, getSession, destroySession, updateSession, takeWelcome,
   ensureAdmin, findAdmin, adminById, setAdminPassword,

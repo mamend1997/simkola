@@ -25,7 +25,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     return Number(a.pagu) - real;
   }
 
-  function trxForm(c, { mode = 'pemasukan', trx = null, taId, bukuss }) {
+  function trxForm(c, { mode = 'pemasukan', trx = null, taId, bukuss, closeId = '', judul = '' }) {
     const coaAll = db.prepare("SELECT * FROM coa ORDER BY kategori, kode").all();
     const jenis0 = trx ? trx.jenis : mode;
     // pengeluaran: HANYA akun belanja/pengeluaran (akun pendapatan disembunyikan)
@@ -35,12 +35,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const fid = 'fTrx_' + (trx ? 'edit' : mode);
     const tgl = trx ? trx.tanggal : todayISO();
     const jenis = trx ? trx.jenis : mode;
+    // form EDIT memakai struktur yang sama persis dengan form Pemasukan/Pengeluaran
+    const judulForm = judul || (jenis === 'pemasukan' ? 'Input Pemasukan / Penerimaan Kas' : 'Input Pengeluaran / Belanja');
+    const closeTarget = closeId || ('mTrx' + (trx ? 'Edit' : (mode === 'pemasukan' ? 'In' : 'Out')));
     return `<form method="post" action="${c.base}/transaksi/save" id="${fid}" data-trx-form>
       ${trx ? `<input type="hidden" name="id" value="${trx.id}">` : ''}
       <input type="hidden" name="jenis" value="${jenis}">
       <div class="alert ${jenis === 'pemasukan' ? 'ok' : 'warn'}" style="margin-bottom:16px">${ui.icon(jenis === 'pemasukan' ? 'up' : 'down')}
-        <div><b>${jenis === 'pemasukan' ? 'Input Pemasukan / Penerimaan Kas' : 'Input Pengeluaran / Belanja'}</b><br>
-        <span class="small">Transaksi hanya dapat disimpan pada BKU yang berstatus <b>AKTIF</b>.</span></div></div>
+        <div><b>${esc(judulForm)}</b><br>
+        <span class="small">${trx
+        ? `Nomor bukti tetap <b>${esc(trx.no_bukti || '-')}</b> — perubahan langsung memperbarui saldo BKU.`
+        : 'Transaksi hanya dapat disimpan pada BKU yang berstatus <b>AKTIF</b>.'}</span></div></div>
       <div class="row2">
         <div class="field"><label>Buku Kas Sasaran (BKU Aktif)</label>
           <select name="bku_id" required>
@@ -83,7 +88,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         </div>
       </div>
       <div class="modal-foot" style="padding:16px 0 0;background:none;border-radius:0">
-        <button class="btn" type="button" data-close="mTrx${trx ? 'Edit' : (mode === 'pemasukan' ? 'In' : 'Out')}">Batal</button>
+        <button class="btn" type="button" data-close="${closeTarget}">Batal</button>
         <button class="btn" name="after" value="saja" type="submit">${ui.icon('save')}Simpan Saja</button>
         <button class="btn btn-primary" name="after" value="cetak" type="submit">${ui.icon('printer')}Simpan &amp; Cetak Kwitansi</button>
       </div>
@@ -114,17 +119,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (to) { where += ' AND t.tanggal<=?'; args.push(to); }
     if (kw) { where += ' AND (t.uraian LIKE ? OR t.no_bukti LIKE ? OR t.nama_pihak LIKE ?)'; args.push('%' + kw + '%', '%' + kw + '%', '%' + kw + '%'); }
 
-    // jumlah transaksi aktual (tanpa batas keras) → pagination
+    /* SATU HALAMAN BERURUTAN DI DALAM SCROLLABLE BOX (tanpa pagination):
+       seluruh transaksi sesuai filter dirender berurutan dan digeser di dalam
+       kotak tabel. Modal approval/void dirender hanya saat diminta (?appr=/?void=). */
     const totalRows = db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id${where}`).get(...args).c;
-    const perPage = 120;
-    const totalPages = Math.max(1, Math.ceil(totalRows / perPage));
-    const hal = Math.min(totalPages, Math.max(1, Number(req.query.get('hal') || 1) || 1));
+    const perPage = 0;
+    const totalPages = 1;
+    const hal = 1;
     // default: transaksi terbaru di paling atas
     const sql = `SELECT t.*, b.nama bku_nama, b.status bku_status, co.kode coa_kode, co.nama coa_nama, u.nama pembuat, a.nama penyetuju
       FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa co ON co.id=t.coa_id
       LEFT JOIN users u ON u.id=t.created_by LEFT JOIN users a ON a.id=t.approved_by${where}
-      ORDER BY t.tanggal ${sort === 'asc' ? 'ASC' : 'DESC'}, t.id ${sort === 'asc' ? 'ASC' : 'DESC'}
-      LIMIT ${perPage} OFFSET ${(hal - 1) * perPage}`;
+      ORDER BY t.tanggal ${sort === 'asc' ? 'ASC' : 'DESC'}, t.id ${sort === 'asc' ? 'ASC' : 'DESC'}`;
     const rows = db.prepare(sql).all(...args);
 
     // query filter aktif → dipakai untuk kembali ke posisi semula setelah edit inline
@@ -169,6 +175,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const editId = req.query.get('edit');
     const editTrx = editId ? db.prepare('SELECT * FROM transaksi WHERE id=?').get(editId) : null;
     const autoOpen = req.query.get('new');
+    const voidAsk = Number(req.query.get('void') || 0);
+    const apprAsk = Number(req.query.get('appr') || 0);
+    const voidTrx = voidAsk ? db.prepare('SELECT t.*, b.nama bku_nama, b.status bku_status FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.id=?').get(voidAsk) : null;
+    const apprTrx = apprAsk ? db.prepare('SELECT t.*, b.nama bku_nama, u.nama pembuat FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN users u ON u.id=t.created_by WHERE t.id=?').get(apprAsk) : null;
     const late = modalCollector();
 
     const paguMap = {};
@@ -276,10 +286,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     </div>
 
     <div class="card">
-      <div class="card-head"><div><h3>Rekap Transaksi Real-time</h3><div class="sub">Edit langsung pada tabel (inline) · klik ikon pensil. Data terbaru tampil paling atas.</div></div>
-        <div class="toolbar"><span class="small muted">${rows.length} dari ${totalRows} transaksi${totalRows > perPage ? ` · halaman ${hal}/${totalPages}` : ''}</span></div></div>
+      <div class="card-head"><div><h3>Rekap Transaksi Real-time</h3><div class="sub">Satu halaman berurutan di dalam kotak bergulir · edit inline lewat ikon pensil. Data terbaru tampil paling atas.</div></div>
+        <div class="toolbar"><span class="small muted">${rows.length} transaksi ditampilkan (satu halaman)</span></div></div>
       ${inlineTrx ? inlineFormHtml(inlineTrx) : ''}
-      ${rows.length ? `<div class="table-scroll tall" id="rekapTrx"><table><thead><tr>
+      ${rows.length ? `<form id="fTrxMass" method="post" action="${c.base}/transaksi/hapus-masal">
+        <input type="hidden" name="back" value="${esc(backPath)}">
+        <div class="between mb-1">
+          <div class="small muted">Centang transaksi untuk hapus masal (dipindahkan ke Kotak Sampah).
+            Terpilih: <b data-check-count="trxIds">0</b> transaksi.</div>
+          <div class="toolbar">
+            <button type="button" class="btn btn-sm" data-check-all="trxIds">${ui.icon('check')}Pilih Semua</button>
+            <button type="button" class="btn btn-sm" data-check-none="trxIds">${ui.icon('x')}Hapus Ceklis</button>
+            ${c.can('transaksi', 'delete') ? `<button class="btn btn-sm btn-danger" type="submit"
+              data-confirm-click="Hapus semua transaksi yang dicentang? Data dipindahkan ke Kotak Sampah dan dapat dipulihkan 30 hari.">
+              ${ui.icon('trash')}Hapus Terpilih (<b data-check-count="trxIds">0</b>)</button>` : ''}
+          </div></div>
+      </form>
+      <div class="table-scroll tall" id="rekapTrx"><table><thead><tr>
+        <th style="width:34px"><input type="checkbox" data-check-all-box="trxIds" title="Pilih semua"></th>
         <th style="min-width:130px">Tanggal</th><th>No. Bukti</th><th>BKU</th><th>Uraian &amp; Rekening</th><th>Metode</th><th class="num">Nominal</th><th>Status</th><th class="right">Aksi</th>
       </tr></thead><tbody>
       ${rows.map(t => {
@@ -288,7 +312,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const perLock = lockEdit || lockInfo;
       const bisaInline = c.can('transaksi', 'edit') && t.bku_status === 'aktif' && !t.is_penyesuaian;
       if (inlineId === t.id && bisaInline) return inlineRowHtml(t);
+      const bisaHapusRow = c.can('transaksi', 'delete') && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian;
       return `<tr id="trx${t.id}">
+        <td><input type="checkbox" form="fTrxMass" name="id" data-check-item="trxIds" value="${t.id}" ${bisaHapusRow ? '' : 'disabled title="Tidak dapat dihapus (BKU terkunci / opnam)"'}></td>
         <td class="nowrap">${tglID(t.tanggal)}</td>
         <td class="mono t-sub nowrap">${esc(t.no_bukti || '-')}</td>
         <td>${esc(t.bku_nama)}${t.bku_status !== 'aktif' ? ` <span class="badge gray plain">terkunci</span>` : ''}${lockEdit ? ` <span class="badge red plain" title="${esc(lockEdit)}">periode ditutup</span>` : ''}${!lockEdit && lockInfo ? ` <span class="badge amber plain" title="${esc(lockInfo)}">belum ditutup</span>` : ''}${t.is_penyesuaian ? ` <span class="badge orange plain">opnam</span>` : ''}${t.transfer_group ? ` <span class="badge blue plain">pindah saldo</span>` : ''}${t.void_of ? ` <span class="badge red plain">jurnal pembalik</span>` : ''}${t.void_reversal_id ? ` <span class="badge red plain">di-void</span>` : ''}</td>
@@ -299,58 +325,46 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <td class="right nowrap">
           <a class="btn btn-sm" href="${c.base}/transaksi/${t.id}/kwitansi" target="_blank" title="Cetak kwitansi">${ui.icon('printer')}</a>
           ${t.nota_url ? `<a class="btn btn-sm" href="${c.base}/nota/${t.id}" target="_blank" title="Lihat nota">${ui.icon('eye')}</a>` : `<span class="btn btn-sm" style="opacity:.4;cursor:default" title="Tidak ada nota">${ui.icon('eye')}</span>`}
-          ${t.status === 'pending' && c.can('transaksi', 'approve') ? `<button class="btn btn-sm btn-green" data-open="mAppr${t.id}" title="Setujui">${ui.icon('check')}</button>` : ''}
+          ${t.status === 'pending' && c.can('transaksi', 'approve') ? `<a class="btn btn-sm btn-green" href="${c.base}${withBack('appr=' + t.id)}#trx${t.id}" title="Setujui">${ui.icon('check')}</a>` : ''}
           ${bisaInline ? `<a class="btn btn-sm btn-icon" href="${c.base}${withBack('inline=' + t.id)}#trx${t.id}" title="Edit langsung di tabel">${ui.icon('edit')}</a>` : ''}
           ${lockEdit && canUnlock && c.can('transaksi', 'edit') ? unlockBtn(t) : ''}
-          ${t.status === 'posted' && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && !t.void_reversal_id && !t.void_of && c.can('transaksi', 'edit') ? `<button class="btn btn-sm btn-warn" data-open="mVoid${t.id}" title="Batalkan transaksi (void)">${ui.icon('x')}Void</button>` : ''}
+          ${t.status === 'posted' && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && !t.void_reversal_id && !t.void_of && c.can('transaksi', 'edit') ? `<a class="btn btn-sm btn-warn" href="${c.base}${withBack('void=' + t.id)}#trx${t.id}" title="Batalkan transaksi (void)">${ui.icon('x')}Void</a>` : ''}
           ${t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && c.can('transaksi', 'delete') ? `<form method="post" action="${c.base}/transaksi/delete" style="display:inline" data-confirm="Hapus transaksi ${esc(t.no_bukti || '')}? Data dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari)."><input type="hidden" name="id" value="${t.id}"><input type="hidden" name="back" value="${esc(backPath)}"><button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>` : ''}
-        </td></tr>
-        ${t.status === 'posted' && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && !t.void_reversal_id && !t.void_of && c.can('transaksi', 'edit') ? late('mVoid' + t.id, {
-        title: 'Batalkan Transaksi (Void)',
-        body: `<form method="post" action="${c.base}/transaksi/void" id="fv${t.id}">
-            <input type="hidden" name="id" value="${t.id}">
-            <input type="hidden" name="back" value="${esc(backPath)}">
-            <div class="alert warn">${ui.icon('alert')}<div><b>Void ${esc(t.no_bukti || '')} — ${rupiah(t.nominal)}.</b><br>
-              Sistem akan membuat <b>jurnal pembalik</b> di BKU untuk menetralkan saldo, mengembalikan status tagihan iuran/piutang terkait menjadi belum dibayar, dan mencatat audit log.</div></div>
-            <div class="field"><label>Alasan Pembatalan / Void <span style="color:var(--red)">*</span></label>
-              <textarea name="alasan" required placeholder="Contoh: salah input nominal / pembayaran dibatalkan siswa"></textarea></div>
-          </form>`,
-        footer: `<button class="btn" data-close="mVoid${t.id}">Batal</button><button class="btn btn-danger" form="fv${t.id}">${ui.icon('x')}Void &amp; Buat Jurnal Pembalik</button>`
-      }) : ''}
-        ${t.status === 'pending' ? late('mAppr' + t.id, {
-      title: 'Persetujuan Transaksi',
-      body: `<div class="kv">
-              <dt>No. Bukti</dt><dd class="mono">${esc(t.no_bukti || '-')}</dd>
-              <dt>Tanggal</dt><dd>${tglID(t.tanggal)}</dd>
-              <dt>BKU</dt><dd>${esc(t.bku_nama)}</dd>
-              <dt>Uraian</dt><dd>${esc(t.uraian)}</dd>
-              <dt>Penerima</dt><dd>${esc(t.nama_pihak || '-')}</dd>
-              <dt>Nominal</dt><dd style="color:var(--o-700);font-size:16px">${rupiah(t.nominal)}</dd>
-              <dt>Dibuat oleh</dt><dd>${esc(t.pembuat || '-')}</dd>
-            </div>
-            <form method="post" action="${c.base}/transaksi/approve" id="fa${t.id}">
-              <input type="hidden" name="id" value="${t.id}">
-              <div class="field mt-2"><label>Catatan Persetujuan (opsional)</label><input name="catatan" placeholder="Contoh: Disetujui sesuai RAPBS"></div>
-            </form>`,
-      footer: `<button class="btn" data-close="mAppr${t.id}">Batal</button>
-              <button class="btn btn-danger" form="fa${t.id}" name="aksi" value="reject">Tolak</button>
-              <button class="btn btn-green" form="fa${t.id}" name="aksi" value="approve">${ui.icon('check')}Setujui</button>`
-    }) : ''}`; }).join('')}
+        </td></tr>`; }).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada transaksi', 'Gunakan tombol Pemasukan atau Pengeluaran untuk mulai mencatat.')}
-      ${totalPages > 1 ? (() => {
-        const pageUrl = n => {
-          const qs = new URLSearchParams(keepQs);
-          if (n > 1) qs.set('hal', String(n));
-          return c.base + '/transaksi' + (qs.toString() ? '?' + qs.toString() : '') + '#rekapTrx';
-        };
-        const num = (n, label, cls = '') => `<a class="btn btn-sm ${cls}" href="${pageUrl(n)}">${label || n}</a>`;
-        const list = [];
-        const from2 = Math.max(1, hal - 2), to2 = Math.min(totalPages, from2 + 4);
-        if (hal > 1) list.push(num(hal - 1, '‹ Sebelumnya'));
-        for (let i = from2; i <= to2; i++) list.push(num(i, String(i), i === hal ? 'btn-primary' : ''));
-        if (hal < totalPages) list.push(num(hal + 1, 'Berikutnya ›'));
-        return `<div class="pager">${list.join('')}</div>`;
-      })() : ''}
+
+      ${voidTrx ? ui.modal('mVoidLazy', {
+        title: 'Batalkan Transaksi (Void)',
+        body: `<form method="post" action="${c.base}/transaksi/void" id="fvLazy">
+          <input type="hidden" name="id" value="${voidTrx.id}">
+          <input type="hidden" name="back" value="${esc(backPath)}">
+          <div class="alert warn">${ui.icon('alert')}<div><b>Void ${esc(voidTrx.no_bukti || '')} — ${rupiah(voidTrx.nominal)}.</b><br>
+            Sistem akan membuat <b>jurnal pembalik</b> di BKU untuk menetralkan saldo, mengembalikan status tagihan iuran/piutang terkait menjadi belum dibayar, dan mencatat audit log.</div></div>
+          <div class="field"><label>Alasan Pembatalan / Void <span style="color:var(--red)">*</span></label>
+            <textarea name="alasan" required placeholder="Contoh: salah input nominal / pembayaran dibatalkan siswa"></textarea></div>
+        </form>`,
+        footer: `<a class="btn" href="${c.base}${backPath}#trx${voidTrx.id}">Batal</a>
+          <button class="btn btn-danger" form="fvLazy">${ui.icon('x')}Void &amp; Buat Jurnal Pembalik</button>`
+      }).replace('class="modal" id="mVoidLazy"', 'class="modal show" id="mVoidLazy"') : ''}
+      ${apprTrx ? ui.modal('mApprLazy', {
+        title: 'Persetujuan Transaksi',
+        body: `<div class="kv">
+            <dt>No. Bukti</dt><dd class="mono">${esc(apprTrx.no_bukti || '-')}</dd>
+            <dt>Tanggal</dt><dd>${tglID(apprTrx.tanggal)}</dd>
+            <dt>BKU</dt><dd>${esc(apprTrx.bku_nama)}</dd>
+            <dt>Uraian</dt><dd>${esc(apprTrx.uraian)}</dd>
+            <dt>Penerima</dt><dd>${esc(apprTrx.nama_pihak || '-')}</dd>
+            <dt>Nominal</dt><dd style="color:var(--o-700);font-size:16px">${rupiah(apprTrx.nominal)}</dd>
+            <dt>Dibuat oleh</dt><dd>${esc(apprTrx.pembuat || '-')}</dd>
+          </div>
+          <form method="post" action="${c.base}/transaksi/approve" id="faLazy">
+            <input type="hidden" name="id" value="${apprTrx.id}">
+            <div class="field mt-2"><label>Catatan Persetujuan (opsional)</label><input name="catatan" placeholder="Contoh: Disetujui sesuai RAPBS"></div>
+          </form>`,
+        footer: `<a class="btn" href="${c.base}${backPath}#trx${apprTrx.id}">Batal</a>
+          <button class="btn btn-danger" form="faLazy" name="aksi" value="reject">Tolak</button>
+          <button class="btn btn-green" form="faLazy" name="aksi" value="approve">${ui.icon('check')}Setujui</button>`
+      }).replace('class="modal" id="mApprLazy"', 'class="modal show" id="mApprLazy"') : ''}
       ${late.html()}
     </div>
 
@@ -360,34 +374,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     ` : ''}
     ${editTrx ? ui.modal('mEditTrx', {
       title: 'Edit Transaksi ' + (editTrx.no_bukti || ''), wide: true,
-      body: `<form method="post" action="${c.base}/transaksi/save" id="fEdit" data-trx-form>
-        <input type="hidden" name="id" value="${editTrx.id}"><input type="hidden" name="jenis" value="${editTrx.jenis}">
-        <div class="alert info">${ui.icon('info')}<div>Mengedit transaksi akan memperbarui saldo BKU. Nomor bukti tetap <b>${esc(editTrx.no_bukti || '')}</b>.</div></div>
-        <div class="row2">
-          <div class="field"><label>Buku Kas (BKU)</label><select name="bku_id" required>
-            ${dbm.allBku(taId).filter(b => b.status === 'aktif' || b.id === editTrx.bku_id).map(b => `<option value="${b.id}" ${String(b.id) === String(editTrx.bku_id) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>Tanggal</label><input type="date" name="tanggal" value="${esc(editTrx.tanggal)}" required></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Metode</label><select name="metode"><option value="tunai" ${editTrx.metode === 'tunai' ? 'selected' : ''}>Tunai</option><option value="transfer" ${editTrx.metode === 'transfer' ? 'selected' : ''}>Transfer / Bank</option></select></div>
-          <div class="field"><label>Kode Rekening</label><select name="coa_id" class="js-coa" required>
-            ${db.prepare('SELECT * FROM coa ORDER BY kategori,kode').all()
-        .filter(x => editTrx.jenis === 'pengeluaran' ? (dbm.COA_EXPENSE_KATEGORI.includes(x.kategori) || String(editTrx.coa_id) === String(x.id)) : dbm.COA_INCOME_KATEGORI.includes(x.kategori))
-        .map(x => `<option value="${x.id}" ${String(editTrx.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}
-          </select></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Nominal (Rp)</label>${ui.moneyInput('nominal', editTrx.nominal, 'class="js-nominal" required')}</div>
-          <div class="field"><label>Nama Penerima / Penyetor</label><input name="nama_pihak" value="${esc(editTrx.nama_pihak || '')}"></div>
-        </div>
-        <div class="alert warn js-approval" style="display:none;margin-bottom:14px">${ui.icon('clock')}<div><b>Perlu persetujuan:</b> nominal melebihi batas ${rupiah(dbm.getSetting('approval_threshold', '5000000'))}, transaksi akan kembali berstatus <b>Pending</b>.</div></div>
-        <div class="alert js-pagu" style="display:none;margin-bottom:14px"></div>
-        <div class="field"><label>Uraian</label><textarea name="uraian" required>${esc(editTrx.uraian)}</textarea>
-          <div class="hint">Terbilang: <b class="js-terbilang" style="color:var(--o-700)"></b></div></div>
-        <div class="field"><label>Ganti Nota (opsional)</label><input type="hidden" name="nota_b64" id="nota_b64_edit"><input type="file" accept="image/*,application/pdf" data-b64="nota_b64_edit" data-max="15"><div class="hint" id="nota_b64_edit-info"></div></div>
-      </form>`,
-      footer: `<button class="btn" data-close="mEditTrx">Batal</button><button class="btn btn-primary" form="fEdit">Simpan Perubahan</button>`
+      body: trxForm(c, {
+        mode: editTrx.jenis, trx: editTrx, taId,
+        bukuss: dbm.allBku(taId).filter(b => b.status === 'aktif' || String(b.id) === String(editTrx.bku_id)),
+        closeId: 'mEditTrx', judul: 'Edit Transaksi / Koreksi Data'
+      })
     }).replace('class="modal" id="mEditTrx"', 'class="modal show" id="mEditTrx"') : ''}
     ${c.can('transaksi', 'create') && bukuss.length > 1 ? ui.modal('mPindah', {
       title: 'Pindah Saldo / Transfer Antar BKU', wide: true,
@@ -648,6 +639,35 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       (unlocked.length ? ` · draf payroll ${unlocked.join(', ')} terbuka kembali` : ''));
     go('Transaksi dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari).' +
       (unlocked.length ? ` Leger honor periode ${unlocked.join(', ')} kembali berstatus DRAF dan bisa diedit.` : ''), 'ok');
+  });
+
+  /* ---------- hapus masal transaksi (dipindahkan ke Kotak Sampah) ---------- */
+  post('/transaksi/hapus-masal', (req, res) => {
+    if (!guard(req, res, 'transaksi', 'delete')) return;
+    const backRaw = String(req.body.back || '');
+    const backPath = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/transaksi';
+    const go = (msg, key) => res.redirect(req.BASE + flashUrl(backPath, key, msg));
+    const ids = [].concat(req.body.id || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return go('Tidak ada transaksi yang dipilih.', 'err');
+    const rows = db.prepare(`SELECT * FROM transaksi WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+    let hapus = 0;
+    const ditolak = [];
+    for (const t of rows) {
+      const b = db.prepare('SELECT * FROM bku WHERE id=?').get(t.bku_id);
+      if (b && b.status !== 'aktif') { ditolak.push(`${t.no_bukti}: BKU ditutup`); continue; }
+      const lock = dbm.periodeLockError(t.bku_id, t.tanggal, 'edit');
+      if (lock) { ditolak.push(`${t.no_bukti}: ${lock}`); continue; }
+      if (t.is_penyesuaian) { ditolak.push(`${t.no_bukti}: transaksi opnam`); continue; }
+      dbm.trashAdd('transaksi', t, { user: req.user, label: `${t.no_bukti} — ${t.uraian}` });
+      db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+      try { dbm.payrollUnlockByTrx(t.id); } catch (e) { }
+      hapus++;
+    }
+    dbm.logAudit(req.user, 'HAPUS MASAL', 'transaksi',
+      `Hapus masal ${hapus} transaksi — dipindahkan ke Kotak Sampah` + (ditolak.length ? ` · ditolak: ${ditolak.join('; ')}` : ''));
+    if (!hapus) return go('Tidak ada transaksi yang dapat dihapus: ' + ditolak.join('; '), 'err');
+    go(`${hapus} transaksi dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari).` +
+      (ditolak.length ? ` ${ditolak.length} transaksi dilewati: ${ditolak.join('; ')}` : ''), 'ok');
   });
 
   /* ---------- lihat nota ---------- */
