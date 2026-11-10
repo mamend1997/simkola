@@ -17,7 +17,8 @@ const PROVIDERS = [
   { key: 'sandbox', label: 'Simulasi (tanpa gateway)', hint: 'QR dibuat lokal, dapat disimulasikan lunas untuk uji coba.' },
   { key: 'midtrans', label: 'Midtrans', hint: 'Core API QRIS — butuh Server Key.' },
   { key: 'duitku', label: 'Duitku', hint: 'Inquiry QRIS — butuh Merchant Code & API Key.' },
-  { key: 'xendit', label: 'Xendit', hint: 'QR Code API — butuh Secret Key & Callback Token.' }
+  { key: 'xendit', label: 'Xendit', hint: 'QR Code API — butuh Secret Key & Callback Token.' },
+  { key: 'kasera', label: 'Kasera', hint: 'QRIS API — butuh Merchant ID, API Key (Server Key) & Callback Secret (opsional).' }
 ];
 const PROVIDER_KEYS = PROVIDERS.map(p => p.key);
 
@@ -30,6 +31,7 @@ const DEF = {
   pay_gateway_key: '',
   pay_gateway_key2: '',
   pay_gateway_callback: '',
+  pay_gateway_base: '',
   pay_gateway_expire_menit: '60'
 };
 
@@ -52,6 +54,24 @@ function publicConfig(get) {
     configured: provider === 'sandbox' ? true : !!clean(get('pay_gateway_key')),
     providers: PROVIDERS
   };
+}
+
+/** base URL API Kasera (dapat diatur Super Admin bila berbeda). */
+function kaseraBase(cfg) {
+  const base = clean(cfg && cfg.base) || (String(cfg && cfg.mode) === 'production'
+    ? 'https://api.kasera.id' : 'https://sandbox.kasera.id');
+  return base.replace(/\/$/, '');
+}
+function kaseraHeaders(key, merchant) {
+  const h = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (key) h.Authorization = 'Bearer ' + key;
+  if (merchant) h['X-Merchant-Id'] = merchant;
+  return h;
+}
+/** status pembayaran Kasera → boolean lunas */
+function kaseraPaid(v) {
+  const st = String(v || '').toUpperCase();
+  return ['PAID', 'SETTLED', 'SETTLEMENT', 'SUCCESS', 'SUCCEEDED', 'COMPLETED', 'CAPTURE'].includes(st);
 }
 
 async function createCharge(cfg, { order_id, amount, label, customer }) {
@@ -122,6 +142,37 @@ async function createCharge(cfg, { order_id, amount, label, customer }) {
       if (!r.ok) throw new Error(j.message || `Xendit menolak permintaan (HTTP ${r.status}).`);
       return { ok: true, provider, order_id, qr_string: j.qr_string || '', expires_at: j.expires_at || expiresAt, raw: j };
     }
+    if (provider === 'kasera') {
+      if (!key) throw new Error('API Key / Server Key Kasera belum diisi.');
+      const base = kaseraBase(cfg);
+      const r = await fetch(`${base}/v1/qris`, {
+        method: 'POST',
+        headers: kaseraHeaders(key, merchant),
+        body: JSON.stringify({
+          merchant_id: merchant || undefined,
+          reference_id: order_id, order_id,
+          amount: Number(amount), currency: 'IDR',
+          description: label || 'Langganan',
+          customer: { name: clean(customer && customer.nama) || 'Sekolah', email: clean(customer && customer.email) || '' },
+          callback_url: clean(cfg.callback_url) || '', return_url: clean(cfg.return_url) || '',
+          expiry_minutes: expireMin
+        }),
+        signal: AbortSignal.timeout(20000)
+      });
+      const j = await r.json().catch(() => ({}));
+      const d = j.data || j.payment || j;
+      if (!r.ok || j.success === false || (j.status && ['FAILED', 'ERROR'].includes(String(j.status).toUpperCase()))) {
+        throw new Error(j.message || j.error_message || `Kasera menolak permintaan (HTTP ${r.status}).`);
+      }
+      return {
+        ok: true, provider, order_id,
+        qr_string: clean(d.qr_string || d.qrString || d.qr_code || d.qrCode),
+        qr_url: clean(d.qr_url || d.qrUrl || d.payment_url || d.paymentUrl),
+        checkout_url: clean(d.checkout_url || d.checkoutUrl || d.payment_url || d.paymentUrl),
+        expires_at: d.expires_at || d.expired_at || expiresAt,
+        raw: j
+      };
+    }
     throw new Error('Provider payment gateway tidak dikenal.');
   } catch (e) {
     return { ok: false, provider, order_id, error: e.message };
@@ -167,6 +218,17 @@ async function checkStatus(cfg, { order_id }) {
       if (!r.ok) return { ok: false, paid: false, status: 'ERROR', error: j.message || ('HTTP ' + r.status) };
       return { ok: true, paid: String(j.status).toUpperCase() === 'COMPLETED', status: String(j.status || '').toUpperCase(), raw: j };
     }
+    if (provider === 'kasera') {
+      const base = kaseraBase(cfg);
+      const r = await fetch(`${base}/v1/qris/${encodeURIComponent(order_id)}`, {
+        headers: kaseraHeaders(key, merchant), signal: AbortSignal.timeout(15000)
+      });
+      const j = await r.json().catch(() => ({}));
+      const d = j.data || j.payment || j;
+      if (!r.ok) return { ok: false, paid: false, status: 'ERROR', error: j.message || ('HTTP ' + r.status) };
+      const status = String(d.status || d.transaction_status || '').toUpperCase();
+      return { ok: true, paid: d.paid === true || kaseraPaid(status), status: status || 'PENDING', raw: j };
+    }
     return { ok: false, paid: false, status: 'UNKNOWN' };
   } catch (e) {
     return { ok: false, paid: false, status: 'ERROR', error: e.message };
@@ -195,6 +257,15 @@ function verifyCallback(cfg, body = {}, headers = {}) {
       if (!expect) return true;
       return token === expect;
     }
+    if (provider === 'kasera') {
+      const secret = clean(cfg.callback) || clean(cfg.key2);
+      if (!secret) return true;
+      const raw = typeof body === 'string' ? body : JSON.stringify(body);
+      const expect = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+      const got = String(headers['x-kasera-signature'] || headers['x-callback-signature']
+        || body.signature || body.callback_signature || '').toLowerCase();
+      return !!got && got === expect;
+    }
   } catch (e) { return false; }
   return false;
 }
@@ -211,7 +282,17 @@ function parseCallback(cfg, body = {}) {
   if (provider === 'xendit') {
     return { order_id: String(body.reference_id || body.external_id || ''), paid: String(body.status).toUpperCase() === 'COMPLETED', status: String(body.status || '').toUpperCase(), amount: Number(body.amount) || 0 };
   }
+  if (provider === 'kasera') {
+    const d = body.data || body.payment || body;
+    const st = String(d.status || d.transaction_status || '').toUpperCase();
+    return {
+      order_id: String(d.reference_id || d.order_id || d.merchant_order_id || d.external_id || ''),
+      paid: d.paid === true || kaseraPaid(st),
+      status: st || (d.paid === true ? 'PAID' : 'PENDING'),
+      amount: Number(d.amount || d.gross_amount) || 0
+    };
+  }
   return { order_id: String(body.order_id || ''), paid: !!body.paid, status: body.paid ? 'PAID' : 'PENDING', amount: Number(body.amount) || 0 };
 }
 
-module.exports = { PROVIDERS, PROVIDER_KEYS, DEF, publicConfig, orderNo, createCharge, checkStatus, verifyCallback, parseCallback, clean };
+module.exports = { PROVIDERS, PROVIDER_KEYS, DEF, publicConfig, orderNo, createCharge, checkStatus, verifyCallback, parseCallback, kaseraBase, kaseraHeaders, kaseraPaid, clean };

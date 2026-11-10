@@ -2821,10 +2821,11 @@ function payrollDynamic(periode) {
   const perKode = {};
   for (const c of cols) perKode[c.kode] = 0;
   let penerimaan = 0, potongan = 0;
+  const pos = v => Math.max(0, Number(v) || 0);   // nilai minus TIDAK mengurangi grand total
   const out = rows.map(r => {
     const d = payrollCompute(r, nilai.get(r.id) || {}, cols);
-    for (const c of cols) perKode[c.kode] += Number(d.vals[c.kode]) || 0;
-    penerimaan += d.penerimaan; potongan += d.potongan;
+    for (const c of cols) perKode[c.kode] += pos(d.vals[c.kode]);
+    penerimaan += pos(d.penerimaan); potongan += pos(d.potongan);
     return Object.assign({}, r, {
       din: d.vals, dinComputed: d.computed,
       penerimaanDinamis: d.penerimaan, potonganDinamis: d.potongan, diterimaDinamis: d.diterima
@@ -2888,12 +2889,18 @@ function payrollRows(periode) {
 }
 function payrollTotals(periode) {
   const rows = payrollRows(periode);
-  const sum = k => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  /* Nilai MINUS tetap tampil apa adanya pada baris/kolom rincian pegawai, tetapi
+     TIDAK boleh mengurangi grand total. Setiap kontribusi baris di-clamp ke 0
+     sebelum dijumlahkan (Math.max(0, nilai)). */
+  const pos = v => Math.max(0, Number(v) || 0);
+  const sum = k => rows.reduce((s, r) => s + pos(r[k]), 0);
   const guru = rows.filter(r => r.tipe === 'guru'), tu = rows.filter(r => r.tipe !== 'guru');
   return {
     rows, n: rows.length,
-    guru: { n: guru.length, honor: guru.reduce((s, r) => s + r.honorMengajar, 0), diterima: guru.reduce((s, r) => s + r.diterima, 0) },
-    tu: { n: tu.length, honor: tu.reduce((s, r) => s + r.honorMengajar, 0), diterima: tu.reduce((s, r) => s + r.diterima, 0) },
+    /* total baris negatif diabaikan (informasi saja, dipakai UI sebagai catatan) */
+    barisMinus: rows.filter(r => Number(r.diterima) < 0).length,
+    guru: { n: guru.length, honor: guru.reduce((s, r) => s + pos(r.honorMengajar), 0), diterima: guru.reduce((s, r) => s + pos(r.diterima), 0) },
+    tu: { n: tu.length, honor: tu.reduce((s, r) => s + pos(r.honorMengajar), 0), diterima: tu.reduce((s, r) => s + pos(r.diterima), 0) },
     penerimaan: sum('penerimaan'), potongan: sum('potongan'), diterima: sum('diterima'),
     potTelat: sum('potTelat'),
     danaSosial: sum('pot_dana_sosial'), bpjsKes: sum('pot_bpjs_kes'), bpjsTk: sum('pot_bpjs_tk'),

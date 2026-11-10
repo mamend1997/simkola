@@ -14,7 +14,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
 
   const durasiLabel = d => (Number(d) >= 365 ? '12 Bulan (+365 hari)' : '1 Bulan (+30 hari)');
   const pkgName = kode => { const p = saas.packageByKode(kode); return p ? p.nama : (kode || '-'); };
-  const pkgPrice = (kode, d) => saas.packagePrice(kode, d);
+  /* harga yang dilihat sekolah = harga khusus tenant bila Super Admin mengisinya */
+  const pkgPrice = (t, kode, d) => saas.hargaTenant(t, kode, d);
 
   function statusBadge(st) {
     return ui.badge(st.label, st.color === 'red' ? 'red' : st.color === 'amber' ? 'amber' : st.color === 'blue' ? 'blue' : 'green');
@@ -175,7 +176,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
               <form method="post" action="${c.base}/perpanjang/qris">
                 <div class="field"><label>Paket Langganan</label>
                   <select name="paket">
-                    ${pkgList.map(p => `<option value="${esc(p.kode)}" ${p.kode === paketTujuan.kode ? 'selected' : ''}>${esc(p.nama)} — ${rupiah(p.harga_bulan)}/bln${p.kode === t.paket ? ' (paket aktif)' : ''}</option>`).join('')}
+                    ${pkgList.map(p => `<option value="${esc(p.kode)}" ${p.kode === paketTujuan.kode ? 'selected' : ''}>${esc(p.nama)} — ${rupiah(saas.hargaTenant(t, p.kode, 30))}/bln${p.kode === t.paket ? ' (paket aktif)' : ''}</option>`).join('')}
                   </select></div>
                 <div class="field"><label>Durasi</label>
                   <div class="opt-list">
@@ -196,9 +197,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
               <div class="field"><label>Durasi Perpanjangan</label>
                 <div class="opt-list">
                   <label class="opt"><input type="radio" name="durasi" value="30" checked>
-                    <span><b>1 Bulan</b> (+30 hari) · ${rupiah(pkgPrice(paketTujuan.kode, 30))}</span></label>
+                    <span><b>1 Bulan</b> (+30 hari) · ${rupiah(pkgPrice(t, paketTujuan.kode, 30))}</span></label>
                   <label class="opt"><input type="radio" name="durasi" value="365">
-                    <span><b>12 Bulan</b> (+365 hari) · ${rupiah(pkgPrice(paketTujuan.kode, 365))} <em class="t-sub">lebih hemat</em></span></label>
+                    <span><b>12 Bulan</b> (+365 hari) · ${rupiah(pkgPrice(t, paketTujuan.kode, 365))} <em class="t-sub">lebih hemat</em></span></label>
                 </div>
               </div>
               <div class="field"><label>Bukti Transfer (JPG/PNG, maks 5 MB)</label>
@@ -232,8 +233,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
           <div class="card-head"><div><h3>Ringkasan Tagihan</h3></div></div>
           <div class="list">
             <div class="list-row"><div><div class="mt">Paket dipilih</div><div class="nm">${esc(paketTujuan.nama)}</div></div></div>
-            <div class="list-row"><div><div class="mt">Nominal 1 bulan</div><div class="nm">${rupiah(pkgPrice(paketTujuan.kode, 30))}</div></div></div>
-            <div class="list-row"><div><div class="mt">Nominal 12 bulan</div><div class="nm">${rupiah(pkgPrice(paketTujuan.kode, 365))}</div></div></div>
+            <div class="list-row"><div><div class="mt">Nominal 1 bulan</div><div class="nm">${rupiah(pkgPrice(t, paketTujuan.kode, 30))}</div></div></div>
+            <div class="list-row"><div><div class="mt">Nominal 12 bulan</div><div class="nm">${rupiah(pkgPrice(t, paketTujuan.kode, 365))}</div></div></div>
             <div class="list-row"><div><div class="mt">Masa aktif sekarang</div><div class="nm">${Number(t.is_lifetime_free) ? 'Lifetime' : esc(tglID(t.expires_at || '-'))}</div></div></div>
           </div>
           <p class="help mt-1">Perpanjangan dihitung dari tanggal berakhir terakhir (atau hari ini bila sudah lewat), bukan dari tanggal pembayaran.</p>

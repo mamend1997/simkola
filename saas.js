@@ -149,6 +149,10 @@ S.exec(SCHEMA);
   add('tenants', 'portal_locked_by', 'TEXT');
   // kredensial awal hasil pendaftaran — ditampilkan SEKALI di dashboard sekolah baru
   add('sessions', 'welcome', 'TEXT');
+  /* harga langganan KHUSUS per sekolah (override harga paket; 0 = ikut paket) */
+  add('tenants', 'harga_bulanan', 'INTEGER DEFAULT 0');
+  add('tenants', 'harga_tahunan', 'INTEGER DEFAULT 0');
+  add('tenants', 'harga_catatan', 'TEXT');
 })();
 
 /**
@@ -502,6 +506,21 @@ function packagePrice(kode, durasi) {
   if (p) return Number(Number(durasi) >= 365 ? p.harga_tahun : p.harga_bulan) || 0;
   return priceOf(durasi);
 }
+/**
+ * Harga efektif seorang TENANT: bila Super Admin mengisi harga khusus pada profil
+ * sekolah, nilai itu yang dipakai (tagihan & QRIS); 0 / kosong = ikut harga paket.
+ */
+function hargaTenant(t, kode, durasi) {
+  if (!t) return packagePrice(kode, durasi);
+  const tahunan = Number(durasi) >= 365;
+  const hb = Number(t.harga_bulanan) || 0;
+  const ht = Number(t.harga_tahunan) || 0;
+  if (tahunan) {
+    if (ht > 0) return Math.round(ht);
+    if (hb > 0) return Math.round(hb * 12);
+  } else if (hb > 0) return Math.round(hb);
+  return Math.round(packagePrice(kode, durasi) || 0);
+}
 function packageSave(d) {
   const nama = String(d.nama || '').trim();
   if (!nama) throw new Error('Nama paket wajib diisi.');
@@ -852,12 +871,16 @@ function updateTenant(id, patch = {}) {
   }
   if (f.paket && !PAKET[f.paket]) throw new Error('Paket tidak dikenal.');
   S.prepare(`UPDATE tenants SET school_code=?,nama=?,paket=?,status=?,is_lifetime_free=?,expires_at=?,
-      contact_nama=?,contact_email=?,contact_telp=?,alamat=?,app_nama=?,tema=?,logo=?,catatan=?,features=?,updated_at=? WHERE id=?`)
+      contact_nama=?,contact_email=?,contact_telp=?,alamat=?,app_nama=?,tema=?,logo=?,catatan=?,features=?,
+      harga_bulanan=?,harga_tahunan=?,harga_catatan=?,updated_at=? WHERE id=?`)
     .run(f.school_code, String(f.nama || '').trim() || t.nama, f.paket || 'standard', f.status || 'active',
       Number(f.is_lifetime_free) ? 1 : 0, f.expires_at ? String(f.expires_at).slice(0, 10) : null,
       f.contact_nama || '', f.contact_email || '', f.contact_telp || '', f.alamat || '',
       f.app_nama || '', f.tema || '', f.logo || '', f.catatan || '',
       typeof f.features === 'string' ? f.features : JSON.stringify(f.features || featureDefaults(f.paket || 'standard')),
+      Math.max(0, Math.round(Number(String(f.harga_bulanan === undefined ? t.harga_bulanan : f.harga_bulanan).replace(/[^\d]/g, '')) || 0)),
+      Math.max(0, Math.round(Number(String(f.harga_tahunan === undefined ? t.harga_tahunan : f.harga_tahunan).replace(/[^\d]/g, '')) || 0)),
+      f.harga_catatan === undefined ? (t.harga_catatan || '') : String(f.harga_catatan || ''),
       lib.nowStamp(), id);
   logSaas(patch.user, 'EDIT SEKOLAH', 'tenant', `Memperbarui sekolah ${f.nama} (${f.school_code})`, id);
   return tenantById(id);
@@ -970,7 +993,7 @@ function submitPayment(tenantId, { durasi, bukti_url, pengirim, catatan, paket }
   const p = pendingPayment(tenantId);
   if (p) throw new Error('Masih ada pengajuan yang menunggu verifikasi. Tunggu persetujuan Super Admin sebelum mengirim lagi.');
   const now = lib.nowStamp();
-  const nominal = packagePrice(paketTujuan, d);
+  const nominal = hargaTenant(t, paketTujuan, d);
   const info = S.prepare(`INSERT INTO saas_payments
     (tenant_id,paket_tujuan,no_invoice,jenis,durasi,nominal,status,bukti_url,pengirim,catatan,source,periode_mulai,dibuat_at,created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -993,6 +1016,7 @@ function gatewayCfg() {
     key: clean(get('pay_gateway_key')),
     key2: clean(get('pay_gateway_key2')),
     callback: clean(get('pay_gateway_callback')),
+    base: clean(get('pay_gateway_base')),
     expire_menit: Math.max(5, Number(get('pay_gateway_expire_menit')) || 60)
   };
 }
@@ -1017,7 +1041,7 @@ async function bayarGateway(tenantId, { durasi, paket, pengirim, catatan, oleh, 
   let paketTujuan = String(paket || '').trim().toLowerCase();
   if (paketTujuan && !packageByKode(paketTujuan)) throw new Error('Paket tujuan tidak ditemukan.');
   if (!paketTujuan) paketTujuan = String(t.paket || '');
-  const nominal = packagePrice(paketTujuan, d);
+  const nominal = hargaTenant(t, paketTujuan, d);
   const cfg = gatewayCfg();
   const oid = paygw.orderNo(t.id);
   const now = lib.nowStamp();
@@ -1270,7 +1294,7 @@ module.exports = {
   createTenant, updateTenant, setFeatures, setLifetime, extendTenant, deleteTenant,
   statusOf, isBlocked, todayISO, addDays, daysBetween, logSaas,
   paymentsOf, paymentsAll, paymentById, pendingPayment, latestRejected, submitPayment,
-  paygw, payConfig, gatewayCfg, bayarGateway, gatewayRow, gatewayMarkPaid, gatewaySync,
+  paygw, payConfig, gatewayCfg, hargaTenant, bayarGateway, gatewayRow, gatewayMarkPaid, gatewaySync,
   approvePayment, rejectPayment, runDailyJobs, stats, invoiceNo,
   createSession, getSession, destroySession, updateSession, takeWelcome,
   ensureAdmin, findAdmin, adminById, setAdminPassword,

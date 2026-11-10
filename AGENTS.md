@@ -1425,3 +1425,48 @@ node dev-tests/pay-hybrid.js   # 37 cek: sakelar & kredensial Super Admin (valid
                                # polling, simulasi lunas → masa aktif bertambah), callback publik +
                                # idempoten + order tak dikenal, sakelar mematikan pilihan gateway
 ```
+
+---
+
+## Ronde 37 SIMKEU — leger honor mengabaikan nilai minus, harga langganan per sekolah, provider Kasera
+
+### 1. Leger honor: nilai minus tidak mengurangi grand total
+- `db.payrollTotals(periode)`: setiap kontribusi baris di-**clamp** `Math.max(0, nilai)` sebelum dijumlahkan
+  (`const pos = v => Math.max(0, Number(v) || 0)`), untuk `penerimaan`, `potongan`, `diterima`, per-komponen,
+  dan `guru/tu`. Nilai minus **tetap tampil apa adanya** di baris/kolom rincian pegawai (tidak diubah di
+  `payrollRows`/`payrollCalc`).
+- Tambahan `totals.barisMinus` = jumlah baris dengan `diterima < 0` (informasi UI).
+- `db.payrollDynamic(periode)`: total per kolom dinamis juga di-clamp sehingga `totals.perKode` tidak negatif.
+- **Jangan** mengubah `payrollCalc` (formula baris) — hanya agregat yang di-clamp.
+
+### 2. Harga langganan khusus per sekolah (override)
+- Kolom baru `tenants.harga_bulanan`, `harga_tahunan`, `harga_catatan` (migrasi `add(...)` di blok
+  `migrateControl()` `saas.js`).
+- `saas.hargaTenant(t, kode, durasi)`: override dipakai bila > 0; bila hanya bulanan diisi → tahunan =
+  12 × bulanan; selain itu `packagePrice(kode, durasi)`. Dipakai di `submitPayment`, `bayarGateway`,
+  `routes/layanan.js` (`pkgPrice(t, kode, d)`), dan daftar paket pada halaman perpanjangan.
+- `saas.updateTenant()` menyimpan `harga_*` (angka di-strip non-digit) — **ingat** jumlah placeholder SQL harus
+  sama dengan jumlah argumen `.run()` (pernah error "Too many parameter values").
+- Form Super Admin `/super-admin/sekolah/:id` punya kartu **Harga Langganan Khusus Sekolah**
+  (`pay_gateway_base` juga ditambahkan di kartu gateway).
+
+### 3. Provider payment gateway Kasera
+- `paygw.js`: provider baru `{ key:'kasera', label:'Kasera' }`; `DEF.pay_gateway_base` baru.
+  Helper: `kaseraBase(cfg)` (default `https://api.kasera.id` / `https://sandbox.kasera.id`, dapat dioverride
+  setting `pay_gateway_base`), `kaseraHeaders(key, merchant)` (`Authorization: Bearer`, `X-Merchant-Id`),
+  `kaseraPaid(status)`.
+- `createCharge`: `POST {base}/v1/qris` (`reference_id`, `amount`, `currency`, `description`, `customer`,
+  `callback_url`, `expiry_minutes`) → `qr_string/qr_url/checkout_url/expires_at`.
+- `checkStatus`: `GET {base}/v1/qris/{order_id}` → `data.status`.
+- `verifyCallback`: HMAC-SHA256(`pay_gateway_callback` atau `key2`) atas body, header `x-kasera-signature`
+  (atau `body.signature`). Tanpa secret → diterima (sama seperti Xendit tanpa token).
+- `parseCallback`: `data|payment|body` → `{order_id: reference_id|order_id, paid, status, amount}`.
+- UI `/super-admin/qris` (rute `POST /super-admin/qris/pay`): provider muncul otomatis dari `pay.providers`,
+  ditambah field **Base URL API Gateway** (`pay_gateway_base`).
+
+### Test ronde 37
+```bash
+node dev-tests/round37.js   # 31 cek: clamp grand total leger (baris minus & kolom dinamis), harga khusus
+                            # per sekolah (simpan/efektif/hanya bulanan/kosong), adapter Kasera
+                            # (charge/status/webhook signature + parse)
+```

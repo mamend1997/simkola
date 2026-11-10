@@ -448,6 +448,23 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
               <div class="field"><label>Nama Kontak</label><input type="text" name="contact_nama" value="${esc(t.contact_nama || '')}"></div>
             </div>
             <div class="field"><label>Alamat</label><input type="text" name="alamat" value="${esc(t.alamat || '')}"></div>
+            <div class="card" style="background:var(--soft);margin-bottom:0">
+              <div class="card-head" style="padding:0 0 6px"><div><h3 style="font-size:14px">Harga Langganan Khusus Sekolah</h3>
+                <div class="sub">Kosongkan / 0 = ikut harga paket <b>${esc(pkgLabel(t.paket))}</b>
+                  (Rp ${Number(saas.hargaTenant(t, t.paket, 30)).toLocaleString('id-ID')}/bln ·
+                   Rp ${Number(saas.hargaTenant(t, t.paket, 365)).toLocaleString('id-ID')}/tahun)</div></div></div>
+              <div class="row2">
+                <div class="field"><label>Harga Khusus 1 Bulan (Rp)</label>
+                  <input type="text" inputmode="numeric" name="harga_bulanan" value="${Number(t.harga_bulanan) || ''}"
+                    placeholder="${Number(saas.packagePrice(t.paket, 30)).toLocaleString('id-ID')}"></div>
+                <div class="field"><label>Harga Khusus 12 Bulan (Rp)</label>
+                  <input type="text" inputmode="numeric" name="harga_tahunan" value="${Number(t.harga_tahunan) || ''}"
+                    placeholder="${Number(saas.packagePrice(t.paket, 365)).toLocaleString('id-ID')}"></div>
+              </div>
+              <div class="field"><label>Catatan Kesepakatan</label>
+                <input type="text" name="harga_catatan" value="${esc(t.harga_catatan || '')}" placeholder="mis. harga khusus mitra / yayasan">
+                <div class="hint">Harga ini dipakai saat sekolah mengajukan perpanjangan (manual maupun QRIS otomatis).</div></div>
+            </div>
             <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Perubahan</button></div>
           </form>
         </div>
@@ -576,6 +593,8 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         expires_at: b.expires_at || null,
         is_lifetime_free: t.is_lifetime_free,
         contact_nama: b.contact_nama, contact_email: b.contact_email, contact_telp: b.contact_telp, alamat: b.alamat,
+        /* harga langganan khusus per sekolah (0/kosong = ikut paket) */
+        harga_bulanan: b.harga_bulanan, harga_tahunan: b.harga_tahunan, harga_catatan: b.harga_catatan,
         features: t.features, user: u
       };
       saas.updateTenant(t.id, patch);
@@ -800,6 +819,9 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
                 <div class="field"><label>Kedaluwarsa QRIS (menit)</label>
                   <input type="number" name="pay_gateway_expire_menit" min="5" max="1440" value="${pay.expire_menit}"></div>
               </div>
+              <div class="field"><label>Base URL API Gateway (opsional)</label>
+                <input type="text" name="pay_gateway_base" placeholder="${esc(saas.get('pay_gateway_base', '') || 'https://api.kasera.id')}" data-pay-base>
+                <div class="hint">Khusus provider <b>Kasera</b>: isi bila base URL API berbeda. Kosongkan untuk default.</div></div>
               <div class="field"><label>URL Callback (daftarkan di dashboard provider)</label>
                 <input type="text" readonly value="${esc(absBase)}/pay/callback"></div>
               <div class="alert info">${ui.icon('info')}<div>${pay.provider === 'sandbox'
@@ -855,6 +877,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (b.pay_gateway_merchant !== undefined) saas.set('pay_gateway_merchant', String(b.pay_gateway_merchant || '').trim());
       if (String(b.pay_gateway_key || '').trim()) saas.set('pay_gateway_key', String(b.pay_gateway_key).trim());
       if (b.pay_gateway_key2 !== undefined) saas.set('pay_gateway_key2', String(b.pay_gateway_key2 || '').trim());
+      if (b.pay_gateway_base !== undefined) saas.set('pay_gateway_base', String(b.pay_gateway_base || '').trim());
       saas.logSaas(u, 'EDIT PEMBAYARAN', 'saas',
         `Metode pembayaran: gateway ${gatewayOn ? 'ON' : 'OFF'} (${provider}/${mode}), manual ${manualOn ? 'ON' : 'OFF'}`);
       res.redirect(req.BASE + flash('/super-admin/qris', 'ok', 'Metode pembayaran diperbarui.'));
