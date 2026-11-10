@@ -1706,6 +1706,65 @@ function taIdOfDate(tgl) {
   const a = activeTahun();
   return a ? a.id : null;
 }
+/**
+ * Tahun ajaran yang SESUAI dengan sebuah tanggal (tanpa fallback).
+ * `null` bila tanggal tidak berada di rentang tahun pelajaran mana pun
+ * (mis. tanggal salah ketik / rentang tahun pelajaran belum diisi).
+ */
+function taOfDate(tgl) {
+  const d = String(tgl || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  return db.prepare(`SELECT * FROM tahun_ajaran
+    WHERE COALESCE(tanggal_mulai,'')<>'' AND COALESCE(tanggal_selesai,'')<>''
+      AND ? BETWEEN tanggal_mulai AND tanggal_selesai
+    ORDER BY tanggal_mulai DESC, id DESC LIMIT 1`).get(d) || null;
+}
+/**
+ * BKU "padanan" pada tahun pelajaran lain: nama & jenis sama.
+ * Dipakai agar transaksi yang tanggalnya milik tahun pelajaran lain tetap
+ * dibukukan pada buku kas yang sama di tahun pelajaran tanggal tersebut,
+ * bukan pada BKU tahun pelajaran yang sedang dibuka di layar.
+ */
+function bkuPadanan(bku, taId) {
+  const b = (bku && typeof bku === 'object') ? bku : db.prepare('SELECT * FROM bku WHERE id=?').get(bku);
+  if (!b || !taId) return null;
+  return db.prepare(`SELECT * FROM bku
+    WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0
+      AND lower(trim(nama))=lower(trim(?)) AND COALESCE(jenis,'')=COALESCE(?,'')
+    ORDER BY CASE WHEN status='aktif' THEN 0 ELSE 1 END, id LIMIT 1`).get(Number(taId), b.nama, b.jenis || '') || null;
+}
+/**
+ * Tentukan BKU tujuan penyimpanan transaksi berdasarkan TANGGAL transaksi.
+ * Mengembalikan { bku, taTanggal, taSesi, dipindah, alasan } atau { error }.
+ * - tanggal di luar semua rentang TA → tetap pakai BKU pilihan pengguna (alasan 'luar-rentang').
+ * - tanggal milik TA lain → BKU padanan (nama sama) di TA tersebut.
+ */
+function resolveBkuTanggal(bku, tanggal, sesiTaId) {
+  const taTgl = taOfDate(tanggal);
+  const sesi = tahunById(sesiTaId);
+  if (!taTgl) {
+    return { bku, taTanggal: null, taSesi: sesi, dipindah: false, alasan: 'luar-rentang' };
+  }
+  if (Number(taTgl.id) === Number(bku.tahun_ajaran_id)) {
+    return { bku, taTanggal: taTgl, taSesi: sesi, dipindah: false, alasan: 'sama' };
+  }
+  const pad = bkuPadanan(bku, taTgl.id);
+  if (!pad) {
+    return {
+      error: `Tanggal transaksi berada pada tahun pelajaran ${taTgl.nama}, tetapi BKU "${bku.nama}" belum ada di tahun pelajaran tersebut. `
+        + `Tambahkan BKU tersebut pada Master BKU tahun pelajaran ${taTgl.nama}, atau gunakan tanggal yang sesuai tahun pelajaran BKU ini.`,
+      taTanggal: taTgl, taSesi: sesi
+    };
+  }
+  if (pad.status !== 'aktif') {
+    return {
+      error: `Tanggal transaksi berada pada tahun pelajaran ${taTgl.nama}, dan BKU "${pad.nama}" di tahun pelajaran tersebut berstatus ${pad.status} (terkunci). `
+        + `Buka kembali BKU tersebut atau gunakan tanggal lain.`,
+      taTanggal: taTgl, taSesi: sesi
+    };
+  }
+  return { bku: pad, taTanggal: taTgl, taSesi: sesi, dipindah: true, alasan: 'beda-ta' };
+}
 /** daftar tahun ajaran untuk dropdown header */
 function taOptions() { return allTahun(); }
 
@@ -4393,7 +4452,7 @@ module.exports = {
   piutangSyncStatus, payrollUnlockByTrx, payrollDraft, payrollDraftSet, payrollPeriods, payrollCopyPrev,
   stripCarryText, isCarryText, piutangBuckets, piutangBucketsAll, piutangRingkasan, cleanupOrphanPiutang, honorPembantuJam, honorWaliJam,
   totalSaldoDana, MODULES, ACTIONS, ROLE_LABEL, ROLES, DEMO_BLOCKED, defaultAllowed, BKU_AUTO_NAMES, isAutoBkuNama,
-  tahunById, taOf, taRange, taOptions, taIdOfDate, rolloverTa,
+  tahunById, taOf, taRange, taOptions, taIdOfDate, taOfDate, bkuPadanan, resolveBkuTanggal, rolloverTa,
   JENJANG, TINGKAT_MASTER, TINGKAT_ALIAS, tingkatUrut, tingkatNaik, tingkatLabel, jenjangPreset,
   tingkatAktif, setTingkatAktif, applyJenjangPreset,
   NAMA_BULAN, periodeOf, periodeLabel, periodeStart, periodeEnd, prevPeriode, currentPeriode,

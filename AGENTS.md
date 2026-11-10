@@ -1470,3 +1470,48 @@ node dev-tests/round37.js   # 31 cek: clamp grand total leger (baris minus & kol
                             # per sekolah (simpan/efektif/hanya bulanan/kosong), adapter Kasera
                             # (charge/status/webhook signature + parse)
 ```
+
+---
+
+## Ronde 38 — Tahun pelajaran mengikuti TANGGAL transaksi (bukan sesi/tampilan)
+
+**Masalah**: transaksi bertanggal bulan/tahun lain tetap disimpan pada BKU milik tahun pelajaran yang
+sedang dibuka di session/header (mis. sesi 2025/2026, tanggal November 2026 → masuk BKU 2025/2026).
+
+**Helper baru (`db.js`)**
+| Helper | Fungsi |
+|---|---|
+| `taOfDate(tgl)` | objek tahun pelajaran yang rentangnya memuat `tgl`; **`null`** bila di luar semua rentang (bukan fallback seperti `taIdOfDate`) |
+| `bkuPadanan(bku, taId)` | BKU ber-`nama` + `jenis` sama pada TA lain (`auto_mode=0`; status aktif didahulukan) |
+| `resolveBkuTanggal(bku, tanggal, sesiTaId)` | `{ bku, taTanggal, taSesi, dipindah, alasan }` atau `{ error }`. Alasan: `sama` · `beda-ta` · `luar-rentang`. Error bila TA tanggal tidak punya BKU padanan atau BKU padanan berstatus bukan aktif |
+
+**Alur simpan** (`routes/transaksi.js` → `POST /transaksi/save`, `POST /transaksi/pindah`;
+`routes/bku_detail.js` → `POST /bku/:id/trx/simpan`; `routes/iuran.js` → `postQueueRows`)
+1. Tanggal transaksi dipetakan ke TA (`risk`: jangan pernah memakai `req.taId`/`c.taId` untuk menentukan TA data).
+2. Tanggal di TA lain → dipakai BKU padanan (nama sama) di TA tersebut; `bku_id` yang dipakai menulis
+   = `bkuTujuan`/`b.id` hasil resolve.
+3. Tanggal di luar semua rentang → tetap pada BKU pilihan + catatan di flash.
+4. Flash `?ok=` menyebut perpindahan TA + nama BKU tujuannya; audit mencatat catatan yang sama
+   (`EDIT` mencatat "dipindahkan ke BKU …").
+5. BKU padanan tidak ada → **ditolak** dengan pesan yang menyebut nama TA & BKU (tidak ada data separuh tersimpan).
+
+**UI (peringatan sebelum kirim)** — `ui.layout()` menyuntik `window.__TA_RANGES` + `window.__TA_SESI`;
+`public/app.js` blok `trxTaGuard`:
+- form transaksi dikenali dari `[data-trx-form]` atau `action` = `/transaksi/save|pindah`, `/bku/<id>/trx/simpan`;
+- catatan hidup `<div class="hint js-ta-note" data-ta-note>` di bawah kolom tanggal (merah bila beda TA),
+  dipasang ulang lewat `MutationObserver` (debounce `requestAnimationFrame`) agar modal yang dirender
+  belakangan ikut terpantau);
+- `confirm('PERINGATAN TAHUN PELAJARAN …')` saat submit bila tanggal beda TA → batal = transaksi tidak dikirim.
+
+**Jangan diubah**: `periodeLockError()` tetap memakai BKU hasil resolve (periode bulan berjalan pada BKU itu),
+dan `sisaPagu()` memakai `b.tahun_ajaran_id` (TA hasil resolve), bukan `c.taId`.
+
+**Test ronde 38**
+```bash
+node dev-tests/round38.js   # 36 cek: simpan lintas TA → BKU padanan TA tanggal, saldo TA sesi tidak berubah,
+                            # tanggal di luar rentang, BKU padanan belum ada (ditolak, tanpa data tersimpan),
+                            # edit tanggal memindahkan BKU, pindah saldo 2 kaki di TA tanggal,
+                            # posting antrean iuran mengikuti tanggal, UI catatan + confirm (batal & setuju)
+```
+Regresi yang dijalankan ulang: `regress.js` (23), `round9.js` (109), `round34.js` (103), `newfeat.js` (90),
+`ui-round34.js` (55) — semua lulus.

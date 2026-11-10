@@ -423,12 +423,30 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const go = (msg, key) => res.redirect(req.BASE + flashUrl(backPath, key, msg));
 
     const { id, bku_id, tanggal, jenis, metode, coa_id, nominal, uraian, nama_pihak, after } = req.body;
-    const b = db.prepare('SELECT * FROM bku WHERE id=?').get(bku_id);
+    let b = db.prepare('SELECT * FROM bku WHERE id=?').get(bku_id);
     if (!b) return go('BKU tidak ditemukan.', 'err');
     if (b.status !== 'aktif') return go('BKU "' + b.nama + '" sudah ditutup dan terkunci.', 'err');
     const nom = lib.parseMoney(nominal);
     if (!(nom > 0)) return go('Nominal harus lebih dari 0.', 'err');
     if (!tanggal || !uraian) return go('Tanggal dan uraian wajib diisi.', 'err');
+
+    /* ===== TAHUN PELAJARAN MENGIKUTI TANGGAL TRANSAKSI =====
+       Tanggal transaksi (bulan & tahun) menentukan tahun pelajaran tempat data
+       dibukukan — BUKAN tahun pelajaran yang sedang dibuka di layar/sesi.
+       Bila tanggal berada di tahun pelajaran lain, transaksi otomatis dipindahkan
+       ke BKU ber-nama sama pada tahun pelajaran tanggal tersebut. */
+    const taResolve = dbm.resolveBkuTanggal(b, tanggal, req.taId);
+    if (taResolve.error) return go(taResolve.error, 'err');
+    let catatanTa = '';
+    if (taResolve.dipindah) {
+      const sesiNama = taResolve.taSesi ? taResolve.taSesi.nama : '-';
+      b = taResolve.bku;
+      catatanTa = ` Tanggal ${tglID(tanggal)} masuk tahun pelajaran ${taResolve.taTanggal.nama} (tampilan Anda: ${sesiNama}), `
+        + `sehingga transaksi dibukukan pada BKU "${b.nama}" tahun pelajaran ${taResolve.taTanggal.nama}.`;
+    } else if (taResolve.alasan === 'luar-rentang') {
+      catatanTa = ` Tanggal ${tglID(tanggal)} berada di luar rentang semua tahun pelajaran — transaksi disimpan pada tahun pelajaran BKU yang dipilih (${dbm.tahunById(b.tahun_ajaran_id)?.nama || '-'}).`;
+    }
+
     const lockErr = dbm.periodeLockError(b.id, tanggal, isEdit ? 'edit' : null);
     if (lockErr) return go(lockErr, 'err');
 
@@ -454,6 +472,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     }
 
     let trxId = id;
+    const bkuTujuan = b.id;
     if (isEdit) {
       const old = db.prepare('SELECT * FROM transaksi WHERE id=?').get(id);
       if (!old) return go('Transaksi tidak ditemukan.', 'err');
@@ -464,29 +483,30 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       if (old.is_penyesuaian) return go('Transaksi penyesuaian opnam kas tidak dapat diedit manual. Buka kembali BKU bulanan bila perlu koreksi.', 'err');
       const status = perluApproval ? 'pending' : 'posted';
       db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,nota_url=COALESCE(?,nota_url),status=?,approved_by=NULL,approved_at=NULL WHERE id=?`)
-        .run(bku_id, tanggal, jenis, metode, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, id);
-      dbm.logAudit(req.user, 'EDIT', 'transaksi', `Edit transaksi ${old.no_bukti}: ${uraian} (${rupiah(nom)})`);
+        .run(bkuTujuan, tanggal, jenis, metode, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, id);
+      dbm.logAudit(req.user, 'EDIT', 'transaksi', `Edit transaksi ${old.no_bukti}: ${uraian} (${rupiah(nom)})`
+        + (Number(old.bku_id) !== Number(bkuTujuan) ? ` — dipindahkan ke BKU ${b.nama}` : ''));
     } else {
       const ym = String(tanggal).slice(0, 7).replace('-', '');
-      const seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bku_id).c + 1;
+      const seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bkuTujuan).c + 1;
       const noBukti = `${b.kode || 'BKU'}/${jenis === 'pemasukan' ? 'M' : 'K'}/${ym}/${String(seq).padStart(3, '0')}`;
       const status = perluApproval ? 'pending' : 'posted';
       const info = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,nota_url,status,created_by,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(bku_id, tanggal, jenis, metode, noBukti, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, req.user.id, nowStamp());
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(bkuTujuan, tanggal, jenis, metode, noBukti, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, req.user.id, nowStamp());
       trxId = info.lastInsertRowid;
-      dbm.logAudit(req.user, 'TAMBAH', 'transaksi', `Input ${jenis} ${noBukti} pada ${b.nama}: ${uraian} (${rupiah(nom)})${perluApproval ? ' — menunggu approval' : ''}`);
+      dbm.logAudit(req.user, 'TAMBAH', 'transaksi', `Input ${jenis} ${noBukti} pada ${b.nama}: ${uraian} (${rupiah(nom)})${perluApproval ? ' — menunggu approval' : ''}${catatanTa ? ' ·' + catatanTa : ''}`);
       if (perluApproval) {
-        return go(`Transaksi ${noBukti} tersimpan dan menunggu persetujuan Kepala Sekolah karena melebihi ${rupiah(threshold)}.`, 'ok');
+        return go(`Transaksi ${noBukti} tersimpan dan menunggu persetujuan Kepala Sekolah karena melebihi ${rupiah(threshold)}.` + catatanTa, 'ok');
       }
     }
 
     const q = [];
-    if (warn) q.push('warn=' + encodeURIComponent(warn));
+    if (warn) q.push('warn=' + encodeURIComponent(warn + catatanTa));
     if (after === 'cetak' && !isEdit) {
       if (req.body.back) return res.redirect(req.BASE + `/transaksi/${trxId}/kwitansi?auto=1`);
       return res.redirect(req.BASE + `/transaksi/${trxId}/kwitansi?auto=1`);
     }
-    q.push('ok=' + encodeURIComponent(isEdit ? 'Perubahan transaksi tersimpan.' : 'Transaksi berhasil disimpan.'));
+    q.push('ok=' + encodeURIComponent((isEdit ? 'Perubahan transaksi tersimpan.' : 'Transaksi berhasil disimpan.') + catatanTa));
     if (!isEdit && !req.body.back) q.push('simpan=' + trxId);
     res.redirect(req.BASE + backPath + (backPath.includes('?') ? '&' : '?') + q.join('&'));
   });
@@ -523,10 +543,20 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (String(dari_id) === String(ke_id)) return res.redirect(back + '?err=' + encodeURIComponent('BKU asal dan tujuan tidak boleh sama.'));
     if (!(nominal > 0)) return res.redirect(back + '?err=' + encodeURIComponent('Nominal pindah saldo harus lebih dari 0.'));
     if (!tanggal) return res.redirect(back + '?err=' + encodeURIComponent('Tanggal pindah saldo wajib diisi.'));
-    const dari = db.prepare('SELECT * FROM bku WHERE id=?').get(dari_id);
-    const ke = db.prepare('SELECT * FROM bku WHERE id=?').get(ke_id);
+    let dari = db.prepare('SELECT * FROM bku WHERE id=?').get(dari_id);
+    let ke = db.prepare('SELECT * FROM bku WHERE id=?').get(ke_id);
     if (!dari || !ke) return res.redirect(back + '?err=' + encodeURIComponent('BKU tidak ditemukan.'));
     if (dari.status !== 'aktif' || ke.status !== 'aktif') return res.redirect(back + '?err=' + encodeURIComponent('Kedua BKU harus berstatus aktif untuk pindah saldo.'));
+    /* tahun pelajaran mengikuti TANGGAL pindah saldo, bukan sesi tampilan */
+    const taDari = dbm.resolveBkuTanggal(dari, tanggal, req.taId);
+    if (taDari.error) return res.redirect(back + '?err=' + encodeURIComponent(taDari.error));
+    const taKe = dbm.resolveBkuTanggal(ke, tanggal, req.taId);
+    if (taKe.error) return res.redirect(back + '?err=' + encodeURIComponent(taKe.error));
+    const catatanTa = taDari.dipindah || taKe.dipindah
+      ? ` Tanggal ${lib.tglID(tanggal)} berada pada tahun pelajaran ${(taDari.taTanggal || taKe.taTanggal).nama}, sehingga pindah saldo dibukukan pada BKU tahun pelajaran tersebut.`
+      : '';
+    dari = taDari.bku;
+    ke = taKe.bku;
     const lockDari = dbm.periodeLockError(dari.id, tanggal);
     if (lockDari) return res.redirect(back + '?err=' + encodeURIComponent(lockDari));
     const lockKe = dbm.periodeLockError(ke.id, tanggal);
@@ -558,7 +588,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       `Pindah saldo ${rupiah(nominal)} dari ${dari.nama} ke ${ke.nama} (grup ${info})${ket ? ' — ' + ket : ''}`);
     const q = [];
     if (nominal > saldoAsal) q.push('warn=' + encodeURIComponent(`Perhatian: saldo BKU asal hanya ${rupiah(saldoAsal)}, sedangkan nominal pindah ${rupiah(nominal)}. Saldo BKU asal menjadi minus — mohon periksa kembali.`));
-    q.push('ok=' + encodeURIComponent(`Pindah saldo ${rupiah(nominal)} dari ${dari.nama} ke ${ke.nama} berhasil dicatat.`));
+    q.push('ok=' + encodeURIComponent(`Pindah saldo ${rupiah(nominal)} dari ${dari.nama} ke ${ke.nama} berhasil dicatat.` + catatanTa));
     res.redirect(back + '?' + q.join('&'));
   });
 

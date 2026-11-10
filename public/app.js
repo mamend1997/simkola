@@ -71,9 +71,102 @@
     f.querySelectorAll('input[data-money]').forEach(i => { i.value = digitsOf(i.value); });
   }, true);
 
+  /* ===== Tahun pelajaran mengikuti TANGGAL transaksi =====
+     Server menyimpan transaksi pada tahun pelajaran yang memuat tanggal transaksi
+     (bukan tahun pelajaran yang sedang dibuka). Di sini pengguna diperingatkan
+     lebih dulu: catatan langsung di bawah kolom tanggal + konfirmasi sebelum kirim. */
+  (function trxTaGuard() {
+    const ranges = Array.isArray(window.__TA_RANGES) ? window.__TA_RANGES.filter(t => t.from && t.to) : [];
+    const sesi = window.__TA_SESI || null;
+    if (!ranges.length) return;
+    const taOf = (tgl) => {
+      const d = String(tgl || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+      return ranges.filter(t => d >= t.from && d <= t.to)[0] || null;
+    };
+    /* form yang menulis transaksi ke BKU (modal input, edit penuh, edit inline,
+       koreksi detail BKU, pindah saldo) */
+    const isTrxForm = (f) => {
+      if (!f) return false;
+      if (f.matches('[data-trx-form]')) return true;
+      const act = String(f.getAttribute('action') || '');
+      if (!act) return false;
+      return /\/transaksi\/(save|pindah)|\/bku\/[^/]+\/trx\/simpan/.test(act);
+    };
+    const dateInputsOf = (f) => Array.from(f.querySelectorAll('input[name="tanggal"], input[type="date"][name*="tanggal"]'));
+
+    function noteFor(inp) {
+      const ta = taOf(inp.value);
+      if (!ta) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(inp.value || '').slice(0, 10))) return '';
+        return {
+          warn: true,
+          text: 'Tanggal ini berada di luar rentang semua tahun pelajaran. Transaksi akan disimpan pada tahun pelajaran BKU yang dipilih ('
+            + (sesi ? sesi.nama : '-') + ').'
+        };
+      }
+      if (sesi && Number(ta.id) !== Number(sesi.id)) {
+        return {
+          warn: true,
+          text: 'Tanggal ini masuk tahun pelajaran ' + ta.nama + ' (sesi tampilan: ' + sesi.nama + '). '
+            + 'Transaksi otomatis disimpan pada BKU tahun pelajaran ' + ta.nama + '.'
+        };
+      }
+      return { warn: false, text: 'Tanggal berada pada tahun pelajaran ' + ta.nama + (sesi && Number(ta.id) === Number(sesi.id) ? ' (sesuai tampilan).' : '.') };
+    }
+
+    function paint(inp) {
+      const box = inp.closest('.field') || inp.parentElement;
+      if (!box) return;
+      let el = box.querySelector('.js-ta-note');
+      const info = noteFor(inp);
+      if (!info || !info.text) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'hint js-ta-note';
+        el.setAttribute('data-ta-note', '1');
+        box.appendChild(el);
+      }
+      el.textContent = info.text;
+      el.style.color = info.warn ? 'var(--red)' : 'var(--o-700)';
+      el.style.fontWeight = info.warn ? '700' : '500';
+    }
+
+    function paintAll(root) {
+      const forms = [];
+      if (root && root.matches && root.matches('form')) forms.push(root);
+      if (root && root.querySelectorAll) Array.from(root.querySelectorAll('form')).forEach(f => forms.push(f));
+      forms.filter(isTrxForm).forEach(f => dateInputsOf(f).forEach(paint));
+    }
+    paintAll(document);
+    document.addEventListener('input', e => { if (e.target && e.target.name && /tanggal/.test(e.target.name)) paintAll(e.target.form || document); });
+    document.addEventListener('change', e => { if (e.target && e.target.name && /tanggal/.test(e.target.name)) paintAll(e.target.form || document); });
+    /* modal/halaman baru yang dirender belakangan (debounce agar tabel panjang tetap ringan) */
+    if (window.MutationObserver) {
+      let pending = 0;
+      const schedule = () => {
+        if (pending) return;
+        pending = requestAnimationFrame(() => { pending = 0; paintAll(document); });
+      };
+      const mo = new MutationObserver(schedule);
+      mo.observe(document.body, { childList: true, subtree: true });
+    }
+
+    document.addEventListener('submit', e => {
+      const f = e.target;
+      if (!isTrxForm(f)) return;
+      const inp = f.querySelector('input[name="tanggal"]');
+      if (!inp) return;
+      const info = noteFor(inp);
+      if (!info || !info.warn) return;
+      const lanjut = window.confirm('PERINGATAN TAHUN PELAJARAN\n\n' + info.text
+        + '\n\nLanjutkan menyimpan transaksi pada tahun pelajaran sesuai tanggal tersebut?');
+      if (!lanjut) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+  })();
+
   /* sidebar mobile */
-  const burger = $('#burger'), sidebar = $('#sidebar'), scrim = $('#scrim');
-  if (burger) burger.addEventListener('click', () => { sidebar.classList.toggle('open'); scrim.classList.toggle('show'); });
+  const burger = $('#burger'), sidebar = $('#sidebar'), scrim = $('#scrim');  if (burger) burger.addEventListener('click', () => { sidebar.classList.toggle('open'); scrim.classList.toggle('show'); });
   if (scrim) scrim.addEventListener('click', () => { sidebar.classList.remove('open'); scrim.classList.remove('show'); });
 
   /* ===== collapse / expand sidebar (area kerja lebih luas) ===== */

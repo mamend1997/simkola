@@ -385,16 +385,26 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const samePeriode = String(tanggal).slice(0, 7) === String(t.tanggal).slice(0, 7);
     if (newLock && !samePeriode) return go(newLock, 'err');
 
+    /* Tanggal hasil koreksi menentukan tahun pelajaran: bila tanggal baru berada
+       pada tahun pelajaran lain, baris dipindahkan ke BKU ber-nama sama di tahun
+       pelajaran tanggal tersebut (bukan tetap di BKU tahun pelajaran layar). */
+    const taResolve = dbm.resolveBkuTanggal(b, tanggal, req.taId);
+    if (taResolve.error) return go(taResolve.error, 'err');
+    const bkuTujuan = taResolve.bku.id;
+    const catatanTa = taResolve.dipindah
+      ? ` Tanggal baru masuk tahun pelajaran ${taResolve.taTanggal.nama}, sehingga transaksi dipindahkan ke BKU "${taResolve.bku.nama}" tahun pelajaran tersebut.`
+      : '';
+
     const threshold = Number(dbm.getSetting('approval_threshold', '5000000'));
     const perluApproval = jenis === 'pengeluaran' && nom > threshold && t.status !== 'posted';
     const status = perluApproval ? 'pending' : 'posted';
 
-    db.prepare(`UPDATE transaksi SET tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,no_bukti=?,status=? WHERE id=?`)
-      .run(tanggal, jenis, metode || 'tunai', coa_id || null, nom, uraian, nama_pihak || '', no_bukti || t.no_bukti, status, t.id);
+    db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,no_bukti=?,status=? WHERE id=?`)
+      .run(bkuTujuan, tanggal, jenis, metode || 'tunai', coa_id || null, nom, uraian, nama_pihak || '', no_bukti || t.no_bukti, status, t.id);
 
-    const after = trxSnapshot({ ...t, tanggal, jenis, metode, nominal: nom, uraian, nama_pihak, coa_id, no_bukti: no_bukti || t.no_bukti });
+    const after = trxSnapshot({ ...t, bku_id: bkuTujuan, tanggal, jenis, metode, nominal: nom, uraian, nama_pihak, coa_id, no_bukti: no_bukti || t.no_bukti });
     logPerubahan(req.user, 'EDIT', b, before, after, `alasan: ${alasan}`);
-    go('Transaksi dikoreksi. Saldo berjalan seluruh baris setelahnya sudah dihitung ulang otomatis.', 'ok');
+    go('Transaksi dikoreksi. Saldo berjalan seluruh baris setelahnya sudah dihitung ulang otomatis.' + catatanTa, 'ok');
   });
 
   /* ---------- pengajuan koreksi (staff) ---------- */

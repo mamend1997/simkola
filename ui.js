@@ -365,6 +365,8 @@ function navOrdered(cfg) {
 function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appSub = '', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light' }) {
   // sub-judul di bawah nama aplikasi ("Sistem Keuangan") — dapat diubah sekolah & Super Admin
   const brandSub = String(appSub || '').trim() || 'Sistem Keuangan';
+  // tahun pelajaran yang sedang dibuka (untuk peringatan tanggal transaksi di app.js)
+  const taNow = (taList || []).filter(t => String(t.id) === String(taId))[0] || null;
   const initials = (user?.nama || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
   const hidden = navVisibility(navHidden);
   const linkOf = (i) => {
@@ -467,6 +469,18 @@ ${Array.isArray(announcements) ? announcements.filter(a => a.tipe === 'popup').m
     <p class="help">Pengumuman resmi dari Super Admin Pusat.</p>`,
   footer: `<button class="btn" data-close="mAnn${a.id}" data-dismiss-auto>Mengerti</button>`
 })).join('') : ''}
+<script>
+  /* rentang setiap tahun pelajaran + tahun pelajaran yang sedang dibuka.
+     Dipakai app.js untuk memperingatkan bila TANGGAL transaksi berada di luar
+     tahun pelajaran yang sedang tampil (data tetap disimpan pada tahun pelajaran
+     sesuai tanggal tersebut). */
+  window.__TA_RANGES = ${JSON.stringify((taList || []).map(t => ({
+  id: t.id, nama: t.nama,
+  from: String(t.tanggal_mulai || '').slice(0, 10),
+  to: String(t.tanggal_selesai || '').slice(0, 10)
+})))};
+  window.__TA_SESI = ${JSON.stringify(taNow ? { id: taNow.id, nama: taNow.nama } : null)};
+</script>
 <script src="${base}/assets/app.js?v=${ASSET_V}" defer></script>
 </body></html>`;
 }

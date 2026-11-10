@@ -2189,10 +2189,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   function postQueueRows(rows, opts = {}) {
     if (!rows || !rows.length) return { ok: false, err: 'Tidak ada penerimaan yang dipilih.' };
     const bkuId = Number(opts.bkuId || rows[0].bku_id || 0);
-    const bku = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
+    let bku = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
     if (!bku) return { ok: false, err: 'BKU sasaran tidak ditemukan.' };
     if (bku.status !== 'aktif') return { ok: false, err: `BKU ${bku.nama} sudah ditutup.` };
     const tanggal = rows[0].tanggal;
+    /* tahun pelajaran mengikuti TANGGAL penerimaan: bila tanggal berada pada tahun
+       pelajaran lain, BKU sasaran dipindahkan ke BKU ber-nama sama di tahun tersebut */
+    const taRes = dbm.resolveBkuTanggal(bku, tanggal, opts.taSesiId);
+    if (taRes.error) return { ok: false, err: taRes.error };
+    const catatanTa = taRes.dipindah
+      ? ` Tanggal ${tglID(tanggal)} berada pada tahun pelajaran ${taRes.taTanggal.nama}, sehingga penerimaan dibukukan pada BKU "${bku.nama}" tahun pelajaran tersebut.`
+      : '';
+    bku = taRes.bku;
     const lock = dbm.periodeLockError(bku.id, tanggal);
     if (lock) return { ok: false, err: lock };
     const total = rows.reduce((s, r) => s + Number(r.dibayar || 0), 0);
@@ -2217,7 +2225,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       return id;
     })();
     if (grup) db.prepare('UPDATE iuran_grup SET coa_id=? WHERE id=?').run(coa.id, grup.id);
-    return { ok: true, trxId, noBukti, total, bku, grup, coa, n: rows.length };
+    return { ok: true, trxId, noBukti, total, bku, grup, coa, n: rows.length, catatanTa };
   }
 
   post('/iuran/antrean/posting', (req, res) => {
@@ -2227,10 +2235,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!ids.length) return res.redirect(back + '?err=' + encodeURIComponent('Tidak ada penerimaan yang dipilih.'));
     const rows = db.prepare(`SELECT * FROM iuran_bayar WHERE id IN (${ids.map(() => '?').join(',')}) AND status='pending'`).all(...ids);
     if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Semua penerimaan sudah terposting.'));
-    const hasil = postQueueRows(rows, { bkuId: Number(req.body.bku_id || 0), coaId: Number(req.body.coa_id || 0), user: req.user });
+    const hasil = postQueueRows(rows, { bkuId: Number(req.body.bku_id || 0), coaId: Number(req.body.coa_id || 0), user: req.user, taSesiId: req.taId });
     if (!hasil.ok) return res.redirect(back + '?err=' + encodeURIComponent(hasil.err));
     dbm.logAudit(req.user, 'POSTING IURAN', 'iuran', `${hasil.n} penerimaan ${hasil.grup ? hasil.grup.nama : ''} ${rupiah(hasil.total)} → ${hasil.bku.nama} (${hasil.noBukti}) · kode ${hasil.coa.kode} ${hasil.coa.nama}`);
-    res.redirect(back + '?ok=' + encodeURIComponent(`Posting berhasil: ${rupiah(hasil.total)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).`));
+    res.redirect(back + '?ok=' + encodeURIComponent(`Posting berhasil: ${rupiah(hasil.total)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).` + (hasil.catatanTa || '')));
   });
 
   /**
@@ -2256,7 +2264,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     let berhasil = 0, total = 0;
     const gagal = [];
     for (const group of grupMap.values()) {
-      const hasil = postQueueRows(group, { bkuId: bkuPilih || Number(group[0].bku_id || 0), coaId: coaPilih, user: req.user });
+      const hasil = postQueueRows(group, { bkuId: bkuPilih || Number(group[0].bku_id || 0), coaId: coaPilih, user: req.user, taSesiId: req.taId });
       if (hasil.ok) { berhasil++; total += hasil.total; }
       else gagal.push(`${tglID(group[0].tanggal)} ${hasil.err}`);
     }
