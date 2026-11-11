@@ -12,6 +12,7 @@ const ui = require('./ui');
 const saas = require('./saas');
 const storage = require('./storage');
 const queue = require('./queue');
+const bayariuran = require('./bayariuran');
 
 const PORT = process.env.PORT || 3120;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -258,7 +259,10 @@ function page(req, res, { title, sub = '', active, content }) {
     impersonate: (req.sessionRow && req.sessionRow.imp_by)
       ? { nama: (saas.adminById(req.sessionRow.imp_by) || {}).nama || 'Super Admin' }
       : null,
-    announcements: notices
+    announcements: notices,
+    // notifikasi lonceng (pembayaran portal, dsb) sesuai role pengguna
+    notifs: (() => { try { bayariuran.ensureTables(dbm); return dbm.notifList(req.user.role, { limit: 10 }); } catch (e) { return []; } })(),
+    notifCount: (() => { try { return dbm.notifCount(req.user.role); } catch (e) { return 0; } })()
   }));
 }
 
@@ -389,7 +393,8 @@ require('./routes/reminder')({ get, post, dbm, lib, ui, page, ctx, guard, can, f
 require('./routes/ekskul')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/trash')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
-require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl, saas });
+require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl, saas, uploadMedia });
+require('./routes/pembayaran')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl, saas });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
 require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/panduan')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl, saas });
@@ -515,7 +520,7 @@ function slugLookup(map, segs) {
   return null;
 }
 /** sub-halaman portal siswa yang boleh menempel langsung pada slug (mis. /<slug>/hasil) */
-const PORTAL_SUB_ROUTES = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama']);
+const PORTAL_SUB_ROUTES = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama', 'bayar', 'pay', 'notif']);
 /**
  * Ubah sisa path setelah slug menjadi path portal kanonik.
  * '' → /portal · 'portal' → /portal · 'hasil' → /portal/hasil ·
@@ -710,6 +715,41 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  /* ---- CALLBACK PEMBAYARAN IURAN PORTAL (QRIS per sekolah) ----
+     order_id berbentuk IU<tenantId>-<acak>. Sekolah ditentukan dari query ?t=
+     atau dari awalan order_id, lalu koneksi database sekolah tersebut dibuka. */
+  if (pathname0 === '/portal/pay/callback') {
+    const balas = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    try {
+      const body = await readBody(req);
+      const parsedRaw = saas.paygw.parseCallback({ provider: 'generic' }, body);
+      const oid = String(parsedRaw.order_id || body.order_id || '');
+      const tQuery = Number(new URL(req.url, 'http://x').searchParams.get('t') || 0);
+      const tFromOrder = Number((/^IU(\d+)-/i.exec(oid) || [])[1] || 0);
+      const tenant = saas.tenantById(tQuery || tFromOrder || 1);
+      if (!tenant) return balas(404, { ok: false, error: 'Sekolah tidak ditemukan.' });
+      const hasil = await dbm.runAsTenant(tenant, async () => {
+        bayariuran.ensureTables(dbm);
+        const conf = bayariuran.cfg(dbm, saas);
+        if (!saas.paygw.verifyCallback(conf, body, req.headers || {})) {
+          return { code: 401, out: { ok: false, error: 'Signature callback tidak valid.' } };
+        }
+        const parsed = saas.paygw.parseCallback(conf, body);
+        const row = parsed.order_id ? bayariuran.byOrder(dbm, parsed.order_id) : null;
+        if (!row) return { code: 404, out: { ok: false, error: 'Transaksi iuran tidak ditemukan.' } };
+        if (!parsed.paid) {
+          dbm.db.prepare('UPDATE iuran_checkout SET gateway_status=? WHERE id=?').run(parsed.status || 'PENDING', row.id);
+          return { code: 200, out: { ok: true, paid: false } };
+        }
+        const r = bayariuran.applyPaid(dbm, row, { oleh: 'Payment Gateway', gatewayStatus: parsed.status || 'PAID' });
+        return { code: 200, out: { ok: true, paid: true, sudah: r.sudah, baris: r.baris } };
+      });
+      return balas(hasil.code, hasil.out);
+    } catch (e) {
+      return balas(400, { ok: false, error: e.message });
+    }
+  }
+
   // ---- favicon: logo sekolah (bila ada konteks sekolah), selain itu branding default ----
   if (pathname0 === '/favicon.ico' || pathname0 === '/favicon.svg' || pathname0 === '/favicon.png') {
     const segsFav = pathname0.split('/').filter(Boolean);
@@ -807,7 +847,7 @@ const server = http.createServer(async (req, res) => {
       const kode = String((req.query.get && req.query.get('kode')) || (req.body && req.body.kode) || '').trim();
       const tByCode = kode ? saas.tenantByCode(kode) : null;
       const canonical = ['/portal', '/portal-pegawai', '/portal-slip'];
-      const subRoutes = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama']);
+      const subRoutes = new Set(['siswa', 'pesan', 'cari', 'otp', 'verifikasi', 'hasil', 'cetak', 'nama', 'bayar']);
       const slugMap = (function () { const m = portalSlugMap(); return slugLookup(m, segs) ? m : portalSlugMap(true); })();
       // slug kanonik boleh dua bagian ("nama-sekolah/tagihan") → cocokkan 2 segmen lebih dulu
       const hitSlug = slugLookup(slugMap, segs);

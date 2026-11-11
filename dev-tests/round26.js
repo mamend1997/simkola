@@ -272,7 +272,7 @@ const today = new Date().toISOString().slice(0, 10);
   ok('aset tanpa versi: cache singkat + revalidate', /max-age=3600/.test(String(cssNV.headers.get('cache-control'))) && /must-revalidate/.test(String(cssNV.headers.get('cache-control'))), String(cssNV.headers.get('cache-control')));
   const jsMin = await (await fetch(base + '/assets/app.js?v=999')).text();
   /* ambang dinaikkan di ronde 30 (kredensial pendaftaran) & ronde 34 (pratinjau kop + tab desain cetak) */
-  ok('app.js terkirim dalam bentuk minified', jsMin.length < 88000 && /function/.test(jsMin), String(jsMin.length));
+  ok('app.js terkirim dalam bentuk minified', jsMin.length < 96000 && /function/.test(jsMin), String(jsMin.length));
   cookie = '';
   r = await req('GET', '/login', null, { cookie: '' });
   ok('halaman login: preconnect + dns-prefetch', /rel="preconnect" href="https:\/\/fonts.googleapis.com"/.test(r.text) && /rel="dns-prefetch"/.test(r.text));

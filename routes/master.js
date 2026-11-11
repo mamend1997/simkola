@@ -3,6 +3,10 @@
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, saas, refreshPortalMap, flashUrl }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
+  /* daftar BKU standar — hanya cadangan saat instalasi belum punya tahun ajaran lain
+     (penambahan TA baru selalu MENYALIN daftar BKU dari tahun ajaran sebelumnya). */
+  const BKU_STD_UMUM = ['BKU Umum', 'Buku Kas Pembantu Bank', 'Buku Pembantu Pajak', 'Buku Pembantu Tunai', 'Rekapitulasi Barang Habis Pakai', 'Barang Modal'];
+  const BKU_STD_KEGIATAN = ['BKU UKK', 'BKU PKL', 'BKU SPMB', 'BKU Bantuan', 'BKU PSTS Ganjil', 'BKU PSTS Genap', 'BKU ASAS', 'BKU ASAT', 'BKU PSAJ', 'Dana Sosial', 'Infak Jumat'];
 
   /** kumpulkan modal agar dirender DI LUAR tabel (form di dalam <table> akan dipecah parser HTML) */
   function modalCollector() {
@@ -847,7 +851,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <div class="row2"><div class="field"><label>Tanggal Mulai</label><input type="date" name="tanggal_mulai" value="${todayISO()}"></div>
         <div class="field"><label>Tanggal Selesai</label><input type="date" name="tanggal_selesai"></div></div>
         <label class="check"><input type="checkbox" name="aktif" value="1" checked> Jadikan tahun ajaran aktif</label>
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="buat_bku" value="1" checked> Buat otomatis 17 BKU standar (umum &amp; kegiatan)</label>
+        <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_bku" value="1" checked> <b>Salin daftar BKU dari tahun ajaran sebelumnya</b> — nama, jenis &amp; kode BKU diambil dari tahun ajaran sumber (tidak lagi membuat 17 BKU standar otomatis)</label>
         <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_master" value="1" checked> <b>Ambil / Salin Data dari Tahun Sebelumnya</b> — struktur Grup Iuran (beserta nominal) &amp; Master Beasiswa</label>
         <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_kelas" value="1" checked> <b>Salin Kelas &amp; Penempatan Siswa</b> (naik kelas otomatis X → XI, XI → XII) — agar Data Siswa &amp; Penetapan Grup Iuran di tahun ajaran baru langsung terisi</label>
         <label class="check" style="margin-top:10px"><input type="checkbox" name="rollover" value="1" checked> Rollover saldo awal dari tahun ajaran sebelumnya (BKU, kas, akun pinjaman, piutang belum lunas)</label>
@@ -864,7 +868,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const { id, nama, tanggal_mulai, tanggal_selesai, aktif, buat_bku } = req.body;
     if (!nama) return res.redirect(req.BASE + '/tahun-ajaran?err=' + encodeURIComponent('Nama tahun ajaran wajib diisi.'));
     const isAktif = aktif ? 1 : 0;
-    let rolloverInfo = null, cloneInfo = null, kelasInfo = null, prevTa = null;
+    let rolloverInfo = null, cloneInfo = null, kelasInfo = null, prevTa = null, bkuInfo = null;
     db.transaction(() => {
       if (isAktif) db.prepare('UPDATE tahun_ajaran SET aktif=0').run();
       if (id) {
@@ -873,34 +877,46 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       } else {
         const info = db.prepare('INSERT INTO tahun_ajaran (nama,tanggal_mulai,tanggal_selesai,aktif) VALUES (?,?,?,?)')
           .run(nama, tanggal_mulai || null, tanggal_selesai || null, isAktif);
-        if (buat_bku) {
+        const newId0 = Number(info.lastInsertRowid);
+        prevTa = db.prepare('SELECT * FROM tahun_ajaran WHERE id<>? ORDER BY COALESCE(tanggal_selesai,tanggal_mulai) DESC, id DESC LIMIT 1').get(newId0);
+        /* ---- BKU: salin dari tahun ajaran sebelumnya (bukan lagi 17 BKU standar) ---- */
+        const mauSalin = req.body.salin_bku !== undefined && req.body.salin_bku !== '';
+        if (prevTa && mauSalin) {
+          bkuInfo = dbm.cloneBkuTa(prevTa.id, newId0);
+        } else if (!prevTa && (mauSalin || buat_bku)) {
+          // instalasi baru (belum ada tahun ajaran lain) → siapkan BKU standar agar bisa langsung dipakai
           const ins = db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,0,'aktif',?,?,?)");
-          ['BKU Umum', 'Buku Kas Pembantu Bank', 'Buku Pembantu Pajak', 'Buku Pembantu Tunai', 'Rekapitulasi Barang Habis Pakai', 'Barang Modal']
-            .forEach((n, i) => ins.run(n, 'umum', 'U' + String(i + 1).padStart(2, '0'), info.lastInsertRowid, i + 1, nowStamp(), dbm.isAutoBkuNama(n) ? 1 : 0));
-          ['BKU UKK', 'BKU PKL', 'BKU SPMB', 'BKU Bantuan', 'BKU PSTS Ganjil', 'BKU PSTS Genap', 'BKU ASAS', 'BKU ASAT', 'BKU PSAJ', 'Dana Sosial', 'Infak Jumat']
-            .forEach((n, i) => ins.run(n, 'kegiatan', 'K' + String(i + 1).padStart(2, '0'), info.lastInsertRowid, i + 7, nowStamp(), 0));
+          BKU_STD_UMUM.forEach((n, i) => ins.run(n, 'umum', 'U' + String(i + 1).padStart(2, '0'), newId0, i + 1, nowStamp(), dbm.isAutoBkuNama(n) ? 1 : 0));
+          BKU_STD_KEGIATAN.forEach((n, i) => ins.run(n, 'kegiatan', 'K' + String(i + 1).padStart(2, '0'), newId0, i + 7, nowStamp(), 0));
+          bkuInfo = { bku: BKU_STD_UMUM.length + BKU_STD_KEGIATAN.length, standar: true };
+        } else if (buat_bku) {
+          // kompatibilitas: pemanggil lama yang masih mengirim buat_bku tanpa salin_bku
+          const ins = db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,0,'aktif',?,?,?)");
+          BKU_STD_UMUM.forEach((n, i) => ins.run(n, 'umum', 'U' + String(i + 1).padStart(2, '0'), newId0, i + 1, nowStamp(), dbm.isAutoBkuNama(n) ? 1 : 0));
+          BKU_STD_KEGIATAN.forEach((n, i) => ins.run(n, 'kegiatan', 'K' + String(i + 1).padStart(2, '0'), newId0, i + 7, nowStamp(), 0));
+          bkuInfo = { bku: BKU_STD_UMUM.length + BKU_STD_KEGIATAN.length, standar: true };
         }
-        const newId = Number(info.lastInsertRowid);
-        prevTa = db.prepare('SELECT * FROM tahun_ajaran WHERE id<>? ORDER BY COALESCE(tanggal_selesai,tanggal_mulai) DESC, id DESC LIMIT 1').get(newId);
         if (prevTa) {
           // opsi "Ambil / Salin Data dari Tahun Sebelumnya" (grup iuran + nominal + beasiswa)
           if (req.body.salin_master !== undefined && req.body.salin_master !== '') {
-            cloneInfo = dbm.cloneTaMaster(prevTa.id, newId, { grup: true, beasiswa: true, user: req.user });
+            cloneInfo = dbm.cloneTaMaster(prevTa.id, newId0, { grup: true, beasiswa: true, user: req.user });
           }
           if (req.body.rollover !== undefined && req.body.rollover !== '') {
-            rolloverInfo = dbm.rolloverTa(prevTa.id, newId, req.user);
+            rolloverInfo = dbm.rolloverTa(prevTa.id, newId0, req.user);
           }
           // salin kelas + naikkan siswa (hanya bila TA baru memang setelah TA sumber)
           const maju = String(tanggal_mulai || '').slice(0, 10) >= String(prevTa.tanggal_mulai || '').slice(0, 10);
           if (req.body.salin_kelas !== undefined && req.body.salin_kelas !== '' && maju) {
-            kelasInfo = dbm.cloneKelasTa(prevTa.id, newId, { user: req.user, promosi: true });
+            kelasInfo = dbm.cloneKelasTa(prevTa.id, newId0, { user: req.user, promosi: true });
           }
           // kelulusan siswa tingkat akhir TIDAK lagi otomatis — dilakukan manual di Data Siswa
         }
       }
     })();
     dbm.logAudit(req.user, id ? 'EDIT' : 'TAMBAH', 'tahun_ajaran', `${id ? 'Edit' : 'Tambah'} tahun ajaran ${nama}`);
-    const extra = (rolloverInfo
+    const extra = (bkuInfo
+      ? ` BKU: ${bkuInfo.bku} buku ${bkuInfo.standar ? '(standar awal)' : 'disalin dari tahun ajaran sebelumnya'}.`
+      : '') + (rolloverInfo
       ? ` Rollover saldo awal: ${rolloverInfo.bku} BKU, ${rolloverInfo.aset} akun aset, ${rolloverInfo.piutang} piutang pegawai, ${rolloverInfo.piutangLain} piutang sertifikasi.`
       : '') + (cloneInfo
         ? ` Salin master: ${cloneInfo.grup} grup iuran (${cloneInfo.nominal} nominal), ${cloneInfo.beasiswa} beasiswa.`
@@ -963,6 +979,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const ed = editId ? db.prepare('SELECT * FROM bku WHERE id=?').get(editId) : null;
     const late = modalCollector();
 
+    const kodeUmum = dbm.nextBkuKode('umum');
+    const kodeKegiatan = dbm.nextBkuKode('kegiatan');
     const bkuForm = (b, modalId) => `<form method="post" action="${c.base}/bku/save" id="f${modalId}">
       <input type="hidden" name="id" value="${b ? b.id : ''}">
       <div class="field"><label>Nama BKU</label><input name="nama" value="${esc(b ? b.nama : '')}" required placeholder="BKU Umum / BKU UKK"></div>
@@ -970,7 +988,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <div class="field"><label>Jenis</label><select name="jenis">
           <option value="umum" ${b && b.jenis === 'umum' ? 'selected' : ''}>BKU Umum / Buku Pembantu</option>
           <option value="kegiatan" ${b && b.jenis === 'kegiatan' ? 'selected' : ''}>BKU Kegiatan Khusus</option></select></div>
-        <div class="field"><label>Kode</label><input name="kode" value="${esc(b ? b.kode : '')}" placeholder="U01"></div>
+        <div class="field"><label>Kode <span class="t-sub">(otomatis)</span></label>
+          <input name="kode" value="${esc(b ? b.kode : kodeUmum)}" data-kode-auto
+            data-kode-umum="${esc(kodeUmum)}" data-kode-kegiatan="${esc(kodeKegiatan)}"
+            ${b ? '' : 'readonly'} placeholder="U01">
+          <div class="hint">Terisi otomatis mengikuti urutan kode terakhir (U01, U02, … / K01, K02, …).</div></div>
       </div>
       <div class="field"><label>Tahun Ajaran</label><select name="tahun_ajaran_id">${ui.selectOptions(taList, b ? b.tahun_ajaran_id : taId)}</select></div>
       <div class="field"><label>Saldo Awal</label>${ui.moneyInput('saldo_awal', b ? b.saldo_awal : 0)}</div>
@@ -1047,13 +1069,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!guard(req, res, 'bku', isEdit ? 'edit' : 'create')) return;
     const { id, nama, jenis, kode, tahun_ajaran_id, saldo_awal } = req.body;
     if (!nama || !tahun_ajaran_id) return res.redirect(req.BASE + '/bku?err=' + encodeURIComponent('Nama dan tahun ajaran wajib diisi.'));
+    // kode BKU otomatis bila kosong (U01, U02, … / K01, K02, …)
+    const kodeFinal = String(kode || '').trim() || dbm.nextBkuKode(jenis);
     if (isEdit) {
       db.prepare('UPDATE bku SET nama=?,jenis=?,kode=?,tahun_ajaran_id=?,saldo_awal=? WHERE id=?')
-        .run(nama, jenis, kode, tahun_ajaran_id, lib.parseMoney(saldo_awal), id);
+        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), id);
     } else {
       const urut = db.prepare('SELECT COALESCE(MAX(urutan),0)+1 u FROM bku').get().u;
       db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,?,'aktif',?,?,?)")
-        .run(nama, jenis, kode, tahun_ajaran_id, lib.parseMoney(saldo_awal), urut, nowStamp(), dbm.isAutoBkuNama(nama) ? 1 : 0);
+        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), urut, nowStamp(), dbm.isAutoBkuNama(nama) ? 1 : 0);
     }
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'bku', `${isEdit ? 'Edit' : 'Tambah'} BKU ${nama}`);
     res.redirect(req.BASE + '/bku?ta=' + tahun_ajaran_id + '&ok=' + encodeURIComponent('BKU disimpan.'));

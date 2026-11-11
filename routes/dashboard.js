@@ -544,7 +544,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
             <option value="selesai" ${st === 'selesai' ? 'selected' : ''}>Selesai Ditindaklanjuti</option>
           </select>
         </form></div>
-      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Sumber</th><th>Nama Pengirim</th><th>Catatan</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Sumber</th><th>Nama Pengirim</th><th>Catatan</th><th>Balasan Sekolah</th><th>Kontak</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(x => {
       const sm = String(x.sumber || 'siswa');
       const sumberBadge = sm === 'slip-pegawai' ? ui.badge('Slip Pegawai', 'blue')
@@ -556,11 +556,30 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
           <td class="nowrap t-sub">${esc(lib.stampShort(x.created_at))}</td>
           <td>${sumberBadge}</td>
           <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${tautan}</div></td>
-          <td style="max-width:520px">${esc(x.pesan)}</td>
+          <td style="max-width:460px">${esc(x.pesan)}</td>
+          <td style="max-width:380px">${x.balasan
+        ? `<div class="pn-reply"><div class="pn-reply-lbl">${esc(x.balas_oleh || 'Sekolah')} · ${esc(lib.stampShort(x.balas_at))}</div><div>${esc(x.balasan)}</div></div>`
+        : '<span class="t-sub">Belum dibalas</span>'}</td>
           <td class="t-sub">${esc(x.kontak || '-')}</td>
           <td>${x.status === 'selesai' ? ui.badge('Selesai Ditindaklanjuti', 'green') : ui.badge('Baru', 'amber')}
             ${x.status === 'selesai' ? `<div class="t-sub">${esc(lib.stampShort(x.selesai_at))} · ${esc(x.selesai_by || '')}</div>` : ''}</td>
           <td class="right nowrap">
+            ${c.can('dashboard', 'view') ? `<details class="catatan-reply">
+              <summary class="btn btn-sm btn-primary">${ui.icon('inbox')}Balas</summary>
+              <form method="post" action="${c.base}/catatan-orangtua/balas" class="mt-2" style="min-width:280px;text-align:left">
+                <input type="hidden" name="id" value="${x.id}">
+                <input type="hidden" name="back" value="${esc(qs())}">
+                <div class="field"><label>Balasan untuk ${esc(x.nama || 'pengirim')}</label>
+                  <textarea name="balasan" rows="4" required minlength="3" maxlength="2000"
+                    placeholder="Tulis jawaban / penjelasan pihak sekolah…">${esc(x.balasan || '')}</textarea></div>
+                <div class="field"><label>Status setelah dibalas</label>
+                  <select name="status_after">
+                    <option value="selesai" selected>Selesai Ditindaklanjuti</option>
+                    <option value="baru">Tandai masih Baru</option>
+                  </select></div>
+                <button class="btn btn-primary btn-sm">${ui.icon('save')}Kirim Balasan</button>
+              </form>
+            </details>` : ''}
             ${x.status === 'selesai' ? '' : `<form method="post" action="${c.base}/pesan-orangtua/selesai" style="display:inline"><input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="${esc(qs())}"><button class="btn btn-sm btn-green">${ui.icon('check')}Tandai Selesai</button></form>`}
             ${c.can('dashboard', 'delete') || c.can('catatan', 'delete') ? `<form method="post" action="${c.base}/catatan-orangtua/delete" style="display:inline" data-confirm="Hapus catatan dari ${esc(x.nama || 'pengirim')} ini? Catatan akan hilang permanen.">
               <input type="hidden" name="id" value="${x.id}"><input type="hidden" name="back" value="${esc(qs())}">
@@ -593,6 +612,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     dbm.db.prepare('DELETE FROM portal_pesan WHERE id=?').run(id);
     dbm.logAudit(req.user, 'HAPUS', 'portal', `Menghapus catatan orang tua dari ${row.nama || '-'}: ${String(row.pesan || '').slice(0, 100)}`);
     res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'ok=' + encodeURIComponent('Catatan orang tua dihapus.'));
+  });
+
+  post('/catatan-orangtua/balas', (req, res) => {
+    guard(req, res, 'dashboard', 'view');
+    const id = Number(req.body.id || 0);
+    const backRaw = String(req.body.back || '/catatan-orangtua');
+    const back = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/catatan-orangtua';
+    const balasan = String(req.body.balasan || '').trim();
+    const row = id ? dbm.db.prepare('SELECT * FROM portal_pesan WHERE id=?').get(id) : null;
+    if (!row) return res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'err=' + encodeURIComponent('Catatan tidak ditemukan.'));
+    if (balasan.length < 3) return res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'err=' + encodeURIComponent('Balasan terlalu pendek (minimal 3 karakter).'));
+    dbm.portalPesanReply(id, balasan, req.user.nama, String(req.body.status_after || 'selesai'));
+    if (String(req.body.status_after || 'selesai') === 'selesai') dbm.db.prepare('UPDATE portal_pesan SET selesai_at=?, selesai_by=? WHERE id=?').run(lib.nowStamp(), req.user.nama, id);
+    dbm.logAudit(req.user, 'BALAS', 'portal', `Membalas catatan orang tua ${row.nama || '-'}: ${balasan.slice(0, 120)}`);
+    res.redirect(req.BASE + back + (back.includes('?') ? '&' : '?') + 'ok=' + encodeURIComponent('Balasan terkirim. Orang tua/wali dapat melihatnya di portal.'));
   });
 
   post('/pesan-orangtua/selesai', (req, res) => {

@@ -3,6 +3,7 @@ const printcfg = require('../printcfg');
 /* Modul Iuran Siswa: grup, penetapan, pembayaran, kwitansi, antrean posting BKU, import dinamis */
 const X = require('../xlsx-read');
 const impcache = require('../impcache');
+const bayar = require('../bayariuran');
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) => {
   const { db } = dbm;
@@ -2007,6 +2008,48 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       </div>
       <div class="toolbar"><a class="btn btn-sm" href="${c.base}/transaksi">${ui.icon('receipt')}Buka BKU</a></div>
     </div>
+    ${(() => {
+      const portal = bayar.listPending(dbm, { limit: 50 });
+      if (!portal.length) return '';
+      const total = portal.reduce((a, b) => a + Number(b.total || 0), 0);
+      return `<div class="card mb-3" id="verifikasi">
+      <div class="card-head"><div><h3>Verifikasi Pembayaran Portal Orang Tua</h3>
+        <div class="sub">${portal.length} pembayaran mandiri menunggu verifikasi · total ${rupiah(total)}</div></div>
+        <span class="badge amber">${portal.length} baru</span></div>
+      <div class="alert info">${ui.icon('info')}<div>Setelah <b>disetujui</b>, rincian item otomatis menjadi pembayaran iuran berstatus antrean
+        sehingga bisa diposting ke BKU pada tabel di bawah. Bila bukti tidak sesuai, gunakan <b>Tolak</b> (orang tua dapat mengirim ulang).</div></div>
+      <div class="table-wrap sticky-head"><table><thead><tr><th>Waktu</th><th>Siswa</th><th>Rincian Item</th><th class="num">Total</th>
+        <th>Metode</th><th>Bukti</th><th class="right">Verifikasi</th></tr></thead><tbody>
+      ${portal.map(x => {
+        let items = []; try { items = JSON.parse(x.items || '[]'); } catch (e) { items = []; }
+        return `<tr>
+          <td class="t-sub nowrap">${esc(lib.stampShort(x.created_at))}</td>
+          <td class="t-strong">${esc(x.nama || '-')}<div class="t-sub">${esc(x.kelas || '-')}</div></td>
+          <td class="t-sub">${items.map(i => esc(i.label || '') + ' — ' + rupiah(i.nominal)).join('<br>') || '-'}
+            ${x.catatan ? `<div class="t-sub">Catatan: ${esc(x.catatan)}</div>` : ''}</td>
+          <td class="num t-strong">${rupiah(x.total)}</td>
+          <td>${x.metode === 'gateway' ? ui.badge('QRIS ' + (x.provider || ''), 'blue') : ui.badge('Transfer', 'orange')}</td>
+          <td>${x.bukti_url ? `<a href="${esc(x.bukti_url)}" target="_blank" rel="noopener">${ui.icon('file')}Lihat bukti</a>` : '<span class="t-sub">QRIS otomatis</span>'}</td>
+          <td class="right nowrap">
+            ${editable ? `<form method="post" action="${c.base}/iuran/verifikasi" style="display:inline"
+                data-confirm="Setujui pembayaran ${esc(x.nama || '')} sebesar ${rupiah(x.total)}? Item akan masuk antrean posting BKU.">
+              <input type="hidden" name="id" value="${x.id}"><input type="hidden" name="aksi" value="setuju">
+              <input type="hidden" name="back" value="/iuran/antrean">
+              <button class="btn btn-sm btn-green">${ui.icon('check')}Setujui</button></form>
+            <details class="catatan-reply" style="margin-left:6px">
+              <summary class="btn btn-sm btn-danger">${ui.icon('x')}Tolak</summary>
+              <form method="post" action="${c.base}/iuran/verifikasi" class="mt-2" style="min-width:240px;text-align:left">
+                <input type="hidden" name="id" value="${x.id}"><input type="hidden" name="aksi" value="tolak">
+                <input type="hidden" name="back" value="/iuran/antrean">
+                <div class="field"><label>Alasan penolakan</label>
+                  <input name="alasan" required maxlength="200" placeholder="Bukti tidak terbaca / nominal tidak sesuai"></div>
+                <button class="btn btn-sm btn-danger">${ui.icon('x')}Tolak Pembayaran</button>
+              </form>
+            </details>` : '<span class="t-sub">Hanya lihat</span>'}
+          </td></tr>`;
+      }).join('')}
+      </tbody></table></div></div>`;
+    })()}
     ${queue.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Terdapat ${queue.length} penerimaan grup iuran belum di-posting ke BKU.</b>
       ${queue.filter(q => q.tanggal <= yesterday).length ? `Termasuk ${queue.filter(q => q.tanggal <= yesterday).length} kelompok dari hari sebelumnya.` : ''}
       Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.

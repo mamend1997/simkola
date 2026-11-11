@@ -169,17 +169,21 @@
   const burger = $('#burger'), sidebar = $('#sidebar'), scrim = $('#scrim');  if (burger) burger.addEventListener('click', () => { sidebar.classList.toggle('open'); scrim.classList.toggle('show'); });
   if (scrim) scrim.addEventListener('click', () => { sidebar.classList.remove('open'); scrim.classList.remove('show'); });
 
-  /* ===== collapse / expand sidebar (area kerja lebih luas) ===== */
+  /* ===== collapse / expand sidebar (area kerja lebih luas) + hover fly-out ===== */
   (function sidebarCollapse() {
     const KEY = 'simkeu:nav-collapsed';
+    const HKEY = 'simkeu:nav-hover';
     const btn = document.getElementById('navCollapse');
     const shell = document.querySelector('.shell');
+    const side = document.getElementById('sidebar');
     if (!shell) return;
-    let collapsed = false;
+    let collapsed = false, hoverOn = true;
     try { collapsed = localStorage.getItem(KEY) === '1'; } catch (e) { }
+    try { hoverOn = localStorage.getItem(HKEY) !== '0'; } catch (e) { }
     const apply = () => {
       shell.classList.toggle('nav-collapsed', collapsed);
       document.body.classList.toggle('nav-collapsed', collapsed);
+      if (!collapsed) shell.classList.remove('hover-open');
       if (btn) btn.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
     };
     apply();
@@ -188,25 +192,81 @@
       try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) { }
       apply();
     });
+
+    /* ---- sakelar preferensi: buka otomatis saat kursor mendekat ---- */
+    const pref = document.getElementById('navHoverPref');
+    if (pref) {
+      pref.checked = hoverOn;
+      pref.addEventListener('change', () => {
+        hoverOn = !!pref.checked;
+        try { localStorage.setItem(HKEY, hoverOn ? '1' : '0'); } catch (e) { }
+        if (!hoverOn) shell.classList.remove('hover-open');
+      });
+    }
+    /* ---- fly-out: kursor mendekat ke area sidebar saat menu dilipat ---- */
+    let timer = null;
+    const isDesktop = () => window.matchMedia('(min-width:981px)').matches;
+    const buka = () => {
+      if (!hoverOn || !collapsed || !isDesktop()) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => shell.classList.add('hover-open'), 90);
+    };
+    const tutup = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!side || side.matches(':hover')) return;
+        shell.classList.remove('hover-open');
+      }, 180);
+    };
+    if (side) {
+      side.addEventListener('mouseenter', buka);
+      side.addEventListener('mouseleave', tutup);
+      side.addEventListener('focusin', buka);
+    }
+    /* hotspot tipis di tepi kiri layar (memudahkan saat menu benar-benar ringkas) */
+    document.addEventListener('mousemove', e => {
+      if (!hoverOn || !collapsed || !isDesktop()) return;
+      if (e.clientX <= 8 && !shell.classList.contains('hover-open')) buka();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') shell.classList.remove('hover-open'); });
   })();
 
-  /* ===== menu bilah samping: akordeon (buka/tutup + ingat pilihan) ===== */
+  /* ===== menu bilah samping: akordeon EKSKLUSIF (satu grup terbuka) ===== */
   (function navAccordion() {
-    const KEY = 'simkeu:nav-open';
-    let state = {};
-    try { state = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { state = {}; }
-    $$('[data-navtoggle]').forEach(btn => {
-      const group = btn.closest('.nav-group');
-      if (!group) return;
-      const id = btn.dataset.navtoggle;
-      const hasActive = !!group.querySelector('a.active');
-      if (!hasActive && state[id] !== undefined) group.classList.toggle('open', !!state[id]);
-      btn.setAttribute('aria-expanded', group.classList.contains('open') ? 'true' : 'false');
+    const KEY = 'simkeu:nav-open-id';
+    const groups = $$('.nav-group');
+    if (!groups.length) return;
+    let savedId = '';
+    try { savedId = localStorage.getItem(KEY) || ''; } catch (e) { }
+    if (!savedId) {
+      // kompatibilitas format lama ({ id: 1/0 })
+      try {
+        const o = JSON.parse(localStorage.getItem('simkeu:nav-open') || '{}') || {};
+        savedId = Object.keys(o).find(k => o[k]) || '';
+      } catch (e) { }
+    }
+    const idOf = g => {
+      const b = g.querySelector('[data-navtoggle]');
+      return b ? (b.dataset.navtoggle || '') : '';
+    };
+    const setOpen = (g, open) => {
+      g.classList.toggle('open', !!open);
+      const b = g.querySelector('[data-navtoggle]');
+      if (b) b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    // prioritas: grup yang memuat menu aktif → grup tersimpan → grup defaultOpen server
+    const activeGroup = groups.find(g => g.querySelector('a.active'));
+    const savedGroup = savedId ? groups.find(g => idOf(g) === savedId) : null;
+    const target = activeGroup || savedGroup || groups.find(g => g.classList.contains('open')) || null;
+    groups.forEach(g => setOpen(g, g === target));
+    groups.forEach(g => {
+      const btn = g.querySelector('[data-navtoggle]');
+      if (!btn) return;
       btn.addEventListener('click', () => {
-        const open = group.classList.toggle('open');
-        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-        state[id] = open ? 1 : 0;
-        try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { }
+        const willOpen = !g.classList.contains('open');
+        if (willOpen) groups.forEach(other => { if (other !== g) setOpen(other, false); });
+        setOpen(g, willOpen);
+        try { localStorage.setItem(KEY, willOpen ? idOf(g) : ''); } catch (e) { }
       });
     });
     // di mobile: setelah memilih menu, tutup drawer agar halaman tujuan terlihat
@@ -214,6 +274,30 @@
       if (sidebar) sidebar.classList.remove('open');
       if (scrim) scrim.classList.remove('show');
     }));
+  })();
+
+  /* ===== lonceng notifikasi: tandai dibaca saat diklik ===== */
+  (function notifBell() {
+    const bell = document.querySelector('.notif-bell[data-notif-url]');
+    if (!bell) return;
+    const url = bell.dataset.notifUrl;
+    $$('[data-notif-item]', bell).forEach(a => a.addEventListener('click', () => {
+      const id = a.dataset.notifItem;
+      try {
+        const fd = new URLSearchParams({ id: String(id) });
+        if (navigator.sendBeacon) navigator.sendBeacon(url, fd);
+        else fetch(url, { method: 'POST', body: fd, keepalive: true });
+      } catch (e) { }
+      const badge = bell.querySelector('.nbell');
+      if (badge) {
+        const n = Math.max(0, Number(badge.textContent) - 1);
+        if (n) badge.textContent = n; else badge.remove();
+      }
+      a.classList.remove('unread');
+    }));
+    document.addEventListener('click', e => {
+      if (bell.open && !bell.contains(e.target)) bell.open = false;
+    });
   })();
 
   /* ===== pertahankan posisi scroll setelah simpan / edit / navigasi ===== */
@@ -2111,4 +2195,81 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     }, true);
     render();
   });
+
+  /* ===================================================================
+     PORTAL ORANG TUA — bayar iuran mandiri (multi pilih + total live)
+     =================================================================== */
+  (function bayarIuranUI() {
+    const form = document.querySelector('[data-bayar-form]');
+    if (!form) return;
+    const boxes = $$('[data-bayar-item]', form);
+    const totalEl = $('[data-bayar-total]', form);
+    const countEl = $('[data-bayar-count]', form);
+    const submitBtns = $$('[data-bayar-submit]', form);
+    const manualPane = $('[data-bayar-pane="manual"]', form);
+    const gatewayPane = $('[data-bayar-pane="gateway"]', form);
+    const metodeInput = $('input[name="metode"]', form);
+    const bukti = $('[data-bayar-bukti]', form);
+    const buktiInfo = $('[data-bayar-bukti-info]', form);
+    const fmt = n => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
+
+    function hitung() {
+      let total = 0, n = 0;
+      boxes.forEach(b => { if (b.checked) { total += Number(b.dataset.amount || 0); n++; } });
+      if (totalEl) totalEl.textContent = fmt(total);
+      if (countEl) countEl.textContent = n + ' item dipilih';
+      submitBtns.forEach(btn => {
+        const perluBukti = metodeInput && metodeInput.value === 'manual';
+        const kurangBukti = perluBukti && bukti && !(document.getElementById(bukti.dataset.b64 || '') || {}).value;
+        btn.disabled = n === 0 || kurangBukti;
+        btn.title = n === 0 ? 'Pilih minimal satu tagihan' : (kurangBukti ? 'Unggah bukti pembayaran dulu' : '');
+      });
+      return total;
+    }
+    boxes.forEach(b => b.addEventListener('change', hitung));
+
+    /* pemilih metode (QRIS gateway / transfer manual) */
+    $$('[data-bayar-method]', form).forEach(btn => btn.addEventListener('click', () => {
+      const m = btn.dataset.bayarMethod;
+      if (metodeInput) metodeInput.value = m;
+      $$('[data-bayar-method]', form).forEach(x => x.classList.toggle('on', x === btn));
+      if (manualPane) manualPane.classList.toggle('on', m === 'manual');
+      if (gatewayPane) gatewayPane.classList.toggle('on', m === 'gateway');
+      hitung();
+    }));
+
+    /* bukti bayar wajib untuk metode manual */
+    if (bukti) bukti.addEventListener('change', () => setTimeout(hitung, 500));
+    form.addEventListener('submit', e => {
+      if (hitung() === 0) { e.preventDefault(); alert('Pilih minimal satu tagihan yang akan dibayar.'); return; }
+      if (metodeInput && metodeInput.value === 'manual') {
+        const hid = document.getElementById(bukti ? bukti.dataset.b64 : '');
+        if (!hid || !hid.value) {
+          e.preventDefault();
+          alert('Unggah bukti pembayaran (foto / PDF) terlebih dahulu.');
+          if (buktiInfo) buktiInfo.innerHTML = '<span class="badge red plain">Bukti pembayaran wajib diunggah</span>';
+        }
+      }
+    });
+    hitung();
+  })();
+
+  /* ===================================================================
+     Kode BKU otomatis: ikut berubah saat Jenis BKU diganti
+     (Umum → U01… · Kegiatan → K01…), hanya pada form BKU baru.
+     =================================================================== */
+  (function kodeBkuAuto() {
+    $$('input[data-kode-auto]').forEach(inp => {
+      if (!inp.hasAttribute('readonly')) return;
+      const form = inp.closest('form');
+      if (!form) return;
+      const sel = form.querySelector('select[name="jenis"]');
+      if (!sel) return;
+      const apply = () => {
+        inp.value = sel.value === 'kegiatan' ? (inp.dataset.kodeKegiatan || '') : (inp.dataset.kodeUmum || '');
+      };
+      sel.addEventListener('change', apply);
+      apply();
+    });
+  })();
 })();

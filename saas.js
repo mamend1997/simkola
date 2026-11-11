@@ -341,7 +341,7 @@ const PATH_FEATURES = [
   ['/mutasi-kelas', 'mutasi_kelas'], ['/program-keahlian', 'program'],
   ['/siswa-nonaktif', 'siswa'], ['/siswa', 'siswa'],
   ['/kelas', 'kelas'],
-  ['/iuran', 'iuran'], ['/spp', 'iuran'],
+  ['/iuran', 'iuran'], ['/pembayaran-online', 'iuran'], ['/spp', 'iuran'],
   ['/payroll', 'payroll'], ['/pegawai', 'pegawai'],
   ['/ekskul', 'ekskul'], ['/beasiswa', 'beasiswa'],
   ['/tarif-honor', 'tarif_honor'],

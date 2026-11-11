@@ -203,6 +203,7 @@ const NAV = [
       { href: '/iuran/bulanan', key: 'iuran', activeKey: 'iuran_bulanan', label: 'Rincian Iuran Bulanan', icon: 'calendar' },
       { href: '/iuran/transaksi', key: 'iuran', activeKey: 'iuran_trx', label: 'Transaksi Iuran', icon: 'receipt' },
       { href: '/iuran/antrean', key: 'iuran', activeKey: 'iuran_queue', label: 'Antrean Posting Iuran', icon: 'clock' },
+      { href: '/pembayaran-online', key: 'iuran', activeKey: 'iuran_bayar_online', label: 'Pembayaran Online', icon: 'card' },
       { href: '/iuran/pengingat', key: 'iuran', activeKey: 'iuran_pengingat', label: 'Jadwal Pengingat Tagihan', icon: 'whatsapp' },
       // Beasiswa SPP dipindahkan dari menu Kepegawaian ke kelompok Grup Iuran
       { href: '/beasiswa', key: 'beasiswa', label: 'Beasiswa SPP', icon: 'target' },
@@ -362,7 +363,7 @@ function navOrdered(cfg) {
   return groups;
 }
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appSub = '', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light' }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appSub = '', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light', notifs = [], notifCount = 0 }) {
   // sub-judul di bawah nama aplikasi ("Sistem Keuangan") — dapat diubah sekolah & Super Admin
   const brandSub = String(appSub || '').trim() || 'Sistem Keuangan';
   // tahun pelajaran yang sedang dibuka (untuk peringatan tanggal transaksi di app.js)
@@ -398,6 +399,22 @@ function layout({ title, sub = '', user, active, base = '', content, query, role
     </div>`;
   }
   if (!nav) nav = '<div class="nav-empty">Semua menu sedang disembunyikan. Buka <b>Pengaturan Tampilan Menu</b> untuk menampilkannya kembali.</div>';
+  /* ---------- lonceng notifikasi (pembayaran portal, dsb) ---------- */
+  const notifItems = (notifs || []).map(n =>
+    `<a class="nf-item${n.dibaca ? '' : ' unread'}" href="${base}${esc(n.href || '/')}" data-notif-item="${n.id}">`
+    + `<div class="nf-t">${esc(n.judul || '')}</div>`
+    + `<div class="nf-s">${esc(n.isi || '')}</div>`
+    + `<div class="nf-d">${esc(n.created_at || '')}</div></a>`).join('');
+  const notifHtml = (notifCount || notifItems)
+    ? `<details class="notif-bell" data-notif-url="${base}/notif/baca">
+        <summary class="btn btn-sm btn-ghost" title="${notifCount} notifikasi belum dibaca">${icon('bell')}${notifCount ? `<span class="nbell">${notifCount}</span>` : ''}</summary>
+        <div class="notif-panel">
+          <div class="nf-head"><b>Notifikasi</b><span class="t-sub">${notifCount} belum dibaca</span></div>
+          ${notifItems || '<div class="nf-empty">Belum ada notifikasi.</div>'}
+          <div class="nf-foot"><a href="${base}/iuran/antrean#verifikasi">Buka Antrean Iuran</a></div>
+        </div>
+      </details>`
+    : '';
   const brandMark = appLogo
     ? `<img src="${esc(appLogo)}"${appLogoSmall ? ` srcset="${esc(appLogoSmall)} 96w, ${esc(appLogo)} 512w" sizes="40px"` : ''} alt="Logo" width="40" height="40" fetchpriority="high" decoding="async" style="width:40px;height:40px;border-radius:12px;object-fit:contain;background:#fff;padding:3px;flex:0 0 40px" onerror="this.remove()">`
     : `<div class="brand-mark">${icon('wallet')}</div>`;
@@ -416,14 +433,22 @@ ${themeCss(tema)}
 </head><body>
 <div class="shell">
   <aside class="sidebar" id="sidebar">
+   <div class="sb-inner">
     <div class="brand">
       ${brandMark}
       <div style="min-width:0"><div class="brand-name">${esc(appName)}</div><div class="brand-sub">${esc(brandSub)}</div></div>
     </div>
     ${impersonate ? `<div class="demo-chip" style="background:#EEF2FF;color:#4338CA;border-color:#C7D2FE">${icon('shield', 'i-sm')} Mode bantuan Super Admin</div>` : ''}
     <nav class="nav">${nav}</nav>
-    <div class="side-foot">v1.0 · ${new Date().getFullYear()} © ${esc(appName.slice(0, 18))}
-      <div class="t-sub" style="margin-top:2px">${esc(require('./tz').label())} · GMT${esc(require('./tz').offsetLabel())}</div></div>
+    <div class="side-foot">
+      <label class="sb-switch" title="Buka menu samping otomatis saat kursor mendekat (berlaku saat menu dilipat)">
+        <input type="checkbox" id="navHoverPref" checked aria-label="Buka otomatis saat kursor mendekat">
+        <span class="sb-switch-txt">Buka otomatis saat kursor mendekat</span>
+      </label>
+      <div class="t-sub">v1.0 · ${new Date().getFullYear()} © ${esc(appName.slice(0, 18))}</div>
+      <div class="t-sub" style="margin-top:2px">${esc(require('./tz').label())} · GMT${esc(require('./tz').offsetLabel())}</div>
+    </div>
+   </div>
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="main">
@@ -440,6 +465,7 @@ ${themeCss(tema)}
           </select>
         </form>` : ''}
         ${pendingCount && can && can('transaksi', 'approve') ? `<a class="btn btn-sm btn-ghost" href="${base}/approval" title="${pendingCount} draf pengeluaran menunggu persetujuan" style="position:relative">${icon('bell')}<span class="nbell">${pendingCount}</span></a>` : ''}
+        ${notifHtml}
         <a class="btn btn-sm btn-ghost" href="${base}/sekolah" title="Identitas sekolah">${icon('settings')}</a>
         <a class="userchip" href="${base}/akun" title="Akun saya">
           ${avatar(user)}

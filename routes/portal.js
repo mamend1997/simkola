@@ -1,8 +1,9 @@
 'use strict';
 /* Portal publik cek tagihan orang tua — tanpa login, verifikasi Nama + Tanggal Lahir */
 const reminder = require('../reminder');
+const bayar = require('../bayariuran');
 
-module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas }) => {
+module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas, uploadMedia }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID } = lib;
   /** alamat portal dapat diubah di menu Portal Publik (default: portal) */
@@ -122,7 +123,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     </div>`;
   }
 
-  function renderResults({ settings, base, students, pesanOk = '', pesanErr = '' }) {
+  function renderResults({ settings, base, students, pesanOk = '', pesanErr = '', ident = null }) {
     let grandTagihan = 0, grandBayar = 0, grandSisa = 0, sections = '';
     for (const s of students) {
       const taList = dbm.allTahun();
@@ -196,6 +197,8 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
           <div style="text-align:right">
             <div class="badge ${sisaSiswa > 0 ? 'amber' : 'green'}">${sisaSiswa > 0 ? 'Sisa ' + rupiah(sisaSiswa) : 'Lunas'}</div>
             <div class="muted small" style="margin-top:4px">${s.tags.length} grup · total ${rupiah(tagSiswa)}</div>
+            ${(ident && ident.siswa && String(ident.siswa.id) === String(s.id) && sisaSiswa > 0) ? `<div style="margin-top:8px">
+              <a class="btn btn-primary btn-sm" href="${bayarUrl(base, ident)}">${ui.icon('card')}Bayar Iuran</a></div>` : ''}
           </div>
         </div>
         ${body || '<div class="empty"><p>Belum ada tagihan iuran tercatat.</p></div>'}
@@ -226,7 +229,8 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
         Catatan akan masuk ke <b>Dashboard Bendahara</b> untuk ditindaklanjuti petugas.</p>
       ${pesanOk ? `<div class="alert ok">${ui.icon('check')}<div>${esc(pesanOk)}</div></div>` : ''}
       ${pesanErr ? `<div class="alert err">${ui.icon('alert')}<div>${esc(pesanErr)}</div></div>` : ''}
-      ${others.length ? `<div class="portal-note-list">${others.map(x => `<div class="pn-item"><div class="pn-meta">${esc(lib.stampShort(x.created_at))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div><div class="pn-body">${esc(x.pesan)}</div></div>`).join('')}</div>` : ''}
+      ${others.length ? `<div class="portal-note-list">${others.map(x => `<div class="pn-item"><div class="pn-meta">${esc(lib.stampShort(x.created_at))} · ${x.status === 'selesai' ? 'Sudah ditindaklanjuti' : 'Menunggu tindak lanjut'}</div><div class="pn-body">${esc(x.pesan)}</div>
+        ${x.balasan ? `<div class="pn-reply"><div class="pn-reply-lbl">Balasan sekolah${x.balas_oleh ? ' · ' + esc(x.balas_oleh) : ''}</div><div>${esc(x.balasan)}</div></div>` : ''}</div>`).join('')}</div>` : ''}
       <form method="post" action="${url(base, '/pesan')}">
         <input type="hidden" name="siswa_id" value="${esc(s.id || '')}">
         <div class="field"><label>Nama Siswa</label><input value="${esc(s.nama || '')}" readonly></div>
@@ -236,6 +240,181 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
           <textarea name="pesan" rows="5" required maxlength="2000" placeholder="Contoh: Pembayaran SPP bulan Agustus sudah saya bayar pada 12/08, tetapi masih tercatat belum dibayar."></textarea></div>
         <button class="btn btn-primary btn-block">${ui.icon('upload')}Kirim Catatan</button>
       </form>
+    </div>`;
+  }
+
+  /* ==================================================================
+     BAYAR IURAN MANDIRI (portal orang tua)
+     ================================================================== */
+  /** identitas dari query/body: token pribadi atau pasangan nama + tanggal lahir */
+  function identOf(src) {
+    const getv = k => String((src.get ? src.get(k) : src[k]) || '').trim();
+    const token = getv('token');
+    if (token) {
+      const id = reminder.verifyPortalToken(dbm, token);
+      const s = id ? db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id WHERE s.id=?`).get(id) : null;
+      if (s) return { siswa: s, token, nama: s.nama, lahir: s.tanggal_lahir || '' };
+      return { siswa: null, token, nama: '', lahir: '' };
+    }
+    const nama = getv('nama');
+    const lahir = normalizeDate(getv('lahir')) || (/^\d{4}-\d{2}-\d{2}$/.test(getv('lahir')) ? getv('lahir') : null);
+    if (!nama || !lahir) return { siswa: null, token: '', nama, lahir: lahir || '' };
+    const s = db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id
+      WHERE lower(trim(s.nama))=lower(?) AND s.tanggal_lahir=?`).get(nama, lahir);
+    return { siswa: s || null, token: '', nama, lahir };
+  }
+  function bayarUrl(base, ident, sub = '') {
+    const q = new URLSearchParams();
+    if (ident.token) q.set('token', ident.token);
+    else { q.set('nama', ident.nama || ''); q.set('lahir', ident.lahir || ''); }
+    return url(base, '/bayar' + sub) + '?' + q.toString().replace(/\+/g, '%20');
+  }
+  const statusBadge = st => {
+    const map = { menunggu: ['Menunggu Pembayaran / Verifikasi', 'amber'], lunas: ['Lunas', 'green'], ditolak: ['Ditolak', 'red'], batal: ['Batal', 'gray'] };
+    const b = map[st] || [st || '-', 'gray'];
+    return `<span class="badge ${b[1]}">${esc(b[0])}</span>`;
+  };
+
+  /** halaman pemilihan tagihan + metode pembayaran */
+  function bayarPage({ base, settings, ident, ok = '', err = '' }) {
+    const pub = bayar.publicCfg(dbm, saas);
+    const s = ident.siswa;
+    const items = bayar.itemsOf(dbm, s.id);
+    const riwayat = bayar.listBySiswa(dbm, s.id, 6);
+    const identFields = ident.token
+      ? `<input type="hidden" name="token" value="${esc(ident.token)}">`
+      : `<input type="hidden" name="nama" value="${esc(ident.nama)}"><input type="hidden" name="lahir" value="${esc(ident.lahir)}">`;
+    const groups = [];
+    const byGrup = new Map();
+    for (const it of items) {
+      if (!byGrup.has(it.grup_nama)) byGrup.set(it.grup_nama, { jenis: it.grup_jenis, items: [] });
+      byGrup.get(it.grup_nama).items.push(it);
+    }
+    for (const [nama, g] of byGrup) groups.push({ nama, ...g });
+    const totalSisa = items.reduce((a, b) => a + Number(b.nominal || 0), 0);
+
+    const pilihMetode = pub.online && pub.manual
+      ? `<div class="bayar-method">
+          <button type="button" class="${!pub.manual ? '' : 'on'}" data-bayar-method="manual"><b>Transfer Manual / QRIS Sekolah</b>Transfer ke rekening sekolah lalu unggah bukti pembayaran.</button>
+          <button type="button" class="${!pub.manual ? 'on' : ''}" data-bayar-method="gateway"><b>QRIS Otomatis (${esc(pub.provider_label)})</b>Bayar langsung, status lunas otomatis setelah terkonfirmasi.</button>
+        </div>`
+      : '';
+
+    const paneManual = `<div class="bayar-pane ${pub.manual ? 'on' : ''}" data-bayar-pane="manual">
+      ${pub.qris_image ? `<div class="qris-box"><img src="${esc(pub.qris_image)}" alt="QRIS sekolah" loading="lazy" decoding="async" width="220" height="220">
+        <div style="flex:1;min-width:200px"><b>Pindai QRIS sekolah</b>
+          <p class="muted small" style="margin:6px 0">${esc(pub.instruksi || '')}</p>
+          <div class="help">Setelah membayar, unggah bukti transfer pada formulir di bawah.</div></div></div>`
+        : pub.instruksi ? `<div class="portal-card" style="margin:0 0 12px;padding:14px"><b>Instruksi Transfer</b><p class="muted small" style="margin:6px 0 0;white-space:pre-wrap">${esc(pub.instruksi)}</p></div>` : ''}
+      <div class="field"><label>Unggah Bukti Pembayaran <span style="color:var(--red)">*</span></label>
+        <input type="file" accept="image/*,application/pdf" data-bayar-bukti data-b64="bukti_b64" data-filename="bukti_nama" data-max="10">
+        <input type="hidden" name="bukti_b64" id="bukti_b64"><input type="hidden" name="bukti_nama" id="bukti_nama">
+        <div id="bukti_b64-info" data-bayar-bukti-info class="hint">Format gambar (JPG/PNG/WebP) atau PDF, maksimal 10 MB.</div></div>
+      <div class="field"><label>Catatan untuk Bendahara (opsional)</label>
+        <input name="catatan" maxlength="200" placeholder="Contoh: transfer dari rekening a.n. Bapak …"></div>
+    </div>`;
+
+    const paneGateway = `<div class="bayar-pane ${!pub.manual ? 'on' : ''}" data-bayar-pane="gateway">
+      <div class="portal-card" style="margin:0;padding:14px">
+        <b>Pembayaran QRIS otomatis</b>
+        <p class="muted small" style="margin:6px 0 0">Tekan <b>Bayar Sekarang</b> — sistem membuat QRIS dinamis sesuai total pilihan Anda.
+          Status tagihan otomatis menjadi <b>Lunas</b> setelah gateway mengonfirmasi pembayaran.</p>
+      </div>
+    </div>`;
+
+    return `<div class="portal-card">
+      <div class="portal-student" style="margin-bottom:12px">
+        <div><div class="pname">${esc(s.nama)}</div>
+          <div class="muted small">NISN ${esc(s.nisn || '-')} · Kelas ${esc(s.kelas_nama || '-')}</div></div>
+        <div style="text-align:right"><div class="badge ${totalSisa > 0 ? 'amber' : 'green'}">${totalSisa > 0 ? 'Sisa ' + esc(rupiah(totalSisa)) : 'Lunas'}</div></div>
+      </div>
+      ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
+      ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
+      ${(!pub.online && !pub.manual) ? `<div class="alert warn">${ui.icon('alert')}<div>Pembayaran daring belum diaktifkan sekolah. Silakan hubungi bendahara untuk melakukan pembayaran.</div></div>` : ''}
+      ${!items.length ? `<div class="alert ok">${ui.icon('check')}<div>Tidak ada tagihan yang perlu dibayar. Terima kasih.</div></div>` : `
+      <form method="post" action="${url(base, '/bayar')}" data-bayar-form>
+        ${identFields}
+        <input type="hidden" name="metode" value="${pub.manual ? 'manual' : 'gateway'}">
+        <div class="bayar-wrap">
+          ${groups.map(g => `<div class="bayar-group">
+            <h4>${esc(g.nama)} <span class="t-sub" style="text-transform:none;letter-spacing:0">(${esc(g.jenis === 'bulanan' ? 'bulanan' : 'non-bulanan')})</span></h4>
+            ${g.items.map(it => `<label class="bayar-item">
+              <input type="checkbox" name="item" value="${it.tagihan_id}:${it.bulan || 0}" data-bayar-item data-amount="${Number(it.nominal) || 0}">
+              <span class="bi-main"><span class="bi-lbl">${esc(it.label)}</span>
+                <span class="bi-sub">Sisa tagihan item ini</span></span>
+              <span class="bi-num">${esc(rupiah(it.nominal))}</span></label>`).join('')}
+          </div>`).join('')}
+          <div class="bayar-total">
+            <div>Total Pembayaran<div class="t-sub" style="font-weight:500"><span data-bayar-count>0 item dipilih</span></div></div>
+            <div class="val" data-bayar-total>Rp 0</div>
+          </div>
+          ${pilihMetode}
+          ${pub.manual ? paneManual : ''}
+          ${pub.online ? paneGateway : ''}
+          <div><button class="btn btn-primary btn-block" type="submit" data-bayar-submit disabled>${ui.icon('card')}Bayar Sekarang</button>
+            <p class="help center" style="margin-top:8px">Pembayaran diverifikasi bendahara dan otomatis masuk antrean pembukuan sekolah.</p></div>
+        </div>
+      </form>`}
+    </div>
+    ${riwayat.length ? `<div class="portal-card">
+      <h3>Riwayat Pembayaran Portal</h3>
+      <div class="table-wrap"><table class="tbl-modern"><thead><tr><th>Waktu</th><th class="num">Total</th><th>Metode</th><th>Status</th></tr></thead><tbody>
+        ${riwayat.map(x => `<tr><td class="t-sub">${esc(lib.stampShort(x.created_at))}</td><td class="num">${esc(rupiah(x.total))}</td>
+          <td>${x.metode === 'gateway' ? 'QRIS ' + esc(x.provider || '') : 'Transfer manual'}</td>
+          <td>${statusBadge(x.status)}${x.alasan ? `<div class="t-sub">${esc(x.alasan)}</div>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>
+    </div>` : ''}
+    <div class="center mt-2"><a class="btn" href="${url(base)}?${ident.token ? 'token=' + encodeURIComponent(ident.token) : 'nama=' + encodeURIComponent(ident.nama) + '&lahir=' + encodeURIComponent(ident.lahir)}">${ui.icon('file')}Kembali ke Rincian Tagihan</a></div>`;
+  }
+
+  /** halaman status pembayaran gateway (QRIS dinamis) */
+  function statusPage({ base, settings, ident, row, ok = '', err = '' }) {
+    const pub = bayar.publicCfg(dbm, saas);
+    let items = [];
+    try { items = JSON.parse(row.items || '[]'); } catch (e) { }
+    const qr = row.qr_string || '';
+    const qrImg = qr ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(qr)}` : '';
+    return `<div class="portal-card">
+      <h3>Status Pembayaran</h3>
+      <div class="alert ${row.status === 'lunas' ? 'ok' : row.status === 'ditolak' || row.status === 'batal' ? 'err' : 'warn'}">
+        ${ui.icon(row.status === 'lunas' ? 'check' : 'info')}
+        <div><b>${esc(row.nama || '')}</b> · ${statusBadge(row.status)}
+          <div class="small" style="margin-top:4px">Total ${esc(rupiah(row.total))} · ${row.metode === 'gateway' ? 'QRIS ' + esc(row.provider || '') : 'Transfer manual'} · ${esc(lib.stampShort(row.created_at))}</div>
+          ${row.alasan ? `<div class="small" style="margin-top:4px">Alasan: ${esc(row.alasan)}</div>` : ''}</div>
+      </div>
+      ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
+      ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}
+      <div class="table-wrap"><table class="tbl-modern"><thead><tr><th>Item Tagihan</th><th class="num">Nominal</th></tr></thead><tbody>
+        ${items.map(i => `<tr><td>${esc(i.label || '')}</td><td class="num">${esc(rupiah(i.nominal))}</td></tr>`).join('')}
+        <tfoot><tr><td>Total</td><td class="num">${esc(rupiah(row.total))}</td></tr></tfoot>
+      </tbody></table></div>
+      ${row.status === 'menunggu' && row.metode === 'gateway' ? `
+        <div class="qris-box mt-2">
+          ${qrImg ? `<img src="${esc(qrImg)}" alt="QRIS pembayaran" width="240" height="240" loading="lazy"
+            onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'qris-code',textContent:${JSON.stringify(qr)}}))">`
+        : '<div class="help">QRIS tidak tersedia — buka tautan pembayaran dari gateway.</div>'}
+          <div style="flex:1;min-width:200px">
+            <b>Pindai QRIS untuk membayar</b>
+            <p class="muted small" style="margin:6px 0">Nominal sudah termasuk seluruh item yang Anda pilih. Setelah membayar, tekan <b>Cek Status Pembayaran</b>.</p>
+            ${qr ? `<div class="qris-code">${esc(qr)}</div>` : ''}
+            ${row.checkout_url ? `<p style="margin-top:10px"><a class="btn btn-sm" href="${esc(row.checkout_url)}" target="_blank" rel="noopener">${ui.icon('link')}Buka Halaman Pembayaran</a></p>` : ''}
+            <form method="post" action="${url(base, '/bayar/cek')}" class="portal-pay-row mt-2">
+              <input type="hidden" name="order" value="${esc(row.order_id || '')}">
+              <input type="hidden" name="token" value="${esc(ident.token || '')}">
+              <input type="hidden" name="nama" value="${esc(ident.nama || '')}">
+              <input type="hidden" name="lahir" value="${esc(ident.lahir || '')}">
+              <button class="btn btn-primary btn-sm">${ui.icon('refresh')}Cek Status Pembayaran</button>
+            </form>
+            ${(row.provider === 'sandbox' || String(pub.provider) === 'sandbox') ? `<form method="post" action="${url(base, '/bayar/simulasi')}" class="mt-1">
+              <input type="hidden" name="order" value="${esc(row.order_id || '')}">
+              <input type="hidden" name="token" value="${esc(ident.token || '')}">
+              <input type="hidden" name="nama" value="${esc(ident.nama || '')}">
+              <input type="hidden" name="lahir" value="${esc(ident.lahir || '')}">
+              <button class="btn btn-sm">${ui.icon('check')}Simulasi Lunas (mode uji coba)</button>
+            </form>` : ''}
+          </div>
+        </div>` : ''}
+      <div class="center mt-2"><a class="btn" href="${bayarUrl(base, ident)}">${ui.icon('card')}Kembali ke Halaman Bayar</a></div>
     </div>`;
   }
 
@@ -268,10 +447,11 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
         }));
       }
       const students = [{ ...s, tags: dbm.iuranTagihanRows({ siswaId: s.id }) }];
+      const ident = { siswa: s, token: tokenRaw, nama: s.nama, lahir: s.tanggal_lahir || '' };
       return res.html(shell({
         base, settings, canonical, token: true,
         content: `<div class="alert ok">${ui.icon('check')}<div>Tautan pribadi terverifikasi — menampilkan tagihan <b>${esc(s.nama)}</b> (${esc(s.kelas_nama || '-')}).</div></div>`
-          + renderResults({ settings, base, students, pesanOk, pesanErr })
+          + renderResults({ settings, base, students, pesanOk, pesanErr, ident })
       }));
     }
     if (!nama && !lahirRaw) return res.html(shell({ base, settings, canonical, content: searchForm({ settings, base, err: pesanErr, ok: pesanOk }) }));
@@ -288,7 +468,8 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
       }));
     }
     const students = cands.map(s => ({ ...s, tags: dbm.iuranTagihanRows({ siswaId: s.id }) }));
-    res.html(shell({ base, settings, canonical, content: renderResults({ settings, base, students, pesanOk, pesanErr }) }));
+    const ident = { siswa: students[0], token: '', nama, lahir };
+    res.html(shell({ base, settings, canonical, content: renderResults({ settings, base, students, pesanOk, pesanErr, ident }) }));
   }
 
   get('/portal', handle);
@@ -323,5 +504,143 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
   post('/portal/cari', (req, res) => {
     const qs = new URLSearchParams({ nama: String(req.body.nama || ''), lahir: String(req.body.lahir || '') });
     res.redirect(url(req.BASE) + '?' + qs.toString().replace(/\+/g, '%20'));
+  });
+  /* ==================================================================
+     BAYAR IURAN — halaman & aksi (tanpa login, verifikasi identitas)
+     ================================================================== */
+  function appBase(req) {
+    const env = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
+    if (env) return env + req.BASE;
+    const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim() || 'https';
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    return host ? `${proto}://${host}${req.BASE}` : req.BASE;
+  }
+
+  get('/portal/bayar', (req, res) => {
+    const base = req.BASE;
+    const settings = dbm.settingsAll();
+    const ident = identOf(req.query);
+    if (!ident.siswa) {
+      return res.html(shell({
+        base, settings,
+        content: searchForm({
+          settings, base, nama: ident.nama, lahir: ident.lahir,
+          err: 'Sesi pencarian berakhir. Silakan cari data tagihan kembali dengan nama dan tanggal lahir siswa.'
+        })
+      }));
+    }
+    res.html(shell({
+      base, settings, token: !!ident.token, canonical: appBase(req) + '/' + slug() + '/bayar',
+      content: bayarPage({ base, settings, ident })
+    }));
+  });
+
+  post('/portal/bayar', async (req, res) => {
+    const base = req.BASE;
+    const settings = dbm.settingsAll();
+    const ident = identOf(req.body);
+    if (!ident.siswa) {
+      return res.html(shell({
+        base, settings,
+        content: searchForm({ settings, base, err: 'Sesi pencarian berakhir. Silakan cari data tagihan kembali lalu ulangi pembayaran.' })
+      }));
+    }
+    const s = ident.siswa;
+    const back = bayarUrl(base, ident);
+    try {
+      const pub = bayar.publicCfg(dbm, saas);
+      const picked = bayar.pickItems(dbm, s.id, req.body.item);
+      const items = picked.items, total = picked.total;
+      if (!items.length || !(total > 0)) throw new Error('Pilih minimal satu tagihan yang akan dibayar.');
+      const metode = String(req.body.metode || 'manual') === 'gateway' ? 'gateway' : 'manual';
+      if (metode === 'gateway' && !pub.online) throw new Error('Pembayaran QRIS otomatis belum diaktifkan sekolah.');
+      if (metode === 'manual' && !pub.manual) throw new Error('Pembayaran transfer manual belum diaktifkan sekolah.');
+      const taId = (dbm.activeTahun() || {}).id;
+      let id, row;
+      if (metode === 'gateway') {
+        id = await bayar.createGateway({
+          dbm, saas, tenant: req.tenant, siswa: s, items, total, taId, baseUrl: appBase(req)
+        });
+        row = bayar.byId(dbm, id);
+      } else {
+        const b64 = String(req.body.bukti_b64 || '');
+        if (b64.length < 40) throw new Error('Bukti pembayaran wajib diunggah sebelum mengirim.');
+        const nm = String(req.body.bukti_nama || 'bukti-pembayaran');
+        const ext = (nm.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+        const buktiUrl = await uploadMedia(b64, `bukti-iuran-${s.id}-${Date.now()}.${ext}`, { jenis: 'bukti' });
+        id = bayar.createManual({
+          dbm, siswa: s, items, total, buktiUrl, buktiNama: nm,
+          catatan: String(req.body.catatan || '').slice(0, 200), taId
+        });
+        row = bayar.byId(dbm, id);
+      }
+      dbm.logAudit(null, metode === 'gateway' ? 'BAYAR IURAN ONLINE' : 'BAYAR IURAN MANUAL', 'iuran',
+        `Portal orang tua: ${s.nama} · ${lib.rupiah(total)} · ${items.length} item · ${metode}`);
+      if (metode === 'gateway') {
+        return res.redirect(req.BASE + bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(row.order_id || ''));
+      }
+      return res.redirect(req.BASE + back + '&ok=' + encodeURIComponent(
+        `Terima kasih! Pembayaran ${lib.rupiah(total)} sudah dikirim dan menunggu verifikasi bendahara sekolah.`));
+    } catch (e) {
+      return res.redirect(req.BASE + back + '&err=' + encodeURIComponent(e.message));
+    }
+  });
+
+  get('/portal/bayar/status', (req, res) => {
+    const base = req.BASE;
+    const settings = dbm.settingsAll();
+    const ident = identOf(req.query);
+    const order = String(req.query.get('order') || '');
+    const row = ident.siswa ? bayar.byOrder(dbm, order) : null;
+    if (!row || Number(row.siswa_id) !== Number(ident.siswa.id)) {
+      return res.html(shell({
+        base, settings, token: !!ident.token,
+        content: searchForm({ settings, base, err: 'Transaksi pembayaran tidak ditemukan. Silakan cari data tagihan kembali.' })
+      }));
+    }
+    res.html(shell({
+      base, settings, token: !!ident.token, canonical: appBase(req) + '/' + slug() + '/bayar',
+      content: statusPage({ base, settings, ident, row, ok: String(req.query.get('ok') || ''), err: String(req.query.get('err') || '') })
+    }));
+  });
+
+  post('/portal/bayar/cek', async (req, res) => {
+    const base = req.BASE;
+    const ident = identOf(req.body);
+    const back = bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(String(req.body.order || ''));
+    const row = ident.siswa ? bayar.byOrder(dbm, String(req.body.order || '')) : null;
+    if (!row || Number(row.siswa_id) !== Number(ident.siswa.id)) {
+      return res.redirect(req.BASE + bayarUrl(base, ident) + '&err=' + encodeURIComponent('Transaksi pembayaran tidak ditemukan.'));
+    }
+    try {
+      const r = await bayar.syncGateway(dbm, saas, row);
+      if (r.paid) {
+        dbm.logAudit(null, 'BAYAR IURAN ONLINE', 'iuran', `Gateway mengonfirmasi lunas: ${row.nama} ${lib.rupiah(row.total)}`);
+        return res.redirect(req.BASE + back + '&ok=' + encodeURIComponent('Pembayaran terkonfirmasi LUNAS. Tagihan Anda sudah diperbarui.'));
+      }
+      return res.redirect(req.BASE + back + '&err=' + encodeURIComponent(
+        'Pembayaran belum terkonfirmasi' + (r.gateway_status ? ` (status: ${r.gateway_status})` : '') + '. Selesaikan pembayaran lalu cek kembali.'));
+    } catch (e) {
+      return res.redirect(req.BASE + back + '&err=' + encodeURIComponent(e.message));
+    }
+  });
+
+  post('/portal/bayar/simulasi', (req, res) => {
+    const base = req.BASE;
+    const ident = identOf(req.body);
+    const back = bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(String(req.body.order || ''));
+    const row = ident.siswa ? bayar.byOrder(dbm, String(req.body.order || '')) : null;
+    if (!row || Number(row.siswa_id) !== Number(ident.siswa.id)) {
+      return res.redirect(req.BASE + bayarUrl(base, ident) + '&err=' + encodeURIComponent('Transaksi pembayaran tidak ditemukan.'));
+    }
+    try {
+      const conf = bayar.cfg(dbm, saas);
+      if (String(conf.provider) !== 'sandbox') throw new Error('Simulasi hanya tersedia pada provider "Simulasi".');
+      bayar.applyPaid(dbm, row, { oleh: 'Simulasi Pembayaran', gatewayStatus: 'PAID' });
+      dbm.logAudit(null, 'BAYAR IURAN ONLINE', 'iuran', `Simulasi lunas: ${row.nama} ${lib.rupiah(row.total)}`);
+      res.redirect(req.BASE + back + '&ok=' + encodeURIComponent('Simulasi berhasil — pembayaran ditandai LUNAS.'));
+    } catch (e) {
+      res.redirect(req.BASE + back + '&err=' + encodeURIComponent(e.message));
+    }
   });
 };

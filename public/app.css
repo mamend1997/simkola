@@ -1182,3 +1182,119 @@ html[data-mode="dark"] .tabbar button:hover,html[data-mode="dark"] .tabbar butto
   .toolbar .flex{flex-wrap:wrap;min-width:0}
   .toolbar .flex>*{min-width:0;max-width:100%}
 }
+
+/* =====================================================================
+   Sidebar interaktif: hover-to-expand (fly-out) + sakelar preferensi
+   ---------------------------------------------------------------------
+   Saat menu samping DILIPAT (class .nav-collapsed), mengarahkan kursor ke
+   area sidebar akan menampilkan panel penuh sebagai lapisan di atas konten
+   (tidak menggeser tata letak). Perilaku ini dapat dimatikan pengguna lewat
+   sakelar di kaki sidebar (tersimpan di localStorage browser).
+   ===================================================================== */
+.sb-inner{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.sidebar{overflow:visible}
+.sb-switch{display:flex;align-items:center;gap:9px;font-size:11.5px;line-height:1.35;color:var(--ink-2);
+  cursor:pointer;margin-bottom:8px;user-select:none}
+.sb-switch input{appearance:none;-webkit-appearance:none;width:34px;height:19px;border:0;border-radius:99px;
+  background:#E2D8D0;position:relative;flex:0 0 34px;cursor:pointer;transition:background .18s;margin:0}
+.sb-switch input::after{content:'';position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:transform .18s}
+.sb-switch input:checked{background:var(--o-500)}
+.sb-switch input:checked::after{transform:translateX(15px)}
+.shell.nav-collapsed .sb-switch{justify-content:center;margin-bottom:6px}
+.shell.nav-collapsed .sb-switch .sb-switch-txt{display:none}
+@media (min-width:981px){
+  .shell.nav-collapsed.hover-open .sb-inner{
+    position:absolute;top:0;left:0;height:100vh;width:264px;z-index:90;
+    background:rgba(255,255,255,.98);border-right:1px solid var(--line);
+    backdrop-filter:blur(18px) saturate(160%);
+    box-shadow:0 24px 60px rgba(42,26,18,.24);display:flex;flex-direction:column;
+  }
+  .shell.nav-collapsed.hover-open .brand{padding:22px 20px 16px;justify-content:flex-start}
+  .shell.nav-collapsed.hover-open .brand>div:not(.brand-mark){display:block}
+  .shell.nav-collapsed.hover-open .nav{padding:6px 12px 20px}
+  .shell.nav-collapsed.hover-open .nav-toggle{justify-content:flex-start;padding:9px 12px}
+  .shell.nav-collapsed.hover-open .nav-toggle .nav-tg-txt{display:inline}
+  .shell.nav-collapsed.hover-open .nav-toggle .chev{display:block}
+  .shell.nav-collapsed.hover-open .nav a{justify-content:flex-start;padding:9.5px 12px}
+  .shell.nav-collapsed.hover-open .nav-sec a{padding:8px 10px}
+  .shell.nav-collapsed.hover-open .nav a span:not(.pill){display:inline}
+  .shell.nav-collapsed.hover-open .nav a .pill{position:static;transform:none;font-size:10.5px;padding:2px 7px}
+  .shell.nav-collapsed.hover-open .nav-sec{display:block !important}
+  .shell.nav-collapsed.hover-open .nav-single a span{display:inline}
+  .shell.nav-collapsed.hover-open .side-foot{text-align:left;font-size:11.5px;padding:14px}
+  .shell.nav-collapsed.hover-open .sb-switch{justify-content:flex-start}
+  .shell.nav-collapsed.hover-open .sb-switch .sb-switch-txt{display:inline}
+}
+html[data-mode="dark"] .shell.nav-collapsed.hover-open .sb-inner{background:rgba(24,20,40,.98)}
+html[data-mode="dark"] .sb-switch input{background:#4A4166}
+
+/* ---------- lonceng notifikasi ---------- */
+.notif-bell{position:relative}
+.notif-bell summary{list-style:none;cursor:pointer;position:relative}
+.notif-bell summary::-webkit-details-marker{display:none}
+.notif-panel{position:absolute;right:0;top:calc(100% + 10px);width:min(380px,calc(100vw - 28px));z-index:120;
+  background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 60px -20px rgba(42,26,18,.45);
+  overflow:hidden}
+.nf-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;
+  border-bottom:1px solid var(--line);background:#FFF8F2}
+.nf-item{display:block;padding:11px 14px;border-bottom:1px solid var(--line);color:inherit;text-decoration:none}
+.nf-item:hover{background:var(--o-50)}
+.nf-item.unread{background:#FFFAF4}
+.nf-item.unread .nf-t::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--o-500);margin-right:7px;vertical-align:middle}
+.nf-t{font-weight:700;font-size:12.8px;line-height:1.35}
+.nf-s{font-size:11.8px;color:var(--muted);line-height:1.45;margin-top:2px}
+.nf-d{font-size:10.5px;color:#B0A092;margin-top:3px}
+.nf-empty{padding:18px 14px;font-size:12px;color:var(--muted);text-align:center}
+.nf-foot{padding:9px 14px;background:#FFF8F2;font-size:12px;font-weight:600}
+html[data-mode="dark"] .notif-panel{background:#221D36;border-color:#3A3355}
+html[data-mode="dark"] .nf-head,html[data-mode="dark"] .nf-foot{background:#2A2440}
+html[data-mode="dark"] .nf-item{border-color:#3A3355}
+html[data-mode="dark"] .nf-item.unread{background:#2E2749}
+
+/* =====================================================================
+   Portal orang tua — modul bayar iuran mandiri
+   ===================================================================== */
+.bayar-wrap{display:grid;gap:16px}
+.bayar-item{display:flex;align-items:flex-start;gap:11px;padding:10px 12px;border:1px solid var(--line);
+  border-radius:12px;background:#fff}
+.bayar-item:hover{border-color:var(--o-300);background:var(--o-50)}
+.bayar-item input[type=checkbox]{width:18px;height:18px;margin-top:2px;flex:0 0 18px;accent-color:#EA580C;cursor:pointer}
+.bayar-item .bi-main{flex:1;min-width:0}
+.bayar-item .bi-lbl{font-weight:650;font-size:13px;line-height:1.35}
+.bayar-item .bi-sub{font-size:11.5px;color:var(--muted)}
+.bayar-item .bi-num{font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:13px}
+.bayar-group{border:1px solid var(--line);border-radius:14px;padding:12px;background:#FFFCF9}
+.bayar-group h4{margin:0 0 8px;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;color:#8A4A18}
+.bayar-total{position:sticky;bottom:0;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:linear-gradient(135deg,#FFF3E6,#FFE9D6);border:1px solid #F0C9A3;border-radius:14px;
+  padding:12px 16px;font-weight:800}
+.bayar-total .val{font-size:22px;color:#B4460B;font-variant-numeric:tabular-nums}
+.bayar-method{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:4px 0 12px}
+.bayar-method button{border:1.5px solid var(--line);background:#fff;border-radius:13px;padding:12px 14px;
+  text-align:left;cursor:pointer;font-family:inherit;font-size:12.5px;line-height:1.35;color:var(--ink-2)}
+.bayar-method button.on{border-color:var(--o-500);background:var(--o-50);box-shadow:0 8px 20px -14px rgba(234,88,12,.9)}
+.bayar-method button b{display:block;font-size:13.5px;color:var(--ink);margin-bottom:2px}
+.bayar-pane{display:none}
+.bayar-pane.on{display:block}
+.qris-box{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;background:#fff;border:1px dashed var(--line-2);
+  border-radius:14px;padding:14px}
+.qris-box img{width:220px;height:220px;object-fit:contain;background:#fff;border-radius:10px;border:1px solid var(--line);padding:6px}
+.qris-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;word-break:break-all;
+  background:#FFF8F2;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-top:8px}
+.portal-pay-row{display:flex;gap:8px;flex-wrap:wrap}
+@media (max-width:520px){
+  .bayar-total .val{font-size:19px}
+  .qris-box img{width:100%;height:auto;max-width:260px}
+}
+
+/* balasan pihak sekolah pada catatan orang tua (rekap & portal) */
+.pn-reply{margin-top:8px;background:#F1F8F2;border:1px solid #CBE7CF;border-radius:10px;padding:8px 11px;font-size:12.5px;line-height:1.5}
+.pn-reply-lbl{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#2F7A3B;margin-bottom:3px}
+.catatan-reply{display:inline-block;vertical-align:top}
+.catatan-reply>summary{list-style:none;cursor:pointer}
+.catatan-reply>summary::-webkit-details-marker{display:none}
+.catatan-reply[open]{display:block;margin-top:6px}
+html[data-mode="dark"] .pn-reply{background:#1E3A24;border-color:#2F5C39;color:#D7EFDB}
+html[data-mode="dark"] .pn-reply-lbl{color:#8FD69C}

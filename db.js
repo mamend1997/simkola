@@ -408,6 +408,17 @@ CREATE TABLE IF NOT EXISTS portal_pesan (
   sumber TEXT DEFAULT 'siswa', ref TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pp_status ON portal_pesan(status);
+/* ---------- notifikasi internal (lonceng pada header) ----------
+   untuk = kode role penerima ('super_admin', 'kepala_sekolah', 'staff', 'semua').
+   Dipakai modul pembayaran iuran portal agar bendahara langsung tahu ada
+   pembayaran manual baru yang menunggu verifikasi. */
+CREATE TABLE IF NOT EXISTS notif (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  untuk TEXT NOT NULL DEFAULT 'super_admin',
+  jenis TEXT, judul TEXT, isi TEXT, href TEXT, ref TEXT,
+  dibaca INTEGER NOT NULL DEFAULT 0, created_at TEXT, baca_at TEXT, baca_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notif_baca ON notif(untuk, dibaca, id);
 /* catatan / laporan kekeliruan dari pegawai (login) kepada bendahara */
 CREATE TABLE IF NOT EXISTS catatan_pegawai (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, nama TEXT NOT NULL, jabatan TEXT,
@@ -524,6 +535,26 @@ CREATE TABLE IF NOT EXISTS iuran_bayar (
 );
 CREATE INDEX IF NOT EXISTS idx_iuran_bayar_tag ON iuran_bayar(tagihan_id);
 CREATE INDEX IF NOT EXISTS idx_iuran_bayar_tgl ON iuran_bayar(tanggal);
+/* ---------- pembayaran iuran mandiri dari portal orang tua ----------
+   Satu baris = satu keranjang pembayaran (bisa beberapa item tagihan/bulan).
+   status: 'menunggu' (menunggu pembayaran gateway / verifikasi bendahara),
+           'lunas' (diverifikasi bendahara atau callback gateway sukses),
+           'ditolak' (bukti tidak sah), 'batal' (kedaluwarsa / dibatalkan).
+   Saat lunas, rincian item dipecah menjadi baris iuran_bayar status 'pending'
+   sehingga otomatis muncul di Antrean Posting Iuran. */
+CREATE TABLE IF NOT EXISTS iuran_checkout (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  siswa_id INTEGER, nama TEXT, kelas TEXT,
+  items TEXT, total REAL NOT NULL DEFAULT 0,
+  metode TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL DEFAULT 'menunggu',
+  provider TEXT, order_id TEXT, gateway_status TEXT,
+  qr_string TEXT, qr_url TEXT, checkout_url TEXT, expires_at TEXT,
+  bukti_url TEXT, bukti_nama TEXT, catatan TEXT, alasan TEXT,
+  ta_id INTEGER, created_at TEXT, paid_at TEXT, verified_by TEXT, verified_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_iuran_co_status ON iuran_checkout(status, id);
+CREATE INDEX IF NOT EXISTS idx_iuran_co_order ON iuran_checkout(order_id);
 CREATE TABLE IF NOT EXISTS ekskul_honor (
   id INTEGER PRIMARY KEY AUTOINCREMENT, periode TEXT, nama_pembina TEXT NOT NULL,
   kehadiran REAL NOT NULL DEFAULT 0, harga_satuan REAL NOT NULL DEFAULT 0,
@@ -856,6 +887,19 @@ const BKU_KEGIATAN = ['BKU UKK', 'BKU PKL', 'BKU SPMB', 'BKU Bantuan', 'BKU PSTS
 /** 5 buku pembantu/rekap — saldo TIDAK diinput manual, hanya menerima rekapitulasi otomatis dari transaksi */
 const BKU_AUTO_NAMES = ['Buku Kas Pembantu Bank', 'Buku Pembantu Pajak', 'Buku Pembantu Tunai', 'Rekapitulasi Barang Habis Pakai', 'Barang Modal'];
 const isAutoBkuNama = n => BKU_AUTO_NAMES.includes(String(n || ''));
+/**
+ * Kode BKU otomatis berikutnya berdasarkan urutan yang sudah ada.
+ * Umum → U01, U02, … · Kegiatan → K01, K02, …
+ */
+function nextBkuKode(jenis) {
+  const pref = String(jenis || 'umum') === 'kegiatan' ? 'K' : 'U';
+  let max = 0;
+  for (const r of db.prepare('SELECT kode FROM bku WHERE kode LIKE ?').all(pref + '%')) {
+    const m = /(\d+)\s*$/.exec(String(r.kode || ''));
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return pref + String(max + 1).padStart(2, '0');
+}
 
 function bootstrap() {
   /* database benar-benar baru (belum punya tabel) → semua data ditulis dengan
@@ -921,6 +965,20 @@ function bootstrap() {
       portal_aktif: '1',
       portal_pegawai_aktif: '1',
       portal_slip_aktif: '1',
+      /* ---- pembayaran iuran mandiri dari portal orang tua ---- */
+      bayar_gateway_aktif: '0',        // 1 = tombol bayar QRIS/gateway tampil di portal
+      bayar_manual_aktif: '1',         // 1 = opsi transfer manual + unggah bukti
+      bayar_provider: 'sandbox',        // sandbox | midtrans | duitku | xendit | kasera
+      bayar_mode: 'sandbox',
+      bayar_merchant: '',
+      bayar_key: '',
+      bayar_key2: '',
+      bayar_callback: '',
+      bayar_base: '',
+      bayar_expire_menit: '60',
+      bayar_instruksi: 'Transfer sesuai total tagihan yang dipilih ke rekening sekolah, lalu unggah bukti pembayaran pada formulir di bawah.',
+      qris_image: '',                   // gambar QRIS statis sekolah (opsional)
+      notif_bayar_aktif: '1',
       // teks halaman portal publik (kosong = memakai default Super Admin)
       portal_page_title: '',
       portal_subtitle: '',
@@ -1293,6 +1351,9 @@ function bootstrap() {
     const ppCols = db.prepare('PRAGMA table_info(portal_pesan)').all().map(c => c.name);
     if (!ppCols.includes('sumber')) db.exec("ALTER TABLE portal_pesan ADD COLUMN sumber TEXT DEFAULT 'siswa'");
     if (!ppCols.includes('ref')) db.exec('ALTER TABLE portal_pesan ADD COLUMN ref TEXT');
+    /* balasan pihak sekolah atas catatan orang tua (modul Rekap Catatan Orang Tua) */
+    for (const [col, ddl] of [['balasan', 'TEXT'], ['balas_oleh', 'TEXT'], ['balas_at', 'TEXT']])
+      if (!ppCols.includes(col)) db.exec(`ALTER TABLE portal_pesan ADD COLUMN ${col} ${ddl}`);
 
     // default ukuran kertas & kop (DB lama yang belum punya)
     {
@@ -2304,6 +2365,31 @@ function totalSaldoDana(tahunId) {
  * - Akun pinjaman & aset lain: dibuat ulang dengan saldo = saldo akhir sebelumnya
  * - Piutang pegawai & piutang sertifikasi yang belum lunas: dicatat sebagai saldo awal (carry forward)
  */
+/**
+ * Salin daftar BKU dari tahun ajaran sebelumnya (nama, jenis, kode, urutan,
+ * penanda buku pembantu otomatis). Saldo awal 0 — pengisian saldo dilakukan
+ * oleh rolloverTa() bila opsi rollover dipilih.
+ */
+function cloneBkuTa(prevTaId, newTaId, opts = {}) {
+  const prev = tahunById(prevTaId), next = tahunById(newTaId);
+  if (!prev || !next || prev.id === next.id) return { bku: 0 };
+  let n = 0;
+  const ins = db.prepare(`INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at,auto_mode)
+    VALUES (?,?,?,?,?,'aktif',?,?,?)`);
+  db.transaction(() => {
+    let urut = 0;
+    for (const b of db.prepare('SELECT * FROM bku WHERE tahun_ajaran_id=? ORDER BY urutan, id').all(prev.id)) {
+      urut++;
+      const exist = db.prepare('SELECT id FROM bku WHERE tahun_ajaran_id=? AND nama=?').get(next.id, b.nama);
+      if (exist) continue;
+      ins.run(b.nama, b.jenis || 'umum', b.kode || '', next.id,
+        Number(opts.saldo ? b.saldo_awal : 0) || 0, b.urutan || urut, nowStamp(), Number(b.auto_mode) ? 1 : 0);
+      n++;
+    }
+  })();
+  return { bku: n };
+}
+
 function rolloverTa(prevTaId, newTaId, user) {
   const prev = tahunById(prevTaId), next = tahunById(newTaId);
   if (!prev || !next || prev.id === next.id) return { bku: 0, aset: 0, piutang: 0, piutangLain: 0 };
@@ -4154,6 +4240,58 @@ function portalPesanList(opts = {}) {
 function portalPesanCount() {
   return db.prepare("SELECT COUNT(*) c FROM portal_pesan WHERE status='baru'").get().c;
 }
+/** balasan pihak sekolah atas catatan orang tua (tidak mengubah isi catatan asli) */
+function portalPesanReply(id, balasan, oleh, statusAfter) {
+  const st = ['baru', 'selesai'].includes(String(statusAfter)) ? String(statusAfter) : 'selesai';
+  const info = db.prepare('UPDATE portal_pesan SET balasan=?, balas_oleh=?, balas_at=?, status=?, selesai_at=?, selesai_by=? WHERE id=?')
+    .run(String(balasan || ''), String(oleh || ''), nowStamp(), st,
+      st === 'selesai' ? nowStamp() : null, st === 'selesai' ? String(oleh || '') : null, Number(id) || 0);
+  return info.changes > 0;
+}
+/** hapus balasan (catatan kembali berstatus baru) */
+function portalPesanReplyClear(id, oleh) {
+  const info = db.prepare("UPDATE portal_pesan SET balasan=NULL, balas_oleh=NULL, balas_at=NULL, status='baru', selesai_at=NULL, selesai_by=NULL WHERE id=?")
+    .run(Number(id) || 0);
+  return info.changes > 0;
+}
+
+/* ==================================================================
+   NOTIFIKASI INTERNAL (lonceng header)
+   ------------------------------------------------------------------
+   Baris ditujukan ke satu role (default bendahara = super_admin).
+   Dibaca/ditandai per role (semua pengguna role tersebut melihat daftar
+   yang sama) — cukup untuk notifikasi operasional seperti pembayaran
+   manual baru dari portal orang tua.
+   ================================================================== */
+function notifAdd({ untuk = 'super_admin', jenis = 'umum', judul = '', isi = '', href = '', ref = '' }) {
+  const info = db.prepare(`INSERT INTO notif (untuk,jenis,judul,isi,href,ref,dibaca,created_at)
+    VALUES (?,?,?,?,?,?,0,?)`).run(String(untuk || 'super_admin'), String(jenis || 'umum').slice(0, 40),
+    String(judul || '').slice(0, 200), String(isi || '').slice(0, 500),
+    String(href || ''), String(ref === undefined || ref === null ? '' : ref), nowStamp());
+  return Number(info.lastInsertRowid);
+}
+function notifTargets(role) {
+  return [String(role || 'staff'), 'semua'];
+}
+function notifList(role, opts = {}) {
+  const targets = notifTargets(role);
+  const args = [...targets];
+  let sql = `SELECT * FROM notif WHERE untuk IN (${targets.map(() => '?').join(',')})`;
+  if (opts.hanyaBaru) sql += ' AND dibaca=0';
+  sql += ' ORDER BY id DESC LIMIT ' + (Number(opts.limit) || 20);
+  return db.prepare(sql).all(...args);
+}
+function notifCount(role) {
+  const targets = notifTargets(role);
+  return db.prepare(`SELECT COUNT(*) c FROM notif WHERE untuk IN (${targets.map(() => '?').join(',')}) AND dibaca=0`).get(...targets).c;
+}
+function notifRead(role, id, oleh) {
+  const targets = notifTargets(role);
+  if (id) return db.prepare(`UPDATE notif SET dibaca=1, baca_at=?, baca_by=? WHERE id=? AND untuk IN (${targets.map(() => '?').join(',')})`)
+    .run(nowStamp(), String(oleh || ''), Number(id) || 0, ...targets).changes;
+  return db.prepare(`UPDATE notif SET dibaca=1, baca_at=?, baca_by=? WHERE untuk IN (${targets.map(() => '?').join(',')}) AND dibaca=0`)
+    .run(nowStamp(), String(oleh || ''), ...targets).changes;
+}
 
 /* ==================================================================
    CATATAN PEGAWAI → BENDAHARA
@@ -4470,6 +4608,7 @@ module.exports = {
   portalSlugs, portalSlugIsCustom, resetPortalSlugCache, portalDefaultAlias, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
+  portalPesanReply, portalPesanReplyClear, notifAdd, notifList, notifCount, notifRead, cloneBkuTa, nextBkuKode,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,
   beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData,
   // tampilan (tema, branding, penataan menu) + petunjuk pengguna
