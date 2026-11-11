@@ -107,7 +107,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('modal menampilkan nominal tunggakan', /Rp/.test(infoTxt), infoTxt.slice(0, 160));
   const previewTxt = await page.locator('#waSatuPreview').innerText();
   ok('pratinjau pesan berisi nama siswa', /Budi Santoso|Siti|Joko|Dewi/.test(previewTxt), previewTxt.slice(0, 160));
-  ok('pratinjau pesan memuat tautan portal bertoken', /\/portal\?token=\d+\.[a-f0-9]{32}/.test(previewTxt), previewTxt.slice(-160));
+  ok('pratinjau pesan memuat tautan portal bertoken', /\/portal-tagihan\?token=\d+\.[a-f0-9]{32}/.test(previewTxt), previewTxt.slice(-160));
   // ganti template → textarea berubah
   const tplOpts = await page.locator('#waSatuTpl option').allTextContents();
   if (tplOpts.length > 2) {

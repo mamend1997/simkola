@@ -190,6 +190,10 @@ const textOf = html => String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '
     db.prepare('SELECT COUNT(DISTINCT tahun_ajaran_id) c FROM iuran_tagihan WHERE siswa_id=?').get(siswa.id).c === 2,
     String(db.prepare('SELECT COUNT(DISTINCT tahun_ajaran_id) c FROM iuran_tagihan WHERE siswa_id=?').get(siswa.id).c));
   r = await req('GET', `/portal?nama=${encodeURIComponent('Andi Pratama')}&lahir=2010-02-02`, null, { public: true });
+  /* ronde 43: alamat /portal dialihkan ke /<nama-sekolah>/portal-tagihan */
+  if ([301, 302, 303, 307, 308].includes(r.status) && r.loc) {
+    r = await req('GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, { public: true });
+  }
   const order = [...r.text.matchAll(/Tahun Pelajaran (\d{4}\/\d{4})/g)].map(x => x[1]);
   ok('portal menampilkan 2 tahun pelajaran', order.length === 2, order.join(', '));
   ok('urutan tahun pelajaran TERLAMA di atas', order[0] === '2020/2021' && order[1] === ta.nama, order.join(' → '));

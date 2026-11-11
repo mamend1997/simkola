@@ -19,13 +19,25 @@ srv.stderr.on('data', d => { log += d; });
 const base = `http://127.0.0.1:${PORT}`;
 const results = [];
 const ok = (n, c, e = '') => { results.push({ n, ok: !!c }); if (!c) console.log('FAIL:', n, e); };
-async function req(method, url, body, opt = {}) {
+async function reqRaw(method, url, body, opt = {}) {
   const headers = {};
   let payload = null;
   if (body) { payload = new URLSearchParams(body).toString(); headers['Content-Type'] = 'application/x-www-form-urlencoded'; }
   const r = await fetch(base + url, { method, headers, body: payload, redirect: 'manual' });
   return { status: r.status, text: await r.text(), loc: r.headers.get('location') || '' };
 }
+
+/* ronde 43: alamat portal publik berpindah ke /<nama-sekolah>/<sub-slug>.
+   Permintaan GET ke alamat lama (/portal…) dialihkan 302 — helper ini mengikutinya. */
+async function portalFollow43(method, url, body, opt) {
+  let r = await reqRaw(method, url, body, opt);
+  if (method !== 'GET' || !/^\/portal(-|$|\?|\/)/.test(String(url || ''))) return r;
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(r.status) && r.loc; i++) {
+    r = await reqRaw('GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  }
+  return r;
+}
+const req = (...a) => portalFollow43(...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
@@ -60,7 +72,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   /* ---------- 2. default = periode bulan berjalan / terakhir tersedia ---------- */
   ok('tersedia dropdown Bulan', /name="bulan"/.test(r.text) && /<option value="1"/.test(r.text));
   ok('tersedia dropdown Tahun', /name="tahun"/.test(r.text) && /name="bulan" data-autosubmit/.test(r.text));
-  ok('dropdown terhubung ke /portal-slip/hasil', /action="\/portal-slip\/hasil"/.test(r.text));
+  ok('dropdown terhubung ke halaman hasil portal slip', /action="[^"]*\/hasil"/.test(r.text), (r.text.match(/action="[^"]*hasil[^"]*"/) || [])[0]);
   const aktifDefault = (/Periode aktif: ([A-Za-z]+ \d{4})/.exec(r.text) || [])[1] || '';
   const harapDefault = now.getFullYear() + '/'; // placeholder
   // periode default harus periode terbaru yang ada datanya (karena bulan berjalan belum diinput)

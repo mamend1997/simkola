@@ -93,7 +93,7 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
   ok('login: tanpa tautan Super Admin Pusat', !/super-admin\/login/.test(r.text));
   ok('login: tanpa branding logo sekolah (pakai default sistem)', !/auth-logo-img/.test(r.text) || /SVG/.test(r.text) === false);
   r = await req('GET', '/portal');
-  ok('/portal masih bisa dibuka langsung (tidak ditautkan)', r.status === 200);
+  ok('/portal dialihkan ke alamat lengkap (bukan halaman di akar)', [301, 302, 303, 307, 308].includes(r.status) && /portal-tagihan/.test(r.loc || ''), r.status + ' ' + (r.loc || ''));
   r = await req('GET', '/super-admin/login');
   ok('/super-admin tetap ada sebagai route khusus', r.status === 200 && /Super Admin Pusat/.test(r.text));
 

@@ -27,7 +27,7 @@ const base = `http://127.0.0.1:${PORT}`;
 let cookie = '';
 const results = [];
 function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra }); if (!cond) console.log('FAIL', name, extra); }
-async function req(method, url, body, opt = {}) {
+async function reqRaw(method, url, body, opt = {}) {
   const headers = {};
   if (cookie && !opt.public) headers.Cookie = cookie;
   let payload = null;
@@ -45,6 +45,18 @@ async function req(method, url, body, opt = {}) {
   const text = await r.text();
   return { status: r.status, text, headers: r.headers, loc: r.headers.get('location') || '' };
 }
+
+/* ronde 43: alamat portal publik berpindah ke /<nama-sekolah>/<sub-slug>.
+   Permintaan GET ke alamat lama (/portal…) dialihkan 302 — helper ini mengikutinya. */
+async function portalFollow43(method, url, body, opt) {
+  let r = await reqRaw(method, url, body, opt);
+  if (method !== 'GET' || !/^\/portal(-|$|\?|\/)/.test(String(url || ''))) return r;
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(r.status) && r.loc; i++) {
+    r = await reqRaw('GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  }
+  return r;
+}
+const req = (...a) => portalFollow43(...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const today = new Date().toISOString().slice(0, 10);
 const periodeNow = today.slice(0, 7);

@@ -2272,4 +2272,19 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       apply();
     });
   })();
+
+  /* ===================================================================
+     Tutup BKU MASAAL: tampilkan panel opnam saat Opsi B dipilih
+     =================================================================== */
+  (function massalOpnam() {
+    const radios = $$('input[name="metode_massal"]');
+    if (!radios.length) return;
+    const panels = $$('[data-massal-opnam]');
+    const apply = () => {
+      const opnam = radios.some(r => r.checked && r.value === 'opnam');
+      panels.forEach(p => { p.style.display = opnam ? '' : 'none'; });
+    };
+    radios.forEach(r => r.addEventListener('change', apply));
+    apply();
+  })();
 })();

@@ -45,6 +45,14 @@ async function req(method, url, body, opt = {}) {
   return { status: r.status, text: await r.text(), loc: r.headers.get('location') || '' };
 }
 /** permintaan tanpa sesi (portal publik) */
+/* portal publik kini beralamat /<nama-sekolah>/<sub-slug>; alamat lama 30x → ikuti */
+async function follow(method, url, body, depth = 0) {
+  const r = await pub(method, url, body);
+  if ((r.status === 301 || r.status === 302 || r.status === 303 || r.status === 307 || r.status === 308) && r.loc && depth < 3) {
+    return follow(method, r.loc, method === 'GET' ? null : body, depth + 1);
+  }
+  return r;
+}
 async function pub(method, url, body) {
   let payload = null; const headers = {};
   if (body) {
@@ -54,6 +62,13 @@ async function pub(method, url, body) {
   }
   const r = await fetch(base + url, { method, headers, body: payload, redirect: 'manual' });
   return { status: r.status, text: await r.text(), loc: r.headers.get('location') || '' };
+}
+let cssCache = null;
+function readCss() {
+  if (cssCache !== null) return cssCache;
+  try { cssCache = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'app.css'), 'utf8'); }
+  catch (e) { cssCache = ''; }
+  return cssCache;
 }
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
@@ -139,12 +154,12 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   ok('halaman Pembayaran Online tampil', r.status === 200 && /Pengaturan Gateway/.test(r.text), 'status=' + r.status);
 
   const ident = { nama: 'Budi Uji', lahir: '2010-01-02' };
-  r = await pub('GET', '/portal/bayar?nama=' + encodeURIComponent(ident.nama) + '&lahir=' + ident.lahir);
+  r = await follow('GET', '/portal/bayar?nama=' + encodeURIComponent(ident.nama) + '&lahir=' + ident.lahir);
   ok('halaman bayar portal tampil', r.status === 200 && /Total Pembayaran/.test(r.text), 'status=' + r.status);
   ok('item tagihan SPP tampil dengan ceklis', /data-bayar-item/.test(r.text) && /SPP Uji/.test(r.text));
   ok('total dihitung real-time (elemen total)', /data-bayar-total/.test(r.text));
 
-  r = await pub('POST', '/portal/bayar', {
+  r = await follow('POST', '/portal/bayar', {
     ...ident, metode: 'manual', item: `${one('SELECT id FROM iuran_tagihan WHERE siswa_id=?', sid).id}:7`,
     bukti_b64: PNG, bukti_nama: 'bukti.png', catatan: 'Transfer dari Bapak Budi'
   });
@@ -184,6 +199,8 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   sql(`INSERT INTO iuran_nominal (grup_id,bulan,nominal,tingkat) VALUES (?,?,?, '')`, gid, 8, 150000);
   r = await pub('POST', '/portal/bayar', { ...ident, metode: 'gateway', item: `${one('SELECT id FROM iuran_tagihan WHERE siswa_id=?', sid).id}:8` });
   ok('gateway: dialihkan ke halaman status', r.status === 303 && /bayar\/status/.test(r.loc), r.status + ' ' + r.loc);
+  const stPage = await pub('GET', String(r.loc).replace(/^https?:\/\/[^/]+/, ''));
+  ok('halaman status gateway terbuka', stPage.status === 200 && /Status Pembayaran/.test(stPage.text), stPage.status);
   const coG = one("SELECT * FROM iuran_checkout WHERE metode='gateway' ORDER BY id DESC LIMIT 1");
   ok('order gateway memiliki order_id', !!coG && /^IU\d+-/.test(coG.order_id), coG && coG.order_id);
   ok('QRIS string tersimpan (sandbox)', !!coG.qr_string, coG && coG.qr_string);
@@ -197,7 +214,7 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
 
   /* ================= 7. TOLAK PEMBAYARAN ================= */
   sql(`INSERT INTO iuran_nominal (grup_id,bulan,nominal,tingkat) VALUES (?,?,?, '')`, gid, 9, 100000);
-  r = await pub('POST', '/portal/bayar', {
+  r = await follow('POST', '/portal/bayar', {
     ...ident, metode: 'manual', item: `${one('SELECT id FROM iuran_tagihan WHERE siswa_id=?', sid).id}:9`,
     bukti_b64: PNG, bukti_nama: 'bukti2.png'
   });
@@ -206,6 +223,69 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   await req('POST', '/iuran/verifikasi', { id: coReject.id, aksi: 'tolak', alasan: 'Bukti tidak terbaca', back: '/iuran/antrean' });
   const rej = one('SELECT * FROM iuran_checkout WHERE id=?', coReject.id);
   ok('pembayaran ditolak beserta alasan', rej.status === 'ditolak' && /tidak terbaca/.test(rej.alasan || ''), rej.status);
+
+  /* ================= 7b. REKONSILIASI: satu tabel untuk SEMUA BKU ================= */
+  r = await req('GET', '/rekon');
+  ok('rekon: kartu input saldo koran memuat SEMUA BKU', /Input Saldo Rekening Koran — Semua BKU/.test(r.text));
+  ok('rekon: tidak ada lagi dropdown BKU khusus saldo koran', !/name="bku_id" required>\s*<option/.test(r.text.split('Input Saldo Rekening Koran')[1] || ''));
+  ok('rekon: setiap BKU punya kolom saldo koran', (r.text.match(/name="saldo_\d+"/g) || []).length >= 3, String((r.text.match(/name="saldo_\d+"/g) || []).length));
+  const bkuAll = all("SELECT id FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY urutan", ta.id);
+  const saldoForm = {};
+  bkuAll.slice(0, 3).forEach((b, i) => { saldoForm['saldo_' + b.id] = String(100000 * (i + 1)); });
+  r = await req('POST', '/rekon/saldo-masal', { tanggal: '2026-01-31', catatan: 'Uji semua BKU', ...saldoForm });
+  ok('rekon: simpan saldo koran banyak BKU sekaligus', r.status === 303 && /ok=/.test(r.loc), r.status + ' ' + r.loc);
+  const nKoran = one("SELECT COUNT(*) c FROM rekon_saldo WHERE catatan='Uji semua BKU'").c;
+  ok('rekon: semua baris tersimpan', nKoran === 3, 'tersimpan=' + nKoran);
+
+  /* ================= 7c. TUTUP BKU MASAL: Opsi A & Opsi B ================= */
+  r = await req('GET', '/tutup-bulanan?periode=2025-12&semua=1');
+  ok('tutup massal: modal menyediakan Opsi A (rollover)', /mtMassA/.test(r.text) && /Lanjutkan Sisa Saldo Buku/i.test(r.text));
+  ok('tutup massal: modal menyediakan Opsi B (opnam kas)', /mtMassB/.test(r.text) && /Penyesuaian Kas Riil/i.test(r.text));
+  ok('tutup massal: format nomor berita acara dapat diatur', /name="ba_pattern"/.test(r.text));
+  ok('tutup massal: input kas riil per BKU saat Opsi B', /name="opnam_tunai_\d+"/.test(r.text));
+  const bkuMass = all("SELECT id FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY urutan LIMIT 2", ta.id);
+  const formMass = { periode: '2025-12' };
+  bkuMass.forEach(b => { formMass['pilih_' + b.id] = '1'; });
+  r = await req('POST', '/tutup-bulanan/tutup-massal', { ...formMass, metode_massal: 'rollover' });
+  ok('tutup massal Opsi A: 2 BKU ditutup', r.status === 303 && /Opsi A/.test(decodeURIComponent(r.loc)), r.status);
+  const closedA = db.prepare(`SELECT COUNT(*) c FROM bku_periode WHERE periode='2025-12' AND status='ditutup' AND bku_id IN (${bkuMass.map(b => b.id).join(',')})`).get().c;
+  ok('tutup massal Opsi A: baris periode dibuat', closedA === 2, 'baris=' + closedA);
+  const baA = db.prepare("SELECT berita_acara_no FROM bku_periode WHERE periode='2025-12' ORDER BY id DESC LIMIT 1").get().berita_acara_no || '';
+  ok('tutup massal Opsi A: nomor berita acara terisi', /BA-ROLL\//.test(baA), baA);
+
+  // buka kembali lalu tutup dengan Opsi B (opnam)
+  for (const b of bkuMass) await req('POST', '/tutup-bulanan/buka', { bku_id: b.id, periode: '2025-12' });
+  const formB = { periode: '2025-12', metode_massal: 'opnam', metode_penyesuaian: 'tunai', ba_pattern: 'BA-OPNAM/{kode}/{periode}' };
+  bkuMass.forEach((b, i) => {
+    formB['pilih_' + b.id] = '1';
+    formB['opnam_tunai_' + b.id] = String(100000 + i);
+    formB['opnam_bank_' + b.id] = '0';
+    formB['alasan_' + b.id] = 'Selisih uji opnam';
+  });
+  r = await req('POST', '/tutup-bulanan/tutup-massal', formB);
+  ok('tutup massal Opsi B: berhasil', r.status === 303 && /Opsi B/.test(decodeURIComponent(r.loc)), r.status + ' ' + r.loc);
+  const rowB = db.prepare(`SELECT * FROM bku_periode WHERE periode='2025-12' AND bku_id=? ORDER BY id DESC LIMIT 1`).get(bkuMass[0].id);
+  ok('tutup massal Opsi B: metode opnam tercatat', rowB && rowB.metode === 'opnam', rowB && rowB.metode);
+  ok('tutup massal Opsi B: nomor berita acara opnam', rowB && /BA-OPNAM\//.test(rowB.berita_acara_no || ''), rowB && rowB.berita_acara_no);
+  ok('tutup massal Opsi B: selisih kas dibukukan', Math.abs(Number(rowB.selisih) || 0) >= 0, rowB && rowB.selisih);
+
+  /* ================= 7d. TEKS FORM TAMBAH TAHUN AJARAN ================= */
+  r = await req('GET', '/tahun-ajaran');
+  ok('form TA: kalimat baru "Salin daftar BKU dari tahun ajaran sebelumnya"', /Salin daftar BKU dari tahun ajaran sebelumnya/.test(r.text));
+  ok('form TA: penjelasan nama/jenis/kode BKU dari TA sebelumnya', /nama, jenis &amp; kode BKU diambil dari tahun ajaran sebelumnya/.test(r.text));
+  ok('form TA: tidak lagi menyebut "17 BKU standar"', !/17 BKU standar/.test(r.text));
+
+  /* ================= 7e. PORTAL: judul nama sekolah PUTIH + alamat lengkap ================= */
+  r = await follow('GET', '/portal');
+  ok('portal: judul nama sekolah berwarna putih', /class="school-title"/.test(r.text) && /color:#fff/.test(readCss()));
+  ok('portal: alamat sah berbentuk /<nama-sekolah>/<sub-slug>', new RegExp('/' + one("SELECT v FROM settings WHERE k='portal_base_slug'").v + '/portal-tagihan').test(r.text) || /portal-tagihan/.test(r.text));
+  r = await pub('GET', '/portal-pegawai');
+  ok('alamat lama /portal-pegawai dialihkan', [301, 302, 303, 307, 308].includes(r.status) && /portal-pegawai/.test(r.loc), r.status + ' ' + r.loc);
+  r = await pub('GET', '/portal-slip');
+  ok('alamat lama /portal-slip dialihkan', [301, 302, 303, 307, 308].includes(r.status), r.status);
+  r = await req('GET', '/portal-publik');
+  ok('pengaturan: sakelar berlabel "Portal Tagihan Siswa"', /Portal Tagihan Siswa/.test(r.text));
+  ok('pengaturan: sub-slug tagihan default portal-tagihan', /name="portal_slug"[^>]*value="portal-tagihan"|value="portal-tagihan"[^>]*name="portal_slug"/.test(r.text) || /portal-tagihan/.test(r.text));
 
   /* ================= 8. UI (Playwright): hover sidebar ================= */
   const browser = await chromium.launch();

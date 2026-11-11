@@ -626,7 +626,7 @@ tr.dragging{opacity:.55}
 .portal-head .portal-login{margin-left:auto;background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.35)}
 /* banner portal: judul sekolah + sub-judul yang dapat diubah sekolah (maks 60 karakter) */
 .portal-head .banner-text{min-width:0}
-.portal-head .school-title{margin:0;font-size:16.5px;font-weight:800;letter-spacing:-.01em;line-height:1.25;overflow-wrap:anywhere}
+.portal-head .school-title{margin:0;font-size:16.5px;font-weight:800;letter-spacing:-.01em;line-height:1.25;overflow-wrap:anywhere;color:#fff;text-shadow:0 1px 2px rgba(120,45,0,.28)}
 .portal-head .portal-subtitle{margin:2px 0 0;font-size:11.5px;opacity:.93;text-transform:uppercase;letter-spacing:.12em;line-height:1.35;overflow-wrap:anywhere}
 @media (max-width:620px){.portal-head .school-title{font-size:15px}.portal-head .portal-subtitle{font-size:10.5px;letter-spacing:.07em}}
 .portal-card{background:rgba(255,255,255,.82);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.7);border-radius:18px;box-shadow:0 22px 50px -34px rgba(42,26,18,.5);padding:22px 22px;margin-top:20px}
@@ -1298,3 +1298,13 @@ html[data-mode="dark"] .nf-item.unread{background:#2E2749}
 .catatan-reply[open]{display:block;margin-top:6px}
 html[data-mode="dark"] .pn-reply{background:#1E3A24;border-color:#2F5C39;color:#D7EFDB}
 html[data-mode="dark"] .pn-reply-lbl{color:#8FD69C}
+
+/* =====================================================================
+   Portal publik — judul nama sekolah di banner oranye SELALU putih
+   (h1 global memakai warna tinta gelap; di sini ditimpa agar kontras)
+   ===================================================================== */
+.portal-head .school-title,
+.portal-head .school-title:visited,
+html[data-mode="dark"] .portal-head .school-title,
+html[data-mode="dark"] .portal-head .portal-subtitle { color: #fff }
+.portal-head .portal-subtitle { color: #fff }

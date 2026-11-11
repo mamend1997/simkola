@@ -22,6 +22,15 @@ const base = `http://127.0.0.1:${PORT}`;
 let cookie = '';
 const results = [];
 function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra }); if (!cond) console.log('FAIL', name, extra); }
+/* ALAMAT PORTAL BARU (ronde 43): /<nama-sekolah>/<sub-slug>.
+   Alamat lama (/portal) dialihkan 302 — helper ini mengikutinya. */
+async function reqFollow(method, url, body, opt = {}) {
+  let r = await req(method, url, body, opt);
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(r.status) && r.loc; i++) {
+    r = await req(method === 'GET' || r.status === 308 ? method : 'GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  }
+  return r;
+}
 async function req(method, url, body, opt = {}) {
   const headers = {};
   if (cookie && !opt.public) headers.Cookie = cookie;
@@ -74,7 +83,7 @@ const today = new Date().toISOString().slice(0, 10);
   await req('POST', '/iuran/bayar', { tagihan_id: tPts.id, tanggal: today, jumlah: '40000', potongan: '0', metode: 'tunai', nonbku: '1', back: `/iuran/data/${siswa.id}` });
 
   /* ================= 1. PORTAL TAGIHAN SISWA: RINCIAN BULANAN ================= */
-  r = await req('GET', `/portal?nama=${encodeURIComponent('Abdul Kholik')}&lahir=2009-03-12`, null, { public: true });
+  r = await reqFollow('GET', `/portal?nama=${encodeURIComponent('Abdul Kholik')}&lahir=2009-03-12`, null, { public: true });
   ok('portal siswa dapat diakses publik', r.status === 200 && /Abdul Kholik/.test(r.text));
   ok('grup bulanan dijabarkan per bulan (SPP - Juli …)', /SPP - Juli \d{4}/.test(r.text), (r.text.match(/SPP - [A-Za-z]+ \d{4}/g) || []).slice(0, 4).join(', '));
   ok('bulan Agustus tampil sebagai baris tersendiri', /SPP - Agustus \d{4}/.test(r.text));
@@ -181,23 +190,24 @@ const today = new Date().toISOString().slice(0, 10);
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug portal tersimpan', r.status === 303 && /ok=/.test(r.loc), decode(r.loc).slice(0, 120));
   ok('setting tersimpan di DB', db.prepare("SELECT v FROM settings WHERE k='portal_slip_slug'").get().v === 'portal-slip-pegawai');
-  for (const [u, label] of [['/tagihan-siswa', 'siswa'], ['/piutang-pegawai', 'pegawai'], ['/portal-slip-pegawai', 'slip']]) {
-    r = await req('GET', u, null, { public: true });
+  const baseSeg = db.prepare("SELECT v FROM settings WHERE k='portal_base_slug'").get().v;
+  for (const [u, label] of [[`/${baseSeg}/tagihan-siswa`, 'siswa'], [`/${baseSeg}/piutang-pegawai`, 'pegawai'], [`/${baseSeg}/portal-slip-pegawai`, 'slip']]) {
+    r = await reqFollow('GET', u, null, { public: true });
     ok(`alamat kustom ${u} dapat dibuka`, r.status === 200 && /portal-head/.test(r.text), String(r.status));
   }
-  r = await req('GET', '/tagihan-siswa/siswa?q=Abd', null, { public: true });
+  r = await reqFollow('GET', `/${baseSeg}/tagihan-siswa/siswa?q=Abd`, null, { public: true });
   ok('endpoint autocomplete mengikuti slug baru', r.status === 200 && /Abdul/.test(r.text));
-  r = await req('GET', '/portal-slip-pegawai', null, { public: true });
-  ok('form portal slip memakai slug baru', /action="\/portal-slip-pegawai\/otp"/.test(r.text), (r.text.match(/action="[^"]*\/otp"/) || [])[0]);
-  r = await req('GET', '/piutang-pegawai', null, { public: true });
-  ok('tautan antar portal memakai slug baru', /href="\/portal-slip-pegawai"/.test(r.text));
+  r = await reqFollow('GET', `/${baseSeg}/portal-slip-pegawai`, null, { public: true });
+  ok('form portal slip memakai slug baru', new RegExp('action="\\/' + baseSeg + '\\/portal-slip-pegawai\\/otp"').test(r.text), (r.text.match(/action="[^"]*\/otp"/) || [])[0]);
+  r = await reqFollow('GET', `/${baseSeg}/piutang-pegawai`, null, { public: true });
+  ok('tautan antar portal memakai slug baru', new RegExp('href="\\/' + baseSeg + '\\/portal-slip-pegawai"').test(r.text));
   // ronde 32: alamat bawaan /portal tidak lagi dipakai setelah slug diganti (mode otomatis)
   r = await req('GET', '/portal', null, { public: true });
-  ok('alamat bawaan /portal tidak lagi dipakai (404)', r.status === 404 && /sudah tidak digunakan/i.test(r.text), String(r.status));
+  ok('alamat bawaan /portal dialihkan ke alamat lengkap', [301, 302, 303, 307, 308].includes(r.status) && new RegExp('/' + baseSeg + '/tagihan-siswa').test(r.loc), String(r.status) + ' ' + r.loc);
   // ...tetapi bisa diaktifkan kembali lewat pengaturan (tautan lama tetap hidup bila diinginkan)
   await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai', portal_default_alias: 'on' });
-  ok('mode "on" menghidupkan kembali /portal (kompatibilitas)',
-    (await req('GET', '/portal', null, { public: true })).status === 200);
+  ok('mode "on" tetap mengalihkan /portal ke alamat lengkap',
+    [301, 302, 303, 307, 308].includes((await req('GET', '/portal', null, { public: true })).status));
   await req('POST', '/sekolah/portal-slug', { portal_slug: 'tagihan-siswa', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai', portal_default_alias: 'auto' });
   // validasi
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'transaksi', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
@@ -208,9 +218,9 @@ const today = new Date().toISOString().slice(0, 10);
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'Portal Tagihan Siswa!', portal_pegawai_slug: 'piutang-pegawai', portal_slip_slug: 'portal-slip-pegawai' });
   ok('slug dengan spasi/simbol dinormalkan atau ditolak', r.status === 303 && (db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get().v === 'tagihan-siswa' || /err=/.test(r.loc)));
   // kembalikan default + cek kolom catatan
-  await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip' });
-  r = await req('GET', '/portal-pegawai', null, { public: true });
-  ok('kembali ke alamat default berhasil', /action="\/portal-pegawai\/otp"/.test(r.text));
+  await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal-tagihan', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip' });
+  r = await reqFollow('GET', '/portal-pegawai', null, { public: true });
+  ok('kembali ke alamat default berhasil', new RegExp('action="\\/' + baseSeg + '\\/portal-pegawai\\/otp"').test(r.text), (r.text.match(/action="[^"]*\/otp"/) || [])[0]);
 
   srv.kill();
   db.close();

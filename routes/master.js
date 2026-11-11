@@ -488,10 +488,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
        yang sudah tidak dipakai. Sekarang selalu memakai slug portal yang aktif. */
     const hostAbs = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
     const slugCanon = String(t.portal_slug || '').trim().toLowerCase();
+    /* alamat lengkap /<nama-sekolah>/<sub-slug> — sumber tunggal: pengaturan sekolah */
+    const pgSlugs = dbm.portalSlugs();
     const publicUrl = (kind, fallback) => {
-      const path = slugCanon
-        ? '/' + slugCanon + (kind === 'pegawai' ? '/portal-pegawai' : kind === 'slip' ? '/portal-slip' : '')
-        : '/' + (fallback || 'portal');
+      const path = '/' + (kind === 'pegawai' ? pgSlugs.pegawai : kind === 'slip' ? pgSlugs.slip : pgSlugs.siswa);
       const short = (c.base || '') + path;
       return { short, full: hostAbs ? hostAbs + path : short };
     };
@@ -532,9 +532,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <form method="post" action="${c.base}/sekolah/portal-publik/simpan">
             <input type="hidden" name="simpan_publikasi" value="1">
             <div class="publ-list">
-              ${swRow('portal_aktif', publishedOn, 'Publikasikan Halaman Portal', 'Portal cek tagihan iuran siswa (orang tua/wali).', publicUrl('siswa', dbm.portalSlugs().siswa))}
-              ${swRow('portal_pegawai_aktif', pegawaiOn, 'Portal Piutang Pegawai', 'Cek sisa piutang pegawai (verifikasi OTP WhatsApp).', publicUrl('pegawai', dbm.portalSlugs().pegawai))}
-              ${swRow('portal_slip_aktif', slipOn, 'Portal Slip Gaji Pegawai', 'Unduh slip gaji pegawai (verifikasi OTP WhatsApp).', publicUrl('slip', dbm.portalSlugs().slip))}
+              ${swRow('portal_aktif', publishedOn, 'Portal Tagihan Siswa', 'Portal cek tagihan iuran siswa (orang tua/wali).', publicUrl('siswa'))}
+              ${swRow('portal_pegawai_aktif', pegawaiOn, 'Portal Piutang Pegawai', 'Cek sisa piutang pegawai (verifikasi OTP WhatsApp).', publicUrl('pegawai'))}
+              ${swRow('portal_slip_aktif', slipOn, 'Portal Slip Gaji Pegawai', 'Unduh slip gaji pegawai (verifikasi OTP WhatsApp).', publicUrl('slip'))}
             </div>
             <div class="hint" style="margin:10px 0 14px 0">Bila sakelar dimatikan, halaman tersebut otomatis tidak dapat dibuka.
               Seluruh pengaturan &amp; data tetap tersimpan dan langsung aktif lagi saat sakelar dinyalakan.</div>
@@ -581,20 +581,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             <div class="sub">Ujung alamat ketiga portal dapat diubah sendiri, mis. <code>portal-slip</code> → <code>portal-slip-pegawai</code></div></div>
             ${ro ? ui.badge('Hanya Lihat', 'gray') : ui.badge('Berlaku Langsung', 'green')}</div>
           <form method="post" action="${c.base}/sekolah/portal-slug">
+            <div class="alert info">${ui.icon('link')}<div>Alamat portal SELALU berbentuk
+              <code>/${esc(pgSlugs.base)}/&lt;sub-slug&gt;</code> — bagian <b>${esc(pgSlugs.base)}</b> adalah nama sekolah (diatur Super Admin),
+              sedangkan sub-slug tiap portal dapat Anda ubah di bawah.</div></div>
             <div class="row3">
-              ${slugRow('Portal Tagihan Siswa', 'portal_slug', 'portal', `Contoh: <code>${esc(localHost)}/${esc(s.portal_slug || 'portal')}</code>`)}
-              ${slugRow('Portal Piutang Pegawai', 'portal_pegawai_slug', 'portal-pegawai', `Contoh: <code>${esc(localHost)}/${esc(s.portal_pegawai_slug || 'portal-pegawai')}</code>`)}
-              ${slugRow('Portal Slip Gaji Pegawai', 'portal_slip_slug', 'portal-slip', `Contoh: <code>${esc(localHost)}/${esc(s.portal_slip_slug || 'portal-slip')}</code>`)}
+              ${slugRow('Sub-slug Portal Tagihan Siswa', 'portal_slug', 'portal-tagihan', `Contoh: <code>${esc(localHost)}/${esc(pgSlugs.siswa)}</code>`)}
+              ${slugRow('Sub-slug Portal Piutang Pegawai', 'portal_pegawai_slug', 'portal-pegawai', `Contoh: <code>${esc(localHost)}/${esc(pgSlugs.pegawai)}</code>`)}
+              ${slugRow('Sub-slug Portal Slip Gaji Pegawai', 'portal_slip_slug', 'portal-slip', `Contoh: <code>${esc(localHost)}/${esc(pgSlugs.slip)}</code>`)}
             </div>
-            <div class="field"><label>Alamat Bawaan <code>/portal</code></label>
+            <div class="field"><label>Nama Sekolah pada Alamat (dari Super Admin)</label>
+              <input value="${esc(pgSlugs.base)}" readonly>
+              <div class="hint">Alamat lengkap: <code>${esc(localHost)}/${esc(pgSlugs.siswa)}</code></div></div>
+            <div class="field"><label>Alamat Lama <code>/portal</code></label>
               <select name="portal_default_alias" ${ro ? 'disabled' : ''}>
-                <option value="auto" ${alias.mode === 'auto' ? 'selected' : ''}>Otomatis — aktif hanya bila slug masih &quot;portal&quot; (rekomendasi)</option>
-                <option value="on" ${alias.mode === 'on' ? 'selected' : ''}>Selalu aktifkan (tautan lama tetap jalan)</option>
-                <option value="off" ${alias.mode === 'off' ? 'selected' : ''}>Nonaktifkan (hanya alamat kustom)</option>
+                <option value="auto" ${alias.mode === 'auto' ? 'selected' : ''}>Otomatis — alamat lama dialihkan ke alamat lengkap (rekomendasi)</option>
+                <option value="on" ${alias.mode === 'on' ? 'selected' : ''}>Selalu alihkan</option>
+                <option value="off" ${alias.mode === 'off' ? 'selected' : ''}>Matikan — alamat lama ditolak (404)</option>
               </select>
-              <div class="hint">Saat ini: ${alias.on
-        ? `<b style="color:var(--green)">aktif</b> — <code>${esc(localHost)}/portal</code> masih dapat dibuka`
-        : `<b style="color:var(--red)">nonaktif</b> — <code>${esc(localHost)}/portal</code> menampilkan halaman 404, portal hanya di <code>${esc(localHost)}/${esc(dbm.portalSlugs().siswa)}</code>`}.</div></div>
+              <div class="hint">Alamat publik yang sah hanya <code>/${esc(pgSlugs.base)}/&lt;sub-slug&gt;</code>.
+                Saat ini: ${alias.on
+        ? `<b style="color:var(--green)">dialihkan</b> — <code>${esc(localHost)}/portal</code> → <code>${esc(localHost)}/${esc(pgSlugs.siswa)}</code>`
+        : `<b style="color:var(--red)">ditolak (404)</b> — buka <code>${esc(localHost)}/${esc(pgSlugs.siswa)}</code>`}.</div></div>
             <div class="alert info">${ui.icon('info')}<div>Gunakan huruf kecil, angka, dan tanda hubung (-), panjang 3–40 karakter.
               Bila slug diganti, alamat bawaan <code>/portal</code> otomatis tidak dipakai lagi agar tidak ada dua alamat dengan isi yang sama.
               Perubahan langsung berlaku tanpa restart server.</div></div>
@@ -702,11 +709,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const aliasMode = ['auto', 'on', 'off'].includes(aliasRaw) ? aliasRaw : null;
     for (const [k, v] of Object.entries(baru)) dbm.setSetting(k, v);
     if (aliasMode) dbm.setSetting('portal_default_alias', aliasMode);
+    /* peta alamat portal (server.js) di-cache 60 detik → segarkan sekarang juga */
+    if (typeof refreshPortalMap === 'function') refreshPortalMap();
     const st = (() => { try { return dbm.portalDefaultAlias(); } catch (e) { return null; } })();
     dbm.logAudit(req.user, 'EDIT', 'sekolah',
       `Mengubah alamat portal publik (${Object.values(baru).join(', ') || 'tanpa perubahan slug'})`
       + (st ? `; alamat bawaan /portal ${st.on ? 'aktif' : 'NONAKTIF'} (mode ${st.mode})` : ''));
-    const note = st && !st.on ? ` Alamat bawaan /portal tidak dipakai — portal hanya di /${st.slug}.` : '';
+    const pgNow = (() => { try { return dbm.portalSlugs(); } catch (e) { return null; } })();
+    const note = pgNow
+      ? (st && !st.on
+        ? ` Alamat lama /portal ditolak (404) — portal hanya di /${pgNow.siswa}.`
+        : ` Alamat lengkap portal: /${pgNow.siswa} (alamat lama /portal dialihkan).`)
+      : '';
     res.redirect(req.BASE + '/portal-publik?ok=' + encodeURIComponent('Alamat portal publik disimpan.' + note));
   });
 
@@ -720,10 +734,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const err = saas.portalSlugError(raw, t.id);
       if (err) throw new Error(err);
       saas.setPortalSlug(t.id, raw, req.user);
-      dbm.setSetting('portal_slug', raw);
-      dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Mengubah URL portal publik menjadi /' + raw + '/portal');
+      /* bagian nama sekolah pada alamat portal (sub-slug tagihan TIDAK diubah di sini) */
+      dbm.setPortalBaseSlug(raw);
+      const fullUrl = '/' + raw + '/' + dbm.portalSlugs().siswaSeg;
+      dbm.logAudit(req.user, 'EDIT', 'sekolah', 'Mengubah URL portal publik menjadi ' + fullUrl);
       if (typeof refreshPortalMap === 'function') refreshPortalMap();
-      res.redirect(req.BASE + flashUrl(back, 'ok', 'URL portal publik disimpan: /' + raw + '/portal'));
+      res.redirect(req.BASE + flashUrl(back, 'ok', 'URL portal publik disimpan: ' + fullUrl));
     } catch (e) {
       res.redirect(req.BASE + flashUrl(back, 'err', e.message));
     }
@@ -851,7 +867,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <div class="row2"><div class="field"><label>Tanggal Mulai</label><input type="date" name="tanggal_mulai" value="${todayISO()}"></div>
         <div class="field"><label>Tanggal Selesai</label><input type="date" name="tanggal_selesai"></div></div>
         <label class="check"><input type="checkbox" name="aktif" value="1" checked> Jadikan tahun ajaran aktif</label>
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_bku" value="1" checked> <b>Salin daftar BKU dari tahun ajaran sebelumnya</b> — nama, jenis &amp; kode BKU diambil dari tahun ajaran sumber (tidak lagi membuat 17 BKU standar otomatis)</label>
+        <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_bku" value="1" checked> <b>Salin daftar BKU dari tahun ajaran sebelumnya</b> — nama, jenis &amp; kode BKU diambil dari tahun ajaran sebelumnya</label>
         <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_master" value="1" checked> <b>Ambil / Salin Data dari Tahun Sebelumnya</b> — struktur Grup Iuran (beserta nominal) &amp; Master Beasiswa</label>
         <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_kelas" value="1" checked> <b>Salin Kelas &amp; Penempatan Siswa</b> (naik kelas otomatis X → XI, XI → XII) — agar Data Siswa &amp; Penetapan Grup Iuran di tahun ajaran baru langsung terisi</label>
         <label class="check" style="margin-top:10px"><input type="checkbox" name="rollover" value="1" checked> Rollover saldo awal dari tahun ajaran sebelumnya (BKU, kas, akun pinjaman, piutang belum lunas)</label>

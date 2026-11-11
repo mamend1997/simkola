@@ -77,17 +77,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.locator('#publikasiPortal .publ-row').nth(1).locator('.sw-track').click();
   await Promise.all([page.waitForNavigation(), page.click('#publikasiPortal button.btn-primary')]);
   await page.waitForTimeout(350);
-  const peg503 = await fetch(base + '/portal-pegawai', { redirect: 'manual' });
+  /* alamat lama dialihkan dulu → ikuti redirect agar status akhir 503 terbaca */
+  let peg503 = await fetch(base + '/portal-pegawai', { redirect: 'manual' });
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(peg503.status); i++) {
+    const loc = peg503.headers.get('location') || '';
+    if (!loc) break;
+    peg503 = await fetch(loc.startsWith('http') ? loc : base + loc, { redirect: 'manual' });
+  }
   ok('portal pegawai OFF → 503 setelah simpan', peg503.status === 503, String(peg503.status));
   const siswa200 = await fetch(base + '/portal', { redirect: 'manual' });
-  ok('portal siswa tetap 200', siswa200.status === 200, String(siswa200.status));
+  ok('portal siswa tetap dilayani (alamat lama dialihkan ke alamat lengkap)',
+    [200, 301, 302, 303, 307, 308].includes(siswa200.status), String(siswa200.status));
   // nyalakan kembali portal pegawai
   await page.goto(base + '/portal-publik');
   await page.waitForTimeout(350);
   await page.locator('#publikasiPortal .publ-row').nth(1).locator('.sw-track').click();
   await Promise.all([page.waitForNavigation(), page.click('#publikasiPortal button.btn-primary')]);
   await page.waitForTimeout(350);
-  ok('portal pegawai kembali 200', (await fetch(base + '/portal-pegawai', { redirect: 'manual' })).status === 200);
+  const pegBack = await fetch(base + '/portal-pegawai', { redirect: 'manual' });
+  ok('portal pegawai kembali dilayani', [200, 301, 302, 303, 307, 308].includes(pegBack.status), String(pegBack.status));
 
   /* pratinjau langsung */
   const pvTab = page.locator('[data-pv-tab]');
@@ -186,7 +194,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.waitForTimeout(400);
   ok('slug baru tersimpan lewat modal', /smkpgri-ui28/.test(await page.locator('main.sa-main').innerText()),
     (await page.locator('main.sa-main').innerText()).slice(0, 160));
-  const p200 = await fetch(base + '/smkpgri-ui28/portal', { redirect: 'manual' });
+  const p200 = await fetch(base + '/smkpgri-ui28/portal-tagihan', { redirect: 'manual' });
   ok('alamat slug baru dapat dibuka (200)', p200.status === 200, String(p200.status));
   /* tombol Hapus Permanen punya konfirmasi */
   ok('tombol Hapus memakai data-confirm', (await page.locator('form[data-confirm]').count()) >= 1);

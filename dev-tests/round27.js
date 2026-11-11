@@ -212,8 +212,9 @@ const today = new Date().toISOString().slice(0, 10);
   ok('pratinjau memuat nominal tunggakan terformat Rp', pv && /^Rp\s?[\d.]+$/.test(pv.nominal_text), pv && pv.nominal_text);
   ok('pratinjau memuat nama siswa & kelas', pv && pv.nama === 'Budi Santoso' && /X TKJ 1/.test(pv.kelas || ''));
   ok('pratinjau memuat rincian tagihan per bulan', pv && /SPP\s+\w+\s+\d{4}/.test(pv.pesan || ''), (pv && pv.pesan || '').slice(0, 200));
-  ok('pratinjau memuat link portal bertoken', pv && /\/portal\?token=\d+\.[a-f0-9]{32}/.test(pv.pesan || ''), (pv && pv.pesan || '').slice(0, 300));
-  ok('pratinjau memakai alamat publik absolut', pv && /https:\/\/sekolah\.contoh\.id\/portal\?token=/.test(pv.pesan || ''), (pv && pv.pesan || '').slice(0, 300));
+  /* ronde 43: alamat portal selalu /<nama-sekolah>/<sub-slug> */
+  ok('pratinjau memuat link portal bertoken', pv && /portal-tagihan\?token=\d+\.[a-f0-9]{32}/.test(pv.pesan || ''), (pv && pv.pesan || '').slice(0, 300));
+  ok('pratinjau memakai alamat publik absolut', pv && /https:\/\/sekolah\.contoh\.id\/[a-z0-9-]+\/portal-tagihan\?token=/.test(pv.pesan || ''), (pv && pv.pesan || '').slice(0, 300));
   ok('pratinjau mengisi nama sekolah', pv && /SMK PGRI Cikonon|SMK PGRI CIKONENG|SMK PGRI/i.test(pv.pesan || ''));
 
   r = await req('POST', '/iuran/wa/satu', { siswa_id: sBudi.id, back: '/iuran/data', template_id: '0' });
@@ -324,15 +325,16 @@ const today = new Date().toISOString().slice(0, 10);
   // buat 1 pesan baru untuk mengambil token
   await req('POST', '/iuran/wa/satu', { siswa_id: sBudi.id, back: '/iuran/data', template_id: '0' });
   const tokenUrl = ((db.prepare('SELECT pesan FROM wa_reminder_log ORDER BY id DESC LIMIT 1').get() || {}).pesan || '')
-    .match(/\/portal\?token=([^\s]+)/);
+    .match(/portal-tagihan\?token=([^\s]+)/);
   const token = tokenUrl ? dec(tokenUrl[1]) : '';
   ok('pesan memuat token portal', !!token && /^\d+\.[a-f0-9]{32}$/.test(token), token);
   cookie = '';
-  r = await req('GET', '/portal?token=' + encodeURIComponent(token), null, { cookie: '' });
+  const portalPath27 = '/' + String((db.prepare("SELECT v FROM settings WHERE k='portal_base_slug'").get() || {}).v || '') + '/' + String((db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get() || {}).v || 'portal-tagihan');
+  r = await req('GET', portalPath27 + '?token=' + encodeURIComponent(token), null, { cookie: '' });
   ok('portal via token menampilkan tagihan siswa', r.status === 200 && /Budi Santoso/.test(r.text) && /Tagihan/.test(r.text));
   ok('portal via token tidak meminta tanggal lahir', !/name="lahir"/.test(r.text));
   ok('portal via token menampilkan total tunggakan', /Sisa|Total Sisa Terhutang/.test(r.text));
-  r = await req('GET', '/portal?token=123.deadbeefdeadbeefdeadbeefdeadbeef', null, { cookie: '' });
+  r = await req('GET', portalPath27 + '?token=123.deadbeefdeadbeefdeadbeefdeadbeef', null, { cookie: '' });
   ok('token tidak valid ditolak (kembali ke form)', /Tautan tagihan tidak valid|Cek Tagihan/.test(r.text) && !/Budi Santoso/.test(r.text));
 
   /* ================= 13. RBAC ================= */

@@ -122,10 +122,15 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
   const slug2 = String(t2 && t2.portal_slug || '');
   ok('sekolah kedua dengan nama sama tetap dapat slug unik', slug2 && slug2 !== slugBaru && /\/tagihan$/.test(slug2), slug2);
   if (t2) {
-    r = await req('GET', '/' + slug2, null, { who: 'none', clearCookie: true });
+    /* ronde 43: alamat sah = /<nama-sekolah>/<sub-slug>; slug dua bagian dari Super Admin
+       dipakai sebagai bagian nama sekolah (segmen pertama). */
+    const base2 = slug2.split('/')[0];
+    r = await req('GET', '/' + base2 + '/portal-tagihan', null, { who: 'none', clearCookie: true });
     ok('alamat portal dua bagian dapat dibuka', r.status === 200, String(r.status));
-    r = await req('GET', '/' + slug2 + '/portal-pegawai', null, { who: 'none', clearCookie: true });
+    r = await req('GET', '/' + base2 + '/portal-pegawai', null, { who: 'none', clearCookie: true });
     ok('portal pegawai di bawah alamat dua bagian dapat dibuka', r.status === 200 || r.status === 503, String(r.status));
+    r = await req('GET', '/' + slug2, null, { who: 'none', clearCookie: true });
+    ok('alamat lama slug dua bagian dialihkan', [301, 302, 303, 307, 308].includes(r.status), String(r.status));
   }
   // kembalikan format satu bagian
   await req('POST', '/super-admin/portal-publik/format', { portal_slug_format: '{sekolah}' }, { who: 'sa' });
@@ -136,9 +141,11 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
   ok('halaman publikasi portal terbuka', r.status === 200, String(r.status));
   const t1 = ctl.prepare('SELECT * FROM tenants ORDER BY id LIMIT 1').get();
   const slug1 = String(t1 && t1.portal_slug || '');
-  ok('tautan sakelar memakai slug kanonik sekolah', slug1
-    ? new RegExp('href="[^"]*' + slug1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"').test(r.text)
-    : true, slug1);
+  const base1 = String(slug1.split('/')[0] || '');
+  const chips = (r.text.match(/class="url-chip"[^>]*href="([^"]+)"/g) || []).map(x => (x.match(/href="([^"]+)"/) || [])[1] || '');
+  ok('tautan sakelar memakai alamat lengkap /<nama-sekolah>/<sub-slug>', base1
+    ? chips.some(h => h.includes('/' + base1 + '/') && /portal-(tagihan|pegawai|slip)/.test(h))
+    : true, base1 + ' → ' + chips.join(' , '));
   ok('tautan sakelar memakai alamat publik (bukan hardcode /portal)', /url-chip/.test(r.text)
     && !/https?:\/\/bendaharaspc/.test(r.text));
 
@@ -184,8 +191,14 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
     // tautan bertoken langsung membuka slip (tanpa kode OTP)
     const mLink = wa && wa.pesan.match(/https?:\/\/[^\s]*\/[^\s]*hasil\?t=[^\s]+/);
     const pathLink = mLink ? mLink[0].replace(/^https?:\/\/[^/]+/, '') : '';
-    r = await req('GET', pathLink || '/portal-slip/hasil', null, { who: 'none', clearCookie: true });
-    ok('tautan slip langsung terbuka tanpa OTP', r.status === 200 && /Slip Gaji \/ Honor/.test(r.text), String(r.status));
+    if (!pathLink) {
+      const seg = String((db.prepare("SELECT v FROM settings WHERE k='portal_base_slug'").get() || {}).v || '');
+      const segSlip = String((db.prepare("SELECT v FROM settings WHERE k='portal_slip_slug'").get() || {}).v || 'portal-slip');
+      r = await req('GET', '/' + seg + '/' + segSlip + '/hasil', null, { who: 'none', clearCookie: true });
+    } else {
+      r = await req('GET', pathLink, null, { who: 'none', clearCookie: true });
+    }
+    ok('tautan slip langsung terbuka tanpa OTP', r.status === 200 && /Slip Gaji \/ Honor/.test(r.text), String(r.status) + ' ' + pathLink + ' | ' + r.text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 160));
     const tokenUji = String((pathLink.match(/[?&]t=([^&]+)/) || [])[1] || '');
     ok('token slip tidak valid ditolak', !tokenUji || true);
     if (tokenUji) {

@@ -24,7 +24,7 @@ function ok(name, cond, extra = '') {
   results.push({ name, ok: !!cond, extra });
   if (!cond) console.log('FAIL', name, extra);
 }
-async function req(method, url, body, opt = {}) {
+async function reqRaw(method, url, body, opt = {}) {
   const headers = {};
   if (cookie) headers.Cookie = cookie;
   let payload = null;
@@ -43,8 +43,20 @@ async function req(method, url, body, opt = {}) {
   const sc = r.headers.get('set-cookie');
   if (sc) cookie = sc.split(';')[0];
   const text = opt.binary ? Buffer.from(await r.arrayBuffer()) : await r.text();
-  return { status: r.status, text, headers: r.headers };
+  return { status: r.status, text, headers: r.headers, loc: r.headers.get('location') || '' };
 }
+
+/* ronde 43: alamat portal publik berpindah ke /<nama-sekolah>/<sub-slug>.
+   Permintaan GET ke alamat lama (/portal…) dialihkan 302 — helper ini mengikutinya. */
+async function portalFollow43(method, url, body, opt) {
+  let r = await reqRaw(method, url, body, opt);
+  if (method !== 'GET' || !/^\/portal(-|$|\?|\/)/.test(String(url || ''))) return r;
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(r.status) && r.loc; i++) {
+    r = await reqRaw('GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  }
+  return r;
+}
+const req = (...a) => portalFollow43(...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
@@ -54,7 +66,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const pages = ['/', '/transaksi', '/mutasi-kas', '/siswa', '/kelas', '/program-keahlian', '/mutasi-kelas', '/siswa-nonaktif',
     '/iuran', '/iuran/data', '/iuran/transaksi', '/iuran/antrean', '/iuran/kertas', '/ekskul', '/ekskul/antrean', '/trash',
-    '/laporan?r=neraca', '/laporan?r=neraca&rmode=bku', '/payroll', '/portal', '/akun', '/aset', '/coa', '/sekolah', '/pegawai',
+    '/laporan?r=neraca', '/laporan?r=neraca&rmode=bku', '/payroll', '/akun', '/aset', '/coa', '/sekolah', '/pegawai',
     '/laporan?r=bku', '/tahun-ajaran', '/piutang', '/piutang-lain'];
   for (const p of pages) {
     const rr = await req('GET', p);

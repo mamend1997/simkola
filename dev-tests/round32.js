@@ -1,19 +1,16 @@
 'use strict';
 /* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
 process.env.TZ = process.env.TZ || 'Asia/Jakarta';
-/* Ronde 32 — Menghapus alamat bawaan /portal setelah sekolah memakai slug kustom.
+/* Ronde 32 / 43 — Alamat portal publik HARUS lengkap: /<nama-sekolah>/<sub-slug>.
 
-   1. Slug masih "portal" + mode auto  → /portal tetap dilayani (200)
-   2. Slug kustom + mode auto          → /portal 404 "alamat sudah tidak digunakan",
-                                         berisi tautan ke alamat kustom yang aktif
-   3. Alamat kustom tetap 200 (+ sub-route autocomplete & kirim catatan)
-   4. Mode 'on'  → /portal dilayani kembali (tautan lama)
-   5. Mode 'off' → /portal 404 walau slug masih "portal"
-   6. Portal pegawai & slip TIDAK terpengaruh
-   7. Tautan bertoken (?token=) tetap bekerja di alamat kustom
-   8. Super Admin menyembunyikan seluruh portal tetap menang (prioritas status pusat)
-   9. UI tenant menampilkan status & menyimpan mode; audit mencatatnya
-  10. Login pengguna sekolah tidak bisa membuka /portal juga (404)
+   1. /portal, /portal-pegawai, /portal-slip, /<nama-sekolah> → DIALIHKAN (302)
+      ke alamat lengkap yang sah (tidak pernah melayani halaman portal langsung)
+   2. Alamat lengkap /<nama-sekolah>/<sub-slug> → 200 (termasuk sub-route & token)
+   3. Sub-slug dapat diubah sekolah; alamat lama /<nama-sekolah>/portal juga dialihkan
+   4. Mode 'off' → alamat lama ditolak 404 (halaman "alamat sudah tidak digunakan")
+   5. Login pengguna sekolah juga dialihkan (tidak dilayani di alamat lama)
+   6. Super Admin menyembunyikan portal → alamat lengkap 404 (prioritas status pusat)
+   7. UI tenant menampilkan alamat lengkap & mode alamat lama
 */
 const { spawn } = require('child_process');
 const path = require('path');
@@ -55,6 +52,15 @@ async function req(method, url, body, opt = {}) {
   return { status: r.status, text: await r.text(), loc: r.headers.get('location') || '' };
 }
 const pageTitle = h => (String(h).match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+const isRedirect = r => [301, 302, 303, 307, 308].includes(r.status);
+async function reqFollow(method, url, body, opt = {}) {
+  let r = await req(method, url, body, opt);
+  for (let i = 0; i < 3 && isRedirect(r) && r.loc; i++) r = await req('GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  return r;
+}
+/** alamat portal lengkap: /<nama-sekolah>/<sub-slug> */
+const P = seg => '/' + BASE_SEG + '/' + seg;
+let BASE_SEG = '';
 
 (async () => {
   for (let i = 0; i < 120; i++) { try { if ((await fetch(base + '/login')).status === 200) break; } catch (e) { } await sleep(150); }
@@ -65,6 +71,8 @@ const pageTitle = h => (String(h).match(/<title>([\s\S]*?)<\/title>/) || [])[1] 
 
   let r = await req('POST', '/login', { kode: 'SK01', email: 'admin@sekolah.sch.id', password: 'admin123' });
   ok('login admin sekolah', r.status === 303 && !/err=/.test(r.loc), dec(r.loc));
+  BASE_SEG = String((db.prepare("SELECT v FROM settings WHERE k='portal_base_slug'").get() || {}).v || '');
+  ok('bagian nama sekolah pada alamat portal terisi otomatis', BASE_SEG.length > 2, BASE_SEG);
 
   /* data uji: kelas + siswa + iuran (untuk tautan bertoken) */
   await req('POST', '/kelas/save', { nama: 'XII RPL 1', tingkat: 'XII', wali_kelas: 'W', aktif: '1' });
@@ -76,33 +84,35 @@ const pageTitle = h => (String(h).match(/<title>([\s\S]*?)<\/title>/) || [])[1] 
   await req('POST', `/iuran/grup/${grup.id}/tetapkan`, { kelas_id: String(kelas.id), siswa_id: [String(siswa.id)] });
 
   /* ============ 1. slug DEFAULT + auto → /portal dilayani ============ */
-  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip', portal_default_alias: 'auto' });
-  ok('simpan slug default + mode auto', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
+  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal-tagihan', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip', portal_default_alias: 'auto' });
+  ok('simpan sub-slug default + mode auto', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
   r = await req('GET', '/portal', null, { cookie: '' });
-  ok('slug "portal" → /portal 200', r.status === 200 && /portal-head/.test(r.text), String(r.status));
+  ok('/portal dialihkan ke alamat lengkap', isRedirect(r) && dec(r.loc).endsWith(P('portal-tagihan')), String(r.status) + ' ' + dec(r.loc));
+  r = await reqFollow('GET', '/portal', null, { cookie: '' });
+  ok('alamat lengkap /<nama-sekolah>/portal-tagihan 200', r.status === 200 && /portal-head/.test(r.text), String(r.status));
+  r = await req('GET', '/' + BASE_SEG, null, { cookie: '' });
+  ok('/<nama-sekolah> saja dialihkan ke portal tagihan', isRedirect(r) && dec(r.loc).endsWith(P('portal-tagihan')), String(r.status) + ' ' + dec(r.loc));
 
   /* ============ 2. slug KUSTOM + auto → /portal 404 ============ */
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'iuran-siswa-spc', portal_pegawai_slug: 'piutang-pegawai-spc', portal_slip_slug: 'slip-honor-spc', portal_default_alias: 'auto' });
   ok('slug kustom tersimpan', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
-  ok('flash menyebut alamat bawaan tidak dipakai', /tidak dipakai/i.test(dec(r.loc)) && /iuran-siswa-spc/.test(dec(r.loc)), dec(r.loc));
+  ok('flash menyebut alamat lengkap portal', /iuran-siswa-spc/.test(dec(r.loc)), dec(r.loc));
   r = await req('GET', '/portal', null, { cookie: '' });
-  ok('/portal (alamat bawaan) sekarang 404', r.status === 404, String(r.status));
-  ok('halaman 404 menyebut alamat sudah tidak digunakan', /sudah tidak digunakan/i.test(r.text));
-  ok('halaman 404 memuat tautan ke alamat kustom', /href="[^"]*\/iuran-siswa-spc"/.test(r.text), (r.text.match(/href="[^"]*iuran-siswa-spc"/) || ['-'])[0]);
-  ok('halaman 404 ber-branding sekolah', r.text.includes(schoolName));
-  ok('halaman 404 noindex', /name="robots" content="noindex"/.test(r.text));
+  ok('/portal tetap dialihkan ke sub-slug baru', isRedirect(r) && dec(r.loc).endsWith(P('iuran-siswa-spc')), String(r.status) + ' ' + dec(r.loc));
   r = await req('GET', '/portal/', null, { cookie: '' });
-  ok('/portal/ (dengan garis miring) juga 404', r.status === 404, String(r.status));
+  ok('/portal/ (dengan garis miring) juga dialihkan', isRedirect(r) && dec(r.loc).endsWith(P('iuran-siswa-spc')), String(r.status));
   r = await req('GET', '/portal/siswa?q=sis', null, { cookie: '' });
-  ok('sub-route internal /portal/siswa ikut ditutup', r.status === 404, String(r.status));
+  ok('sub-route internal /portal/siswa dialihkan ke alamat lengkap', isRedirect(r) && dec(r.loc).includes(P('iuran-siswa-spc') + '/siswa'), String(r.status) + ' ' + dec(r.loc));
+  r = await req('GET', '/' + BASE_SEG + '/portal', null, { cookie: '' });
+  ok('alamat lama /<nama-sekolah>/portal dialihkan', isRedirect(r) && dec(r.loc).endsWith(P('iuran-siswa-spc')), String(r.status) + ' ' + dec(r.loc));
 
   /* ============ 3. alamat kustom tetap berfungsi ============ */
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
-  ok('alamat kustom 200', r.status === 200 && /portal-head/.test(r.text), String(r.status));
+  r = await req('GET', P('iuran-siswa-spc'), null, { cookie: '' });
+  ok('alamat kustom lengkap 200', r.status === 200 && /portal-head/.test(r.text), String(r.status));
   ok('judul tab memakai nama sekolah', pageTitle(r.text).endsWith(`· ${schoolName}`), pageTitle(r.text));
-  r = await req('GET', '/iuran-siswa-spc/siswa?q=sis', null, { cookie: '' });
+  r = await req('GET', P('iuran-siswa-spc') + '/siswa?q=sis', null, { cookie: '' });
   ok('autocomplete lewat alamat kustom tetap jalan', r.status === 200 && /Siswa Alias/.test(r.text), String(r.status) + ' ' + r.text.slice(0, 80));
-  r = await req('POST', '/iuran-siswa-spc/pesan', { siswa_id: String(siswa.id), pesan: 'Catatan uji alamat kustom', kontak: '0812' }, { cookie: '' });
+  r = await req('POST', P('iuran-siswa-spc') + '/pesan', { siswa_id: String(siswa.id), pesan: 'Catatan uji alamat kustom', kontak: '0812' }, { cookie: '' });
   ok('kirim catatan lewat alamat kustom diterima', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 120));
   ok('catatan tersimpan', db.prepare("SELECT COUNT(*) c FROM portal_pesan WHERE pesan LIKE 'Catatan uji alamat kustom%'").get().c >= 1);
 
@@ -110,42 +120,42 @@ const pageTitle = h => (String(h).match(/<title>([\s\S]*?)<\/title>/) || [])[1] 
   const pv = await req('GET', '/iuran/wa/preview?siswa_id=' + siswa.id);
   const token = (String((JSON.parse(pv.text) || {}).pesan || '').match(/token=([^"&\s]+)/) || [])[1] || '';
   ok('token pribadi terbit', token.length > 10, token.slice(0, 12));
-  r = await req('GET', '/iuran-siswa-spc?token=' + encodeURIComponent(token), null, { cookie: '' });
-  ok('tautan bertoken di alamat kustom 200 & menampilkan siswa', r.status === 200 && /Siswa Alias/.test(r.text), String(r.status));
+  r = await req('GET', P('iuran-siswa-spc') + '?token=' + encodeURIComponent(token), null, { cookie: '' });
+  ok('tautan bertoken di alamat lengkap 200 & menampilkan siswa', r.status === 200 && /Siswa Alias/.test(r.text), String(r.status));
   r = await req('GET', '/portal?token=' + encodeURIComponent(token), null, { cookie: '' });
-  ok('tautan bertoken lewat /portal juga 404', r.status === 404, String(r.status));
+  ok('tautan bertoken lewat /portal dialihkan', isRedirect(r) && /token=/.test(r.loc), String(r.status) + ' ' + dec(r.loc).slice(0, 90));
 
   /* ============ 4. portal pegawai & slip tidak terpengaruh ============ */
-  const pPeg = await req('GET', '/piutang-pegawai-spc', null, { cookie: '' });
-  ok('portal piutang pegawai (alamat kustom) tetap 200', pPeg.status === 200, String(pPeg.status));
-  const pSlip = await req('GET', '/slip-honor-spc', null, { cookie: '' });
-  ok('portal slip gaji (alamat kustom) tetap 200', pSlip.status === 200, String(pSlip.status));
-  ok('alamat bawaan /portal-pegawai tetap 200', (await req('GET', '/portal-pegawai', null, { cookie: '' })).status === 200);
-  ok('alamat bawaan /portal-slip tetap 200', (await req('GET', '/portal-slip', null, { cookie: '' })).status === 200);
+  const pPeg = await req('GET', P('piutang-pegawai-spc'), null, { cookie: '' });
+  ok('portal piutang pegawai (alamat lengkap) 200', pPeg.status === 200, String(pPeg.status));
+  const pSlip = await req('GET', P('slip-honor-spc'), null, { cookie: '' });
+  ok('portal slip gaji (alamat lengkap) 200', pSlip.status === 200, String(pSlip.status));
+  ok('/portal-pegawai dialihkan ke alamat lengkap', isRedirect(await req('GET', '/portal-pegawai', null, { cookie: '' })));
+  ok('/portal-slip dialihkan ke alamat lengkap', isRedirect(await req('GET', '/portal-slip', null, { cookie: '' })));
 
   /* ============ 5. mode 'on' → alamat bawaan hidup lagi ============ */
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'iuran-siswa-spc', portal_pegawai_slug: 'piutang-pegawai-spc', portal_slip_slug: 'slip-honor-spc', portal_default_alias: 'on' });
   ok('mode "on" tersimpan', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
   r = await req('GET', '/portal', null, { cookie: '' });
-  ok('mode "on" → /portal 200 kembali', r.status === 200 && /portal-head/.test(r.text), String(r.status));
+  ok('mode "on" → /portal tetap dialihkan ke alamat lengkap', isRedirect(r) && dec(r.loc).endsWith(P('iuran-siswa-spc')), String(r.status));
   ok('audit mencatat status alamat bawaan', /alamat bawaan \/portal aktif/i.test(
     String((db.prepare("SELECT detail FROM audit WHERE aksi='EDIT' ORDER BY id DESC LIMIT 1").get() || {}).detail)));
 
   /* ============ 6. mode 'off' → 404 walau slug default ============ */
-  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip', portal_default_alias: 'off' });
-  ok('mode "off" + slug default tersimpan', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
+  r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'portal-tagihan', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip', portal_default_alias: 'off' });
+  ok('mode "off" + sub-slug default tersimpan', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
   r = await req('GET', '/portal', null, { cookie: '' });
   ok('mode "off" → /portal 404 walau slug "portal"', r.status === 404, String(r.status));
-  ok('pesan 404 mengarahkan ke alamat kustom', /\/portal"/.test(r.text) || /href="[^"]*\/portal"/.test(r.text));
+  ok('halaman 404 mengarahkan ke alamat lengkap', /sudah tidak digunakan/i.test(r.text) && new RegExp('/' + BASE_SEG + '/portal-tagihan').test(r.text));
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'iuran-siswa-spc', portal_pegawai_slug: 'piutang-pegawai-spc', portal_slip_slug: 'slip-honor-spc', portal_default_alias: 'auto' });
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
-  ok('kembali ke mode auto + slug kustom → alamat kustom 200', r.status === 200, String(r.status));
+  r = await req('GET', P('iuran-siswa-spc'), null, { cookie: '' });
+  ok('kembali ke mode auto + slug kustom → alamat lengkap 200', r.status === 200, String(r.status));
 
   /* ============ 7. pengguna sekolah (login) juga tidak bisa membuka /portal ============ */
   r = await req('GET', '/portal');
-  ok('login pengguna sekolah: /portal 404', r.status === 404 && /sudah tidak digunakan/i.test(r.text), String(r.status));
-  r = await req('GET', '/iuran-siswa-spc');
-  ok('login pengguna sekolah: alamat kustom 200', r.status === 200, String(r.status));
+  ok('login pengguna sekolah: /portal dialihkan ke alamat lengkap', isRedirect(r) && dec(r.loc).endsWith(P('iuran-siswa-spc')), String(r.status) + ' ' + dec(r.loc));
+  r = await req('GET', P('iuran-siswa-spc'));
+  ok('login pengguna sekolah: alamat lengkap 200', r.status === 200, String(r.status));
   r = await req('GET', '/portal-publik');
   ok('halaman pengaturan tetap dapat dibuka pengguna sekolah', r.status === 200, String(r.status));
 
@@ -153,22 +163,23 @@ const pageTitle = h => (String(h).match(/<title>([\s\S]*?)<\/title>/) || [])[1] 
   cookie = '';
   await req('POST', '/super-admin/login', { email: 'super@simkeu.id', password: 'SuperAdmin2026!' });
   await req('POST', '/super-admin/portal-publik/1/status', { status: 'nonaktif', note: 'uji ronde 32' });
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
-  ok('Super Admin nonaktif → alamat kustom 404 (menang atas setelan sekolah)', r.status === 404 && /Administrator Pusat/.test(r.text), String(r.status));
+  r = await req('GET', P('iuran-siswa-spc'), null, { cookie: '' });
+  ok('Super Admin nonaktif → alamat lengkap 404 (menang atas setelan sekolah)', r.status === 404 && /Administrator Pusat/.test(r.text), String(r.status));
   r = await req('GET', '/portal', null, { cookie: '' });
-  ok('/portal tetap 404 saat portal diblokir pusat', r.status === 404, String(r.status));
+  ok('/portal juga dialihkan walau portal diblokir pusat', isRedirect(r), String(r.status));
   await req('POST', '/super-admin/portal-publik/1/status', { status: 'aktif' });
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
-  ok('setelah diaktifkan lagi → alamat kustom 200', r.status === 200, String(r.status));
+  r = await req('GET', P('iuran-siswa-spc'), null, { cookie: '' });
+  ok('setelah diaktifkan lagi → alamat lengkap 200', r.status === 200, String(r.status));
 
   /* ============ 9. UI tenant ============ */
   cookie = '';
   await req('POST', '/login', { kode: 'SK01', email: 'admin@sekolah.sch.id', password: 'admin123' });
   r = await req('GET', '/portal-publik');
-  ok('form tenant punya pilihan alamat bawaan', /name="portal_default_alias"/.test(r.text));
+  ok('form tenant punya pilihan alamat lama', /name="portal_default_alias"/.test(r.text));
   ok('tiga mode tersedia (auto/on/off)', /value="auto"/.test(r.text) && /value="on"/.test(r.text) && /value="off"/.test(r.text));
-  ok('menampilkan status alamat bawaan saat ini', /Saat ini:/.test(r.text) && /nonaktif/.test(r.text), (r.text.match(/Saat ini:[^<]*/) || ['-'])[0]);
-  ok('menampilkan alamat portal yang berlaku', r.text.includes('/iuran-siswa-spc'));
+  ok('menampilkan status alamat lama saat ini', /Saat ini:/.test(r.text), (r.text.match(/Saat ini:[^<]*/) || ['-'])[0]);
+  ok('menampilkan alamat lengkap portal yang berlaku', r.text.includes('/' + BASE_SEG + '/iuran-siswa-spc'));
+  ok('sakelar portal tagihan siswa berlabel "Portal Tagihan Siswa"', /Portal Tagihan Siswa/.test(r.text));
 
   /* ============ ringkasan ============ */
   try { db.close(); ctl.close(); } catch (e) { }

@@ -985,7 +985,9 @@ function bootstrap() {
       // judul tab saat tautan bertoken (?token=…) — boleh memakai placeholder {judul}
       portal_token_title: '',
       // alamat (slug) ujung URL portal publik — boleh diubah, default seperti di bawah
-      portal_slug: 'portal',
+      portal_slug: 'portal-tagihan',
+      /* bagian nama sekolah pada alamat portal: /<portal_base_slug>/<portal_slug> */
+      portal_base_slug: '',
       portal_pegawai_slug: 'portal-pegawai',
       portal_slip_slug: 'portal-slip',
       // gateway WhatsApp untuk OTP portal publik (kosong = mode demo: kode ditampilkan di layar)
@@ -1405,6 +1407,16 @@ function bootstrap() {
       if (!bc.includes('bulan_mask')) db.exec("ALTER TABLE beasiswa ADD COLUMN bulan_mask TEXT DEFAULT ''");
       if (!bc.includes('persen')) db.exec('ALTER TABLE beasiswa ADD COLUMN persen REAL DEFAULT 0');
     }
+    /* ---------- alamat portal publik: bentuk lengkap /<nama-sekolah>/<sub-slug> ----------
+       Sebelumnya slug tagihan siswa bawaan "portal" (alamat /portal). Sekarang alamat
+       selalu menyertakan nama sekolah + sub-slug "portal-tagihan". Nilai yang sudah
+       diubah pemilik (slug kustom) TIDAK disentuh. */
+    if (getSetting('portal_fullpath_v1', '') !== '1') {
+      const cur = String(getSetting('portal_slug', '') || '').trim().toLowerCase();
+      if (!cur || cur === 'portal') setSetting('portal_slug', 'portal-tagihan');
+      setSetting('portal_fullpath_v1', '1');
+    }
+
     /* ---------- default pengaturan baru (DB lama) ---------- */
     {
       const setif3 = db.prepare('INSERT OR IGNORE INTO settings (k,v) VALUES (?,?)');
@@ -1475,7 +1487,7 @@ function getSetting(k, d = '') {
 }
 function setSetting(k, v) {
   db.prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v ?? ''));
-  portalSlugCache = null;   // alamat portal publik bisa berubah → segarkan cache
+  resetPortalSlugCache();   // alamat portal publik bisa berubah → segarkan cache
 }
 function settingsAll() {
   const out = {};
@@ -1544,7 +1556,7 @@ function appLogoGlobal() { return String(mainSetting('app_logo', '') || '').trim
 /** tulis setting GLOBAL (selalu database utama) — dipakai pengaturan tampilan menu */
 function setMainSetting(k, v) {
   mainDb.prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(String(k), String(v ?? ''));
-  portalSlugCache = null;
+  portalSlugCacheSet(null);
 }
 function setNavUiGlobal(obj) { setMainSetting('nav_ui', JSON.stringify(obj || {})); }
 function navUiGlobal() {
@@ -1620,7 +1632,10 @@ function panduanUrutkan(ids) {
      portal_slip_slug     → default 'portal-slip'     (slip gaji / honor)
    ================================================================== */
 const PORTAL_SLUG_KEYS = { siswa: 'portal_slug', pegawai: 'portal_pegawai_slug', slip: 'portal_slip_slug' };
-const PORTAL_SLUG_DEFAULT = { siswa: 'portal', pegawai: 'portal-pegawai', slip: 'portal-slip' };
+const PORTAL_SLUG_DEFAULT = { siswa: 'portal-tagihan', pegawai: 'portal-pegawai', slip: 'portal-slip' };
+/* Alamat publik SELALU berbentuk /<nama-sekolah>/<sub-slug>. Bagian nama sekolah
+   disimpan pada setting `portal_base_slug` (disinkronkan dari slug kanonik tenant). */
+const PORTAL_LEGACY_SEGS = new Set(['portal', 'portal-tagihan', 'portal-pegawai', 'portal-slip']);
 /** path aplikasi yang tidak boleh dipakai sebagai slug portal */
 const RESERVED_SLUGS = new Set(['login', 'logout', 'assets', 'favicon.ico', 'favicon.svg', 'favicon.png',
   'transaksi', 'laporan', 'backup', 'pengguna', 'sekolah', 'siswa', 'iuran', 'payroll', 'pegawai', 'aset',
@@ -1636,10 +1651,44 @@ function normalizePortalSlug(raw, fallback) {
   if (s.length < 3 || s.length > 40) return fallback;
   return s;
 }
-let portalSlugCache = null;
-/** { siswa, pegawai, slip } — slug efektif (sudah tervalidasi & unik) */
+/* Cache slug per KONEKSI (per sekolah). Dulu satu variabel global sehingga sekolah
+   yang berbeda saling menimpa alamat portal saat proses berjalan multi-tenant. */
+const portalSlugCacheByConn = new WeakMap();
+let portalSlugCacheFallback = null;
+function portalCacheSlot() {
+  const conn = (typeof dbStore !== 'undefined' && dbStore.getStore()) || null;
+  return conn || 'fallback';
+}
+function portalSlugCacheGet() {
+  const slot = portalCacheSlot();
+  return slot === 'fallback' ? portalSlugCacheFallback : (portalSlugCacheByConn.get(slot) || null);
+}
+function portalSlugCacheSet(v) {
+  const slot = portalCacheSlot();
+  if (slot === 'fallback') portalSlugCacheFallback = v;
+  else portalSlugCacheByConn.set(slot, v);
+}
+/** slugkan teks bebas menjadi satu segmen URL (huruf kecil, tanda hubung) */
+function slugifySeg(raw) {
+  return String(raw || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+/** bagian nama sekolah pada alamat portal: /<base>/<sub> */
+function portalBaseSlug() {
+  const v = normalizePortalSlug(getSetting('portal_base_slug', ''), '');
+  return v || slugifySeg(getSetting('sekolah_nama', 'sekolah')) || 'sekolah';
+}
+function setPortalBaseSlug(v) {
+  setSetting('portal_base_slug', slugifySeg(v));
+  resetPortalSlugCache();
+}
+/**
+ * Alamat publik ketiga portal (RELATIF, sudah lengkap `nama-sekolah/sub-slug`):
+ *   { base, siswaSeg, pegawaiSeg, slipSeg, siswa, pegawai, slip }
+ * `siswa`, `pegawai`, `slip` = path siap pakai, mis. "smk-pgri-cikoneng/portal-tagihan".
+ */
 function portalSlugs() {
-  if (portalSlugCache) return portalSlugCache;
+  const cached = portalSlugCacheGet();
+  if (cached) return cached;
   const raw = {};
   for (const [k, key] of Object.entries(PORTAL_SLUG_KEYS)) {
     const v = String(getSetting(key, '') || '').trim();
@@ -1647,7 +1696,7 @@ function portalSlugs() {
   }
   // pastikan unik antar portal & tidak menabrak path aplikasi
   const used = new Set();
-  const out = {};
+  const seg = {};
   for (const k of ['siswa', 'pegawai', 'slip']) {
     let s = raw[k];
     if (RESERVED_SLUGS.has(s) && s !== PORTAL_SLUG_DEFAULT[k]) s = PORTAL_SLUG_DEFAULT[k];
@@ -1655,15 +1704,25 @@ function portalSlugs() {
     const base = s;
     while (used.has(s)) s = `${base}-${n++}`;
     used.add(s);
-    out[k] = s;
+    seg[k] = s;
   }
-  portalSlugCache = out;
+  const base = portalBaseSlug();
+  const out = {
+    base,
+    siswaSeg: seg.siswa, pegawaiSeg: seg.pegawai, slipSeg: seg.slip,
+    siswa: base + '/' + seg.siswa,
+    pegawai: base + '/' + seg.pegawai,
+    slip: base + '/' + seg.slip
+  };
+  portalSlugCacheSet(out);
   return out;
 }
+/** alamat publik satu portal (mis. 'siswa') → 'nama-sekolah/portal-tagihan' */
+function portalPath(key) { return portalSlugs()[key] || portalSlugs().siswa; }
 /** kosongkan cache slug (dipakai saat slug diubah dari panel Super Admin) */
-function resetPortalSlugCache() { portalSlugCache = null; }
+function resetPortalSlugCache() { portalSlugCacheSet(null); }
 /** true bila slug berbeda dari default (dipakai UI) */
-function portalSlugIsCustom(key) { return portalSlugs()[key] !== PORTAL_SLUG_DEFAULT[key]; }
+function portalSlugIsCustom(key) { return portalSlugs()[key + 'Seg'] !== PORTAL_SLUG_DEFAULT[key]; }
 /**
  * Apakah alamat bawaan "/portal" (path kanonik portal tagihan siswa) masih dilayani?
  * Setting `portal_default_alias`:
@@ -1675,8 +1734,10 @@ function portalSlugIsCustom(key) { return portalSlugs()[key] !== PORTAL_SLUG_DEF
 function portalDefaultAlias() {
   const mode = String(getSetting('portal_default_alias', 'auto') || 'auto').trim().toLowerCase();
   const custom = portalSlugIsCustom('siswa');
-  const on = mode === 'on' ? true : mode === 'off' ? false : !custom;
-  return { on, mode: (mode === 'on' || mode === 'off') ? mode : 'auto', custom, slug: portalSlugs().siswa };
+  /* Alamat publik yang sah hanya /<nama-sekolah>/<sub-slug>. Alamat lama (/portal)
+     DIALIHKAN (302) ke alamat lengkap; hanya mode 'off' yang menolaknya (404). */
+  const on = mode !== 'off';
+  return { on, mode: (mode === 'on' || mode === 'off') ? mode : 'auto', custom, slug: portalSlugs().siswaSeg, path: portalSlugs().siswa };
 }
 /**
  * Path kanonik untuk sebuah request: slug kustom → path internal.
@@ -1688,7 +1749,7 @@ function portalRewrite(pathname) {
   const slugs = portalSlugs();
   const seg = '/' + p.slice(1).split('/')[0];
   for (const [key, canonical] of [['siswa', '/portal'], ['pegawai', '/portal-pegawai'], ['slip', '/portal-slip']]) {
-    if (slugs[key] !== PORTAL_SLUG_DEFAULT[key] && seg === '/' + slugs[key]) {
+    if (slugs[key + 'Seg'] !== PORTAL_SLUG_DEFAULT[key] && seg === '/' + slugs[key + 'Seg']) {
       return canonical + p.slice(seg.length);
     }
   }
@@ -4605,7 +4666,7 @@ module.exports = {
   // ronde 9: analitik iuran, rekap sertifikasi, OTP portal, pesan orang tua, beasiswa siswa
   iuranAnalytics, sertifikasiRekap, otpCreate, otpGet, otpVerify,
   portalSecret, slipToken, verifySlipToken,
-  portalSlugs, portalSlugIsCustom, resetPortalSlugCache, portalDefaultAlias, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
+  portalSlugs, portalPath, portalBaseSlug, setPortalBaseSlug, slugifySeg, portalSlugIsCustom, resetPortalSlugCache, portalDefaultAlias, portalRewrite, portalSlugError, normalizePortalSlug, RESERVED_SLUGS,
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   portalPesanReply, portalPesanReplyClear, notifAdd, notifList, notifCount, notifRead, cloneBkuTa, nextBkuKode,

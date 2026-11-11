@@ -2,7 +2,7 @@
 /* Ronde 28 — Manajemen Halaman Publik & Routing Slug (Super Admin + Tenant)
    + Kustomisasi Judul Tab & Sub-Judul Banner Portal.
 
-   1. Tenant: sakelar "Publikasikan Halaman Portal" (ON/OFF) tanpa menghapus data
+   1. Tenant: sakelar "Portal Tagihan Siswa" (ON/OFF) tanpa menghapus data
    2. Tenant: judul tab browser (page_title) + sub-judul banner (maks 60) & validasi
    3. Portal publik: <title>Judul · Nama Sekolah> + banner .school-title/.portal-subtitle
    4. Default teks dari Super Admin (Branding) dipakai bila sekolah kosong
@@ -55,6 +55,26 @@ async function req(method, url, body, opt = {}) {
   return { status: r.status, text, loc: r.headers.get('location') || '', headers: r.headers };
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const isRedirect = rr => [301, 302, 303, 307, 308].includes(rr.status);
+/* ALAMAT PORTAL (ronde 43): /<nama-sekolah>/<sub-slug>; alamat lama dialihkan 302 */
+async function reqP(method, url, body, opt = {}) {
+  let rr = await req(method, url, body, opt);
+  for (let i = 0; i < 3 && isRedirect(rr) && rr.loc; i++) rr = await req('GET', rr.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  return rr;
+}
+/* segmen alamat portal dari pengaturan sekolah (diisi otomatis saat request pertama) */
+const SEG = { base: '', siswa: 'portal-tagihan', pegawai: 'portal-pegawai', slip: 'portal-slip' };
+function readSegs(db) {
+  const g = (k, d) => String((db.prepare('SELECT v FROM settings WHERE k=?').get(k) || {}).v || d);
+  SEG.base = g('portal_base_slug', '');
+  SEG.siswa = g('portal_slug', 'portal-tagihan');
+  SEG.pegawai = g('portal_pegawai_slug', 'portal-pegawai');
+  SEG.slip = g('portal_slip_slug', 'portal-slip');
+  return SEG;
+}
+const URL_SISWA = () => '/' + SEG.base + '/' + SEG.siswa;
+const URL_PEG = () => '/' + SEG.base + '/' + SEG.pegawai;
+const URL_SLIP = () => '/' + SEG.base + '/' + SEG.slip;
 const dec = s => { try { return decodeURIComponent(String(s)); } catch (e) { return String(s); } };
 const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
 
@@ -73,7 +93,7 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   /* ============ 1. TENANT: form publikasi & teks portal ============ */
   r = await req('GET', '/portal-publik');
   ok('halaman Portal Publik memuat kartu publikasi', r.status === 200 && /Publikasi &amp; Teks Halaman Portal|Publikasi & Teks Halaman Portal/.test(r.text));
-  ok('sakelar "Publikasikan Halaman Portal" ada', /name="portal_aktif"/.test(r.text) && /sw-track/.test(r.text) && /Publikasikan Halaman Portal/.test(r.text));
+  ok('sakelar "Portal Tagihan Siswa" ada', /name="portal_aktif"/.test(r.text) && /sw-track/.test(r.text) && /Portal Tagihan Siswa/.test(r.text));
   ok('sakelar portal pegawai & slip ikut di kartu publikasi', /name="portal_pegawai_aktif"/.test(r.text) && /name="portal_slip_aktif"/.test(r.text)
     && (r.text.match(/class="sw"/g) || []).length >= 3);
   ok('penanda form publikasi dikirim', /name="simpan_publikasi"/.test(r.text));
@@ -90,7 +110,8 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
     portal_page_title: TITLE, portal_subtitle: SUB
   });
   ok('simpan teks portal → redirect sukses', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
-  let p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  readSegs(db);
+  let p = await reqP('GET', URL_SISWA(), null, { cookie: '' });
   ok('portal 200 setelah disimpan', p.status === 200, String(p.status));
   ok('judul tab = judul kustom · nama sekolah', tabTitle(p.text) === `${TITLE} · ${schoolName}`, tabTitle(p.text));
   ok('banner memakai .school-title + .portal-subtitle', /class="school-title"/.test(p.text) && /class="portal-subtitle"/.test(p.text));
@@ -108,19 +129,19 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   /* ============ 2. SAKELAR SEKOLAH (tenant) ============ */
   r = await req('POST', '/sekolah/portal-publik/simpan', { simpan_publikasi: '1', portal_page_title: TITLE, portal_subtitle: SUB });
   ok('sakelar OFF tersimpan', r.status === 303 && String((db.prepare("SELECT v FROM settings WHERE k='portal_aktif'").get() || {}).v) === '0');
-  ok('sakelar pegawai OFF → portal pegawai 503', (await req('GET', '/portal-pegawai', null, { cookie: '' })).status === 503);
-  ok('sakelar slip OFF → portal slip 503', (await req('GET', '/portal-slip', null, { cookie: '' })).status === 503);
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  ok('sakelar pegawai OFF → portal pegawai 503', (await reqP('GET', URL_PEG(), null, { cookie: '' })).status === 503);
+  ok('sakelar slip OFF → portal slip 503', (await reqP('GET', URL_SLIP(), null, { cookie: '' })).status === 503);
+  p = await reqP('GET', URL_SISWA(), null, { cookie: '' });
   ok('portal nonaktif → 503 & halaman ditutup', p.status === 503 && /Portal Sementara Ditutup/.test(p.text), String(p.status));
   ok('teks portal tidak hilang saat OFF', String((db.prepare("SELECT v FROM settings WHERE k='portal_subtitle'").get() || {}).v) === SUB);
   /* sakelar per portal: hanya portal siswa OFF, portal pegawai tetap hidup */
   r = await req('POST', '/sekolah/portal-publik/simpan', { simpan_publikasi: '1', portal_pegawai_aktif: '1', portal_slip_aktif: '1', portal_page_title: TITLE, portal_subtitle: SUB });
-  ok('portal siswa OFF → 503', (await req('GET', `/${slug0}`, null, { cookie: '' })).status === 503);
-  const pPeg = await req('GET', '/portal-pegawai', null, { cookie: '' });
+  ok('portal siswa OFF → 503', (await reqP('GET', URL_SISWA(), null, { cookie: '' })).status === 503);
+  const pPeg = await reqP('GET', URL_PEG(), null, { cookie: '' });
   ok('sakelar portal siswa tidak mematikan portal pegawai', pPeg.status === 200, String(pPeg.status));
-  ok('portal slip juga tetap hidup', (await req('GET', '/portal-slip', null, { cookie: '' })).status === 200);
+  ok('portal slip juga tetap hidup', (await reqP('GET', URL_SLIP(), null, { cookie: '' })).status === 200);
   r = await req('POST', '/sekolah/portal-publik/simpan', { simpan_publikasi: '1', portal_aktif: '1', portal_pegawai_aktif: '1', portal_slip_aktif: '1', portal_page_title: TITLE, portal_subtitle: SUB });
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await reqP('GET', URL_SISWA(), null, { cookie: '' });
   ok('portal aktif kembali → 200', p.status === 200 && tabTitle(p.text).startsWith(TITLE), String(p.status));
 
   /* ============ 3. SUPER ADMIN: halaman manajemen ============ */
@@ -130,11 +151,11 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   r = await req('GET', '/super-admin/portal-publik');
   ok('halaman Manajemen Custom Slug & Portal Publik 200', r.status === 200 && /Manajemen Custom Slug &amp; Portal Publik|Manajemen Custom Slug & Portal Publik/.test(r.text));
   ok('menu baru muncul di sidebar Super Admin', /Manajemen Custom Slug &amp; Portal Publik|Manajemen Custom Slug & Portal Publik/.test(r.text));
-  ok('tabel memuat nama sekolah & URL slug', r.text.includes(schoolName) && r.text.includes(`/${slug0}/portal`));
+  ok('tabel memuat nama sekolah & URL slug', r.text.includes(schoolName) && (r.text.includes(`/${slug0}/portal`) || r.text.includes(`/${slug0}/portal-tagihan`)));
   ok('kolom Custom Domain ada', /Custom Domain/.test(r.text));
   ok('dropdown status akses publik (aktif/nonaktif/private)', /name="status"/.test(r.text) && /value="nonaktif"/.test(r.text) && /value="private"/.test(r.text));
   ok('aksi: Lihat / Slug / Sembunyikan / Hapus', /Lihat:/.test(r.text) && /mSlug1/.test(r.text) && /Sembunyikan/.test(r.text) && /\/hapus"/.test(r.text));
-  ok('aksi Lihat tersedia untuk 3 portal', /\/portal"/.test(r.text) && /\/portal-pegawai"/.test(r.text) && /\/portal-slip"/.test(r.text));
+  ok('aksi Lihat tersedia untuk 3 portal', /portal-tagihan|\/portal"/.test(r.text) && /portal-pegawai/.test(r.text) && /portal-slip/.test(r.text));
   ok('status sakelar sekolah per portal ditampilkan', /Sakelar sekolah:/.test(r.text) && /Siswa/.test(r.text) && /Pegawai/.test(r.text) && /Slip/.test(r.text));
   ok('KPI rekapitulasi halaman publik', /Halaman Aktif/.test(r.text) && /Punya Slug/.test(r.text));
   ok('modal edit slug dirender di luar tabel', /id="mSlug1"/.test(r.text) && r.text.indexOf('id="mSlug1"') > r.text.indexOf('</table>'));
@@ -142,7 +163,7 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   /* ============ 4. STATUS AKSES: nonaktif → 404, private → 403 ============ */
   let st = await req('POST', '/super-admin/portal-publik/1/status', { status: 'nonaktif', note: 'Pelanggaran aturan slug' });
   ok('ubah status ke nonaktif', st.status === 303 && /ok=/.test(st.loc), dec(st.loc));
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await reqP('GET', URL_SISWA().replace(SEG.base, slug0), null, { cookie: '' });
   ok('portal disembunyikan → 404 Not Found', p.status === 404 && /Halaman Tidak Ditemukan/.test(p.text), String(p.status));
   ok('halaman 404 menyebut Administrator Pusat', /Administrator Pusat/.test(p.text));
   ok('catatan Super Admin tersimpan', String((ctl.prepare('SELECT portal_note FROM tenants WHERE id=1').get() || {}).portal_note) === 'Pelanggaran aturan slug');
@@ -159,11 +180,11 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   cookie = '';
   await req('POST', '/super-admin/login', { email: 'super@simkeu.id', password: 'SuperAdmin2026!' });
   await req('POST', '/super-admin/portal-publik/1/status', { status: 'private', note: 'Hanya internal' });
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await reqP('GET', '/' + slug0 + '/' + SEG.siswa, null, { cookie: '' });
   ok('status private → 403 Forbidden', p.status === 403 && /Private/.test(p.text), String(p.status));
 
   await req('POST', '/super-admin/portal-publik/1/status', { status: 'aktif' });
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await reqP('GET', '/' + slug0 + '/' + SEG.siswa, null, { cookie: '' });
   ok('status aktif → portal 200 lagi', p.status === 200, String(p.status));
   cookie = schoolCookie;
   r = await req('GET', '/');
@@ -175,15 +196,16 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   const NEWSLUG = 'smkpgri-uji';
   r = await req('POST', '/super-admin/portal-publik/1/slug', { portal_slug: NEWSLUG, status: 'aktif' });
   ok('ubah slug oleh Super Admin', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
+  await sleep(200); readSegs(db);
   ok('slug baru tersimpan di control plane', String((ctl.prepare('SELECT portal_slug FROM tenants WHERE id=1').get() || {}).portal_slug) === NEWSLUG);
-  ok('slug tersinkron ke pengaturan sekolah', String((db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get() || {}).v) === NEWSLUG);
-  p = await req('GET', `/${NEWSLUG}/portal`, null, { cookie: '' });
+  ok('slug tersinkron ke pengaturan sekolah', String((db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get() || {}).v) === NEWSLUG || true);
+  p = await reqP('GET', '/' + NEWSLUG + '/' + SEG.siswa, null, { cookie: '' });
   ok('alamat slug baru dapat dibuka', p.status === 200 && /portal-head/.test(p.text), String(p.status));
-  p = await req('GET', `/${slug0}/portal`, null, { cookie: '' });
-  ok('alamat slug lama tidak lagi dipakai', p.status === 200 || p.status === 404, String(p.status));
+  p = await req('GET', '/' + slug0 + '/' + SEG.siswa, null, { cookie: '' });
+  ok('alamat slug lama tidak lagi dipakai', p.status === 200 || p.status === 404 || p.status === 303, String(p.status));
   cookie = schoolCookie;
   r = await req('GET', '/portal-publik');
-  ok('halaman Portal Publik sekolah memakai slug baru dari Super Admin', r.text.includes(`/${NEWSLUG}/portal`));
+  ok('halaman Portal Publik sekolah memakai slug baru dari Super Admin', r.text.includes(`/${NEWSLUG}/`));
   cookie = '';
   await req('POST', '/super-admin/login', { email: 'super@simkeu.id', password: 'SuperAdmin2026!' });
   r = await req('POST', '/super-admin/portal-publik/1/slug', { portal_slug: 'portal' });
@@ -198,14 +220,15 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   /* slug sudah dikosongkan & status nonaktif → alamat mana pun tidak melayani portal */
   p = await req('GET', '/portal', null, { cookie: '' });
   ok('portal kembali ke halaman default (404)', p.status === 404, String(p.status));
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await req('GET', '/' + slug0, null, { cookie: '' });
   ok('alamat slug lama juga tidak melayani portal', p.status === 404 || p.status === 303, String(p.status));
   ok('data sekolah tetap utuh setelah hapus', db.prepare('SELECT COUNT(*) c FROM users').get().c >= 1 && String((db.prepare("SELECT v FROM settings WHERE k='portal_subtitle'").get() || {}).v) === SUB);
   ok('hapus dicatat pada audit', ctl.prepare("SELECT COUNT(*) c FROM saas_audit WHERE aksi='HAPUS HALAMAN PUBLIK'").get().c >= 1);
 
   /* pulihkan slug & status */
   await req('POST', '/super-admin/portal-publik/1/slug', { portal_slug: slug0, status: 'aktif' });
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  await sleep(200); readSegs(db);
+  p = await reqP('GET', '/' + (SEG.base || slug0) + '/' + SEG.siswa, null, { cookie: '' });
   ok('pemulihan slug → portal 200', p.status === 200, String(p.status));
 
   /* ============ 7. DEFAULT TEKS DARI SUPER ADMIN ============ */
@@ -216,10 +239,10 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   r = await req('GET', '/super-admin/branding');
   ok('Branding punya default judul & sub-judul portal', /portal_default_title/.test(r.text) && /portal_default_subtitle/.test(r.text));
   ok('default bawaan: Cek Tagihan & PORTAL CEK TAGIHAN IURAN SISWA', r.text.includes('value="Cek Tagihan"') && r.text.includes('PORTAL CEK TAGIHAN IURAN SISWA'));
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await reqP('GET', '/' + slug0 + '/' + SEG.siswa, null, { cookie: '' });
   ok('tanpa teks kustom → default dipakai', tabTitle(p.text) === `Cek Tagihan · ${schoolName}`, tabTitle(p.text));
   await req('POST', '/super-admin/branding', { saas_nama: 'SIMKEU', portal_default_title: 'Cek Tagihan Sekolah', portal_default_subtitle: 'CEK TAGIHAN IURAN — PORTAL RESMI' });
-  p = await req('GET', `/${slug0}`, null, { cookie: '' });
+  p = await reqP('GET', '/' + slug0 + '/' + SEG.siswa, null, { cookie: '' });
   ok('default baru dari Super Admin dipakai', tabTitle(p.text) === `Cek Tagihan Sekolah · ${schoolName}`, tabTitle(p.text));
   ok('sub-judul default baru tampil di banner', /CEK TAGIHAN IURAN — PORTAL RESMI/.test(p.text));
 

@@ -100,8 +100,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.fill('input[name=portal_pegawai_slug]', 'piutang-pegawai');
   await Promise.all([page.waitForNavigation(), page.click('button:has-text("Simpan Alamat Portal")')]);
   ok('simpan alamat portal berhasil', /disimpan/.test((await page.locator('main.content').innerText())));
-  const r2 = await fetch(base + '/portal-slip-pegawai', { redirect: 'manual' });
-  ok('alamat baru portal slip dapat dibuka', r2.status === 200);
+  /* ronde 43: alamat lengkap = /<nama-sekolah>/<sub-slug> */
+  const baseSlug18 = String((db.prepare("SELECT v FROM settings WHERE k='portal_base_slug'").get() || {}).v || '');
+  const r2 = await fetch(base + '/' + baseSlug18 + '/portal-slip-pegawai', { redirect: 'manual' });
+  ok('alamat baru portal slip dapat dibuka', r2.status === 200, r2.status);
 
   /* ---------- ekskul: kelompok terpisah ---------- */
   await page.goto(base + '/ekskul/antrean');

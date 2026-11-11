@@ -161,13 +161,53 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         : ui.emptyState('Tidak ada BKU pada periode ini', 'Pilih periode lain atau centang "semua BKU" untuk menampilkan seluruh buku kas.')}
       ${laterModals.join('')}
       ${tampil.some(r => r.status !== 'ditutup' && r.b.status === 'aktif') ? `
-      <form method="post" action="${c.base}/tutup-bulanan/tutup-massal" id="fMassal" data-confirm="Tutup semua BKU yang dicentang sekaligus dengan Opsi A (rollover saldo buku)?">
+      <form method="post" action="${c.base}/tutup-bulanan/tutup-massal" id="fMassal">
         <input type="hidden" name="periode" value="${esc(periode)}">
       </form>
       <div class="bulk-bar">
-        <div class="small muted">Centang beberapa BKU pada kolom paling kiri, lalu tutup sekaligus dengan <b>Opsi A (rollover saldo buku)</b>. Untuk opnam kas riil, gunakan tombol Tutup Bulanan per BKU.</div>
-        <button class="btn btn-primary" form="fMassal">${ui.icon('lock')}Tutup BKU Terpilih</button>
+        <div class="small muted">Centang beberapa BKU pada kolom paling kiri, lalu tutup sekaligus — tersedia <b>Opsi A (rollover saldo buku)</b> maupun <b>Opsi B (opnam kas riil + berita acara)</b> seperti penutupan satu per satu.</div>
+        <button type="button" class="btn btn-primary" data-open="mMassalTutup">${ui.icon('lock')}Tutup BKU Terpilih</button>
       </div>` : ''}
+      ${tampil.some(r => r.status !== 'ditutup' && r.b.status === 'aktif') ? ui.modal('mMassalTutup', {
+        title: 'Tutup BKU Terpilih — Pilih Mekanisme',
+        wide: true,
+        body: `<div class="alert info">${ui.icon('info')}<div>BKU yang diproses adalah yang <b>dicentang</b> pada tabel (kolom paling kiri).
+          Mekanisme di bawah berlaku untuk semua BKU terpilih — sama seperti penutupan satu per satu.</div></div>
+        <div class="field"><label>Mekanisme Penutupan</label>
+          <div class="radio-cards" style="grid-template-columns:1fr">
+            <input type="radio" name="metode_massal" id="mtMassA" value="rollover" form="fMassal" checked>
+            <label for="mtMassA"><span class="dot"></span><span>Opsi A — Lanjutkan Sisa Saldo Buku (Otomatis)<br>
+              <span class="small muted" style="font-weight:500">Saldo buku tiap BKU 100% menjadi saldo awal bulan berikutnya.</span></span></label>
+            <input type="radio" name="metode_massal" id="mtMassB" value="opnam" form="fMassal">
+            <label for="mtMassB"><span class="dot"></span><span>Opsi B — Penyesuaian Kas Riil (Opnam Kas)<br>
+              <span class="small muted" style="font-weight:500">Isi uang tunai &amp; saldo bank riil tiap BKU; selisih dibukukan otomatis.</span></span></label>
+          </div>
+        </div>
+        <div class="field"><label>Format Nomor Berita Acara</label>
+          <input name="ba_pattern" form="fMassal" value="BA-{jenis}/{kode}/{periode}" class="mb-0">
+          <div class="hint">Placeholder: <b>{kode}</b> kode BKU · <b>{periode}</b> periode (mis. 202611) · <b>{jenis}</b> ROLL/OPNAM · <b>{nama}</b> nama BKU.</div></div>
+        <div data-massal-opnam style="display:none">
+          <div class="alert warn">${ui.icon('alert')}<div>Isi kas riil untuk setiap BKU yang dicentang. Selisih terhadap saldo buku akan dibukukan sebagai
+            <b>Selisih Kas Lebih (9.2.01)</b> / <b>Kurang (9.2.02)</b> pada akhir periode.</div></div>
+          <div class="table-wrap table-scroll short"><table><thead><tr><th>Buku Kas</th><th class="num">Saldo Buku</th>
+            <th>Uang Tunai Riil</th><th>Saldo Bank Riil</th><th>Alasan Selisih</th></tr></thead><tbody>
+            ${tampil.filter(r => r.status !== 'ditutup' && r.b.status === 'aktif').map(r => {
+          const isBank = /bank/i.test(r.b.nama);
+          return `<tr>
+              <td class="t-strong">${esc(r.b.nama)}<div class="t-sub mono">${esc(r.b.kode || '')}</div></td>
+              <td class="num">${rupiah(r.pos.saldoBuku)}</td>
+              <td>${ui.moneyInput('opnam_tunai_' + r.b.id, isBank ? 0 : r.pos.saldoBuku, 'form="fMassal" placeholder="0"')}</td>
+              <td>${ui.moneyInput('opnam_bank_' + r.b.id, isBank ? r.pos.saldoBuku : 0, 'form="fMassal" placeholder="0"')}</td>
+              <td><input name="alasan_${r.b.id}" form="fMassal" placeholder="opsional bila selisih 0" style="min-width:150px"></td>
+            </tr>`;
+        }).join('')}
+          </tbody></table></div>
+          <div class="field"><label>Selisih Dibukukan Pada</label>
+            <select name="metode_penyesuaian" form="fMassal"><option value="tunai">Kas Tunai</option><option value="transfer">Rekening Bank</option></select></div>
+        </div>`,
+        footer: `<button class="btn" type="button" data-close="mMassalTutup">Batal</button>
+          <button class="btn btn-primary" type="submit" form="fMassal">${ui.icon('lock')}Tutup BKU Terpilih</button>`
+      }) : ''}
       <p class="help mt-2">Aturan: transaksi pada bulan yang sudah berganti otomatis <b>diblokir</b> sampai BKU bulan tersebut ditutup. Setelah ditutup, transaksi periode itu terkunci dan hanya bisa dibuka kembali oleh Super Admin/Bendahara Utama.</p>
     </div>
 
@@ -228,24 +268,44 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!/^\d{4}-\d{2}$/.test(periode || '')) return res.redirect(req.BASE + '/tutup-bulanan?err=' + encodeURIComponent('Periode tidak valid.'));
     const ids = Object.keys(req.body).filter(k => /^pilih_\d+$/.test(k) && req.body[k]).map(k => Number(k.slice(6)));
     if (!ids.length) return res.redirect(req.BASE + `/tutup-bulanan?periode=${periode}&err=` + encodeURIComponent('Pilih minimal satu BKU yang akan ditutup.'));
-    let ok = 0, total = 0;
+    /* mekanisme penutupan: Opsi A (rollover) atau Opsi B (opnam kas riil) — sama seperti per BKU */
+    const metode = String(req.body.metode_massal || req.body.metode || 'rollover') === 'opnam' ? 'opnam' : 'rollover';
+    const pola = String(req.body.ba_pattern || '').trim() || (metode === 'opnam' ? 'BA-OPNAM/{kode}/{periode}' : 'BA-ROLL/{kode}/{periode}');
+    const baOf = (b, jenis) => pola
+      .replace(/\{kode\}/gi, b.kode || 'BKU')
+      .replace(/\{periode\}/gi, periode.replace('-', ''))
+      .replace(/\{jenis\}/gi, jenis)
+      .replace(/\{nama\}/gi, b.nama || '')
+      .slice(0, 80);
+    let ok = 0, total = 0, totalSelisih = 0;
     const gagal = [];
     for (const id of ids) {
       const b = db.prepare('SELECT * FROM bku WHERE id=?').get(id);
       if (!b) continue;
       if (dbm.periodeStatus(id, periode) === 'ditutup') { gagal.push(`${b.nama} (sudah ditutup)`); continue; }
       try {
-        db.transaction(() => dbm.closePeriode(id, periode, { metode: 'rollover' }, req.user))();
+        const pos = dbm.periodePosisi(id, periode);
+        const opt = { metode, berita_acara_no: baOf(b, metode === 'opnam' ? 'OPNAM' : 'ROLL') };
+        if (metode === 'opnam') {
+          opt.opnam_tunai = lib.parseMoney(req.body['opnam_tunai_' + id]);
+          opt.opnam_bank = lib.parseMoney(req.body['opnam_bank_' + id]);
+          opt.alasan = String(req.body['alasan_' + id] || req.body.alasan || '').trim();
+          opt.metode_penyesuaian = String(req.body.metode_penyesuaian || 'tunai') === 'transfer' ? 'transfer' : 'tunai';
+        }
+        const hasil = db.transaction(() => dbm.closePeriode(id, periode, opt, req.user))();
         ok++;
-        total += dbm.periodePosisi(id, periode).saldoBuku;
+        total += pos.saldoBuku;
+        totalSelisih += Number(hasil && hasil.selisih) || 0;
       } catch (e) {
         gagal.push(`${b.nama} (${e.message})`);
       }
     }
     dbm.logAudit(req.user, 'TUTUP BULAN', 'tutup_bulanan',
-      `Tutup massal periode ${dbm.periodeLabel(periode)}: ${ok} dari ${ids.length} BKU berhasil`);
+      `Tutup massal periode ${dbm.periodeLabel(periode)} (${metode === 'opnam' ? 'Opsi B — opnam' : 'Opsi A — rollover'}): ${ok} dari ${ids.length} BKU berhasil`);
     const q = [];
-    if (ok) q.push('ok=' + encodeURIComponent(`${ok} BKU periode ${dbm.periodeLabel(periode)} berhasil ditutup dengan Opsi A (rollover).`));
+    if (ok) q.push('ok=' + encodeURIComponent(
+      `${ok} BKU periode ${dbm.periodeLabel(periode)} ditutup dengan ${metode === 'opnam' ? 'Opsi B (opnam kas riil)' : 'Opsi A (rollover saldo buku)'}`
+      + `${metode === 'opnam' && Math.abs(totalSelisih) >= 1 ? ` — total selisih ${rupiah(totalSelisih)} telah dibukukan` : ''}.`));
     if (gagal.length) q.push('err=' + encodeURIComponent(`${gagal.length} BKU gagal ditutup: ${gagal.slice(0, 4).join('; ')}${gagal.length > 4 ? '…' : ''}`));
     res.redirect(req.BASE + `/tutup-bulanan?periode=${periode}&semua=1&` + (q.join('&') || 'ok=' + encodeURIComponent('Tidak ada BKU yang ditutup.')));
   });

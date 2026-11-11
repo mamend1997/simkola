@@ -51,6 +51,15 @@ async function req(method, url, body, opt = {}) {
   const text = opt.binary ? Buffer.from(await r.arrayBuffer()) : await r.text();
   return { status: r.status, text, loc: r.headers.get('location') || '', headers: r.headers };
 }
+
+/* ronde 43: alamat portal lengkap /<nama-sekolah>/<sub-slug> — alamat lama dialihkan */
+async function reqFollow26(url, opt = {}) {
+  let rr = await req('GET', url, null, opt);
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(rr.status) && rr.loc; i++) {
+    rr = await req('GET', rr.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  }
+  return rr;
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const decode = s => { try { return decodeURIComponent(s); } catch (e) { return s; } };
 const today = new Date().toISOString().slice(0, 10);
@@ -294,7 +303,7 @@ const today = new Date().toISOString().slice(0, 10);
   await req('POST', '/login', { kode: 'SK01', email: 'admin@sekolah.sch.id', password: 'admin123' });
   await req('POST', '/tema', { tema_warna: '#F97316', tema_hex: '#F97316', mode_tema: 'dark', app_nama: 'SIMKEU Sekolah' });
   cookie = '';
-  r = await req('GET', '/portal', null, { cookie: '' });
+  r = await reqFollow26('/portal', { cookie: '' });
   ok('portal publik mengikuti mode gelap sekolah', /data-mode="dark"/.test(r.text));
   cookie = '';
   await req('POST', '/login', { kode: 'SK01', email: 'admin@sekolah.sch.id', password: 'admin123' });

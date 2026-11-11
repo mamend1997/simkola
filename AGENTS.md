@@ -1515,3 +1515,23 @@ node dev-tests/round38.js   # 36 cek: simpan lintas TA → BKU padanan TA tangga
 ```
 Regresi yang dijalankan ulang: `regress.js` (23), `round9.js` (109), `round34.js` (103), `newfeat.js` (90),
 `ui-round34.js` (55) — semua lulus.
+
+---
+
+## Ronde 43 — sidebar hover/akordeon, TA salin BKU, kode BKU otomatis, balas catatan orang tua, bayar iuran portal, alamat portal lengkap
+
+Detail lengkap ada di `AGENTS.md` root (bagian "Ronde 43 SIMKEU"). Ringkas:
+
+- **Alamat portal publik** = `/<nama-sekolah>/<sub-slug>`; `dbm.portalSlugs()` mengembalikan PATH LENGKAP
+  (`siswa`, `pegawai`, `slip`) + `siswaSeg` dll. Alamat lama (`/portal*`, `/<nama-sekolah>`) → 302;
+  `portal_default_alias='off'` → 404. Setting baru `portal_base_slug`, default sub-slug tagihan `portal-tagihan`.
+  **Jangan** menulis `${base}/${dbm.portalSlugs().siswa}` dua kali — nilainya sudah termasuk nama sekolah.
+- **Cache slug per koneksi** (`WeakMap`) — dulu satu variabel global sehingga alamat sekolah lain bisa bocor.
+- **Bayar iuran portal**: `bayariuran.js` + `routes/pembayaran.js` (tabel `iuran_checkout`, tabel `notif`),
+  halaman `/pembayaran-online`, verifikasi di `/iuran/antrean#verifikasi`, callback `POST /portal/pay/callback`.
+- **`/rekon`**: tabel input saldo koran semua BKU (`POST /rekon/saldo-masal`).
+- **Tutup BKU masal**: modal `mMassalTutup` Opsi A/B + `ba_pattern`.
+- **Sidebar**: `.sb-inner`, `#navHoverPref`, `.hover-open`, akordeon eksklusif (`simkeu:nav-open-id`).
+- **Tahun ajaran**: `salin_bku` (menyalin BKU TA sebelumnya) menggantikan pembuatan 17 BKU standar.
+- **Kode BKU**: `dbm.nextBkuKode(jenis)`.
+- Test: `node dev-tests/round42.js` (84 cek).

@@ -230,18 +230,23 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
      ================================================================== */
   const slug0 = String((ctl.prepare('SELECT portal_slug FROM tenants WHERE id=1').get() || {}).portal_slug || '');
   ok('slug kanonik sekolah tersedia', !!slug0, slug0);
-  r = await req('GET', `/${slug0}/portal`, null, { cookie: '' });
-  ok('alamat /<slug>/portal dapat dibuka tanpa login', r.status === 200, `${r.status} · ${slug0}`);
-  r = await req('GET', `/${slug0}`, null, { cookie: '' });
-  ok('alamat /<slug> (kanonik) dapat dibuka', r.status === 200, String(r.status));
-  r = await req('GET', `/portal/${slug0}`, null, { cookie: '' });
-  ok('alamat /portal/<slug> dapat dibuka', r.status === 200, String(r.status));
-  r = await req('GET', `/${slug0}/portal-pegawai`, null, { cookie: '' });
+  const base0 = slug0.split('/')[0];
+  const isRedir = x => [301, 302, 303, 307, 308].includes(typeof x === 'number' ? x : x && x.status);
+  /* ronde 43: alamat sah = /<nama-sekolah>/<sub-slug> */
+  r = await req('GET', `/${base0}/portal-tagihan`, null, { cookie: '' });
+  ok('alamat /<nama-sekolah>/portal-tagihan dapat dibuka tanpa login', r.status === 200, `${r.status} · ${base0}`);
+  r = await req('GET', `/${base0}/portal`, null, { cookie: '' });
+  ok('alamat lama /<slug>/portal dialihkan ke alamat lengkap', isRedir(r.status) && /portal-tagihan/.test(r.loc || ''), `${r.status} ${r.loc || ''}`);
+  r = await req('GET', `/${base0}`, null, { cookie: '' });
+  ok('alamat /<slug> (kanonik) dialihkan ke alamat lengkap', isRedir(r.status) && /portal-tagihan/.test(r.loc || ''), String(r.status));
+  r = await req('GET', `/portal/${base0}`, null, { cookie: '' });
+  ok('alamat /portal/<slug> dialihkan ke alamat lengkap', isRedir(r.status) && /portal-tagihan/.test(r.loc || ''), String(r.status));
+  r = await req('GET', `/${base0}/portal-pegawai`, null, { cookie: '' });
   ok('alamat /<slug>/portal-pegawai dapat dibuka', r.status === 200, String(r.status));
   r = await req('GET', '/sekolah-tidak-ada/portal', null, { cookie: '' });
   ok('slug tidak dikenal tetap 404', r.status === 404, String(r.status));
 
-  // slug dua bagian ("sekolah/tagihan") — dulu /<sekolah>/portal dijawab 404
+  // slug dua bagian ("sekolah/tagihan") — bagian nama sekolah tetap segmen pertama
   const twoPart = 'sekolah-uji-r34/tagihan';
   r = await req('POST', '/super-admin/portal-publik/1/slug', { portal_slug: twoPart, status: 'aktif' }, { super: true });
   ok('super admin menyimpan slug dua bagian', r.status === 303, dec(r.loc));
@@ -249,23 +254,25 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   ok('slug dua bagian tersimpan di control plane',
     String((ctl.prepare('SELECT portal_slug FROM tenants WHERE id=1').get() || {}).portal_slug || '') === twoPart,
     String((ctl.prepare('SELECT portal_slug FROM tenants WHERE id=1').get() || {}).portal_slug || ''));
+  r = await req('GET', '/sekolah-uji-r34/portal-tagihan', null, { cookie: '' });
+  ok('alamat slug dua bagian → /<nama-sekolah>/portal-tagihan 200', r.status === 200, String(r.status));
   r = await req('GET', '/sekolah-uji-r34/tagihan', null, { cookie: '' });
-  ok('alamat slug dua bagian (kanonik) 200', r.status === 200, String(r.status));
+  ok('alamat lama slug dua bagian dialihkan', isRedir(r.status) && /portal-tagihan/.test(r.loc || ''), String(r.status));
   r = await req('GET', '/sekolah-uji-r34/portal', null, { cookie: '' });
-  ok('alamat /<nama-sekolah>/portal pada slug dua bagian 200', r.status === 200, String(r.status));
+  ok('alamat /<nama-sekolah>/portal pada slug dua bagian dialihkan', isRedir(r.status) && /portal-tagihan/.test(r.loc || ''), String(r.status));
   r = await req('GET', '/sekolah-uji-r34/tagihan/portal', null, { cookie: '' });
-  ok('alamat /<nama-sekolah>/<custom>/portal 200', r.status === 200, String(r.status));
+  ok('alamat /<nama-sekolah>/<custom>/portal dialihkan', isRedir(r.status), String(r.status));
   r = await req('GET', '/sekolah-uji-r34/portal-pegawai', null, { cookie: '' });
   ok('alamat /<nama-sekolah>/portal-pegawai pada slug dua bagian 200', r.status === 200, String(r.status));
   // pengguna yang sudah login juga tidak boleh 404 saat membuka alamat portal sekolahnya
-  r = await req('GET', '/sekolah-uji-r34/portal');
-  ok('alamat /<nama-sekolah>/portal untuk pengguna login tidak 404', r.status === 200, String(r.status));
+  r = await req('GET', '/sekolah-uji-r34/portal-tagihan');
+  ok('alamat /<nama-sekolah>/portal-tagihan untuk pengguna login tidak 404', r.status === 200, String(r.status));
   r = await req('GET', '/sekolah-uji-r34');
-  ok('alamat /<nama-sekolah> untuk pengguna login tidak 404', r.status === 200, String(r.status));
+  ok('alamat /<nama-sekolah> untuk pengguna login dialihkan (tidak 404)', isRedir(r.status) && /portal-tagihan/.test(r.loc || ''), String(r.status));
   // kembalikan slug semula
   await req('POST', '/super-admin/portal-publik/1/slug', { portal_slug: slug0, status: 'aktif' }, { super: true });
   await sleep(300);
-  r = await req('GET', `/${slug0}/portal`, null, { cookie: '' });
+  r = await req('GET', `/${base0}/portal-tagihan`, null, { cookie: '' });
   ok('slug semula kembali berfungsi', r.status === 200, String(r.status));
 
   /* ==================================================================

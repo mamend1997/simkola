@@ -89,6 +89,18 @@ const hasMeta = (h, prop) => new RegExp(`<meta (?:property|name)="${prop}"`).tes
     simpan_publikasi: '1', portal_aktif: '1', portal_pegawai_aktif: '1', portal_slip_aktif: '1',
     portal_page_title: TITLE, portal_subtitle: SUB
   }, extra));
+  const SEG = () => ({
+    base: String((db.prepare("SELECT v FROM settings WHERE k='portal_base_slug'").get() || {}).v || ''),
+    siswa: String((db.prepare("SELECT v FROM settings WHERE k='portal_slug'").get() || {}).v || 'portal-tagihan')
+  });
+  const PSISWA = () => '/' + SEG().base + '/' + SEG().siswa;
+  const reqP = async (url, opt = {}) => {
+    let rr = await req('GET', url, null, opt);
+    for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(rr.status) && rr.loc; i++) {
+      rr = await req('GET', rr.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+    }
+    return rr;
+  };
   const tokenOf = async () => {
     const pv = await req('GET', '/iuran/wa/preview?siswa_id=' + siswa.id);
     let json = {}; try { json = JSON.parse(pv.text); } catch (e) { }
@@ -98,7 +110,7 @@ const hasMeta = (h, prop) => new RegExp(`<meta (?:property|name)="${prop}"`).tes
   /* ============ 1. TANPA TOKEN ============ */
   let s = await save({});
   ok('simpan judul portal', s.status === 303 && /ok=/.test(s.loc), dec(s.loc));
-  r = await req('GET', '/portal', null, { cookie: '' });
+  r = await reqP(PSISWA(), { cookie: '' });
   ok('portal 200', r.status === 200, String(r.status));
   ok('judul tab = "<judul> · <nama sekolah>"', pageTitle(r.text) === `${TITLE} · ${schoolName}`, pageTitle(r.text));
   ok('og:title sinkron dengan <title>', metaOf(r.text, 'og:title') === `${TITLE} · ${schoolName}`, metaOf(r.text, 'og:title'));
@@ -108,7 +120,7 @@ const hasMeta = (h, prop) => new RegExp(`<meta (?:property|name)="${prop}"`).tes
   ok('twitter:card tersedia', !!metaOf(r.text, 'twitter:card'), metaOf(r.text, 'twitter:card'));
   ok('og:image memakai logo sekolah', metaOf(r.text, 'og:image') === LOGO, metaOf(r.text, 'og:image'));
   ok('og:type website & og:locale id_ID', metaOf(r.text, 'og:type') === 'website' && metaOf(r.text, 'og:locale') === 'id_ID');
-  ok('og:url menunjuk alamat publik portal', /\/portal$/.test(metaOf(r.text, 'og:url')), metaOf(r.text, 'og:url'));
+  ok('og:url menunjuk alamat publik portal', new RegExp('/' + SEG().base + '/' + SEG().siswa + '$').test(metaOf(r.text, 'og:url')), metaOf(r.text, 'og:url'));
   ok('halaman publik TIDAK noindex', !hasMeta(r.text, 'robots'));
   ok('judul kartu form ikut judul portal (bukan hardcode)', new RegExp(`<h2>${TITLE}</h2>`).test(r.text));
   ok('nama sekolah tampil di banner', r.text.includes(`<h1 class="school-title">${schoolName}</h1>`));
@@ -116,13 +128,13 @@ const hasMeta = (h, prop) => new RegExp(`<meta (?:property|name)="${prop}"`).tes
   /* slug kustom tetap konsisten (contoh prompt: /iuran-siswa-spc) */
   r = await req('POST', '/sekolah/portal-slug', { portal_slug: 'iuran-siswa-spc', portal_pegawai_slug: 'portal-pegawai', portal_slip_slug: 'portal-slip' });
   ok('slug portal diubah ke iuran-siswa-spc', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc', { cookie: '' });
   ok('judul tetap benar pada slug kustom', pageTitle(r.text) === `${TITLE} · ${schoolName}`, pageTitle(r.text));
 
   /* ============ 2. TOKEN AKTIF — OPSI A (judul sama) ============ */
   const token = await tokenOf();
   ok('token pribadi terbit dari pratinjau WA', token.length > 10, token.slice(0, 12));
-  r = await req('GET', '/iuran-siswa-spc?token=' + encodeURIComponent(token), null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc?token=' + encodeURIComponent(token), { cookie: '' });
   ok('tautan bertoken menampilkan tagihan siswa', r.status === 200 && /Siswa Judul/.test(r.text), String(r.status));
   ok('Opsi A: judul tab SAMA dengan tanpa token', pageTitle(r.text) === `${TITLE} · ${schoolName}`, pageTitle(r.text));
   ok('og:title juga sama pada tautan bertoken', metaOf(r.text, 'og:title') === `${TITLE} · ${schoolName}`, metaOf(r.text, 'og:title'));
@@ -133,19 +145,19 @@ const hasMeta = (h, prop) => new RegExp(`<meta (?:property|name)="${prop}"`).tes
   /* ============ 3. TOKEN AKTIF — OPSI B (prefix dinamis) ============ */
   s = await save({ portal_token_title: 'Rincian {judul}' });
   ok('simpan judul bertoken', s.status === 303 && /ok=/.test(s.loc), dec(s.loc));
-  r = await req('GET', '/iuran-siswa-spc?token=' + encodeURIComponent(token), null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc?token=' + encodeURIComponent(token), { cookie: '' });
   ok('Opsi B: placeholder {judul} diganti judul portal', pageTitle(r.text) === `Rincian ${TITLE} · ${schoolName}`, pageTitle(r.text));
   ok('og:title mengikuti judul bertoken', metaOf(r.text, 'og:title') === `Rincian ${TITLE} · ${schoolName}`, metaOf(r.text, 'og:title'));
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc', { cookie: '' });
   ok('URL tanpa token TIDAK memakai prefix token', pageTitle(r.text) === `${TITLE} · ${schoolName}`, pageTitle(r.text));
 
   /* teks bebas tanpa placeholder */
   await save({ portal_token_title: 'Tagihan Pribadi' });
-  r = await req('GET', '/iuran-siswa-spc?token=' + encodeURIComponent(token), null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc?token=' + encodeURIComponent(token), { cookie: '' });
   ok('judul bertoken boleh teks bebas', pageTitle(r.text) === `Tagihan Pribadi · ${schoolName}`, pageTitle(r.text));
 
   /* ============ 4. TOKEN PALSU ============ */
-  r = await req('GET', '/iuran-siswa-spc?token=palsu-token-123', null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc?token=palsu-token-123', { cookie: '' });
   ok('token palsu → judul kembali ke judul biasa', pageTitle(r.text) === `${TITLE} · ${schoolName}`, pageTitle(r.text));
   ok('token palsu menampilkan form + pesan', /Tautan tagihan tidak valid/.test(r.text));
   ok('token palsu tidak memakai noindex', !hasMeta(r.text, 'robots'));
@@ -168,9 +180,9 @@ const hasMeta = (h, prop) => new RegExp(`<meta (?:property|name)="${prop}"`).tes
   cookie = '';
   await req('POST', '/login', { kode: 'SK01', email: 'admin@sekolah.sch.id', password: 'admin123' });
   await save({ portal_token_title: '' });
-  r = await req('GET', '/iuran-siswa-spc?token=' + encodeURIComponent(token), null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc?token=' + encodeURIComponent(token), { cookie: '' });
   ok('sekolah kosong → memakai default Super Admin', pageTitle(r.text) === `Rincian ${TITLE} · ${schoolName}`, pageTitle(r.text));
-  r = await req('GET', '/iuran-siswa-spc', null, { cookie: '' });
+  r = await reqP('/' + SEG().base + '/iuran-siswa-spc', { cookie: '' });
   ok('default Super Admin hanya untuk tautan bertoken', pageTitle(r.text) === `${TITLE} · ${schoolName}`, pageTitle(r.text));
 
   /* ============ 7. PANEL TENANT ============ */

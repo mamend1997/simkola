@@ -21,7 +21,7 @@ const base = `http://127.0.0.1:${PORT}`;
 let cookie = '';
 const results = [];
 function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra }); if (!cond) console.log('FAIL', name, extra); }
-async function req(method, url, body, opt = {}) {
+async function reqRaw(method, url, body, opt = {}) {
   const headers = {};
   if (cookie && !opt.public) headers.Cookie = cookie;
   let payload = null;
@@ -37,8 +37,20 @@ async function req(method, url, body, opt = {}) {
   const sc = r.headers.get('set-cookie');
   if (sc && !opt.public) cookie = sc.split(';')[0];
   const text = opt.binary ? Buffer.from(await r.arrayBuffer()) : await r.text();
-  return { status: r.status, text, headers: r.headers };
+  return { status: r.status, text, headers: r.headers, loc: r.headers.get('location') || '' };
 }
+
+/* ronde 43: alamat portal publik berpindah ke /<nama-sekolah>/<sub-slug>.
+   Permintaan GET ke alamat lama (/portal…) dialihkan 302 — helper ini mengikutinya. */
+async function portalFollow43(method, url, body, opt) {
+  let r = await reqRaw(method, url, body, opt);
+  if (method !== 'GET' || !/^\/portal(-|$|\?|\/)/.test(String(url || ''))) return r;
+  for (let i = 0; i < 3 && [301, 302, 303, 307, 308].includes(r.status) && r.loc; i++) {
+    r = await reqRaw('GET', r.loc.replace(/^https?:\/\/[^/]+/, ''), null, opt);
+  }
+  return r;
+}
+const req = (...a) => portalFollow43(...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const today = new Date().toISOString().slice(0, 10);
 const periode = today.slice(0, 7);
@@ -156,8 +168,9 @@ const periode = today.slice(0, 7);
 
   /* ===== 6. portal siswa: autocomplete, datepicker, tanpa login petugas, feedback ===== */
   r = await req('GET', '/portal', null, { public: true });
+  if (process.env.DBG9) console.log('DBG /portal', r.status, r.loc, r.text.slice(0,200));
   ok('portal siswa tanpa tombol Login Petugas', r.status === 200 && !/Login Petugas/.test(r.text));
-  ok('kolom nama memakai autocomplete', /data-autocomplete="\/portal\/siswa"/.test(r.text) && /data-autocomplete-min="3"/.test(r.text));
+  ok('kolom nama memakai autocomplete', /data-autocomplete="[^"]*\/siswa"/.test(r.text) && /data-autocomplete-min="3"/.test(r.text));
   ok('tanggal lahir memakai datepicker', /<input type="date" name="lahir"/.test(r.text));
   r = await req('GET', '/portal/siswa?q=An', null, { public: true });
   ok('autocomplete < 3 huruf kosong', /"items":\[\]/.test(r.text));

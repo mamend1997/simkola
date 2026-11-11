@@ -26,6 +26,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       bku: x,
       row: db.prepare('SELECT * FROM rekon_saldo WHERE bku_id=? ORDER BY tanggal DESC, id DESC LIMIT 1').get(x.id)
     }));
+    // saldo buku (mutasi transfer) per BKU — dipakai tabel input saldo koran semua BKU
+    const bukuPerBku = new Map();
+    for (const t of list) bukuPerBku.set(t.bku_id, (bukuPerBku.get(t.bku_id) || 0) + (t.jenis === 'pemasukan' ? t.nominal : -t.nominal));
     const saldoKoran = koranPer.reduce((s, x) => s + (x.row ? Number(x.row.saldo_koran || 0) : 0), 0);
     const koran = b ? db.prepare('SELECT * FROM rekon_saldo WHERE bku_id=? ORDER BY tanggal DESC, id DESC LIMIT 1').get(b.id) : (koranPer.find(x => x.row) || {}).row || null;
     const selisih = saldoKoran - saldoBuku;
@@ -39,7 +42,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
 
     const content = `<div class="between mb-3">
       <form method="get" action="${c.base}/rekon" class="flex" style="gap:8px">
-        <div class="field" style="margin:0"><label>BKU untuk Saldo Rekening Koran</label>
+        <div class="field" style="margin:0"><label>BKU untuk Catat Biaya Adm / Bunga &amp; Cetak</label>
           <select name="bku" data-autosubmit>
             <option value="">Semua BKU (gabungan)</option>
             ${bkuss.map(x => `<option value="${x.id}" ${String(x.id) === String(bkuId) ? 'selected' : ''}>${esc(x.nama)} — ${x.status === 'aktif' ? 'Aktif' : 'Ditutup'}</option>`).join('')}
@@ -88,14 +91,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
 
       <div>
         <div class="card mb-3">
-          <div class="card-head"><div><h3>Input Saldo Rekening Koran</h3><div class="sub">Penyesuaian saldo riil bank (per BKU)</div></div></div>
-          <form method="post" action="${c.base}/rekon/saldo">
-            <div class="field"><label>BKU</label><select name="bku_id" required>
-              ${bkuss.map(x => `<option value="${x.id}" ${String(x.id) === String(bkuId) ? 'selected' : ''}>${esc(x.nama)}</option>`).join('')}</select></div>
-            <div class="field"><label>Tanggal Rekening Koran</label><input type="date" name="tanggal" value="${todayISO()}" required></div>
-            <div class="field"><label>Saldo Akhir di Rekening Koran (Rp)</label>${ui.moneyInput('saldo_koran', koran ? koran.saldo_koran : 0, 'required')}</div>
-            <div class="field"><label>Catatan</label><input name="catatan" placeholder="Contoh: Rekening BRI cabang utama"></div>
-            <button class="btn btn-primary btn-block" ${c.can('rekon', 'create') || req.user.role === 'super_admin' ? '' : 'disabled'}>${ui.icon('save')}Simpan Saldo Koran</button>
+          <div class="card-head"><div><h3>Input Saldo Rekening Koran — Semua BKU</h3>
+            <div class="sub">Satu tabel untuk seluruh buku kas; isi saldo riil bank per BKU sekaligus</div></div></div>
+          <form method="post" action="${c.base}/rekon/saldo-masal">
+            <div class="row2">
+              <div class="field"><label>Tanggal Rekening Koran</label><input type="date" name="tanggal" value="${todayISO()}" required></div>
+              <div class="field"><label>Catatan</label><input name="catatan" placeholder="Contoh: Rekening BRI cabang utama"></div>
+            </div>
+            <div class="table-wrap table-scroll short"><table id="tblSaldoKoran"><thead><tr>
+              <th>Buku Kas</th><th>Status</th><th class="num">Saldo Buku (Bank)</th><th class="num">Koran Terakhir</th><th>Saldo Rekening Koran (Rp)</th>
+            </tr></thead><tbody>
+            ${bkuss.map(x => {
+      const last = (koranPer.find(k => k.bku.id === x.id) || {}).row || null;
+      const buku = bukuPerBku.get(x.id) || 0;
+      return `<tr>
+                <td class="t-strong">${esc(x.nama)}<div class="t-sub mono">${esc(x.kode || '')}</div></td>
+                <td>${ui.bkuStatusBadge(x.status)}</td>
+                <td class="num">${rupiah(buku)}</td>
+                <td class="num t-sub">${last ? rupiah(last.saldo_koran) + '<div class="t-sub">' + tglID(last.tanggal) + '</div>' : '—'}</td>
+                <td style="min-width:190px">${ui.moneyInput('saldo_' + x.id, last ? last.saldo_koran : '', 'placeholder="' + (last ? '' : 'kosongkan bila belum ada koran') + '"')}</td>
+              </tr>`;
+    }).join('')}
+            </tbody>
+            <tfoot><tr><td colspan="2">TOTAL (${bkuss.length} BKU)</td><td class="num">${rupiah(Array.from(bukuPerBku.values()).reduce((a, b) => a + b, 0))}</td>
+              <td class="num">${rupiah(saldoKoran)}</td><td></td></tr></tfoot></table></div>
+            <div class="hint">Baris yang dikosongkan tidak disimpan. Nilai terakhir tiap BKU otomatis terisi sebagai titik awal.</div>
+            <button class="btn btn-primary btn-block mt-2" ${c.can('rekon', 'create') || req.user.role === 'super_admin' ? '' : 'disabled'}>${ui.icon('save')}Simpan Semua Saldo Koran</button>
           </form>
         </div>
 
@@ -145,6 +166,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     })();
     dbm.logAudit(req.user, 'EDIT', 'rekon', `Menyimpan pencocokan mutasi bank (${n} transaksi, ${skip} dilewati karena BKU ditutup)`);
     res.redirect(back + (back.includes('?') ? '&' : '?') + 'ok=' + encodeURIComponent(`Pencocokan ${n} transaksi disimpan${skip ? ` (${skip} transaksi pada BKU ditutup dilewati)` : ''}.`));
+  });
+
+  /* simpan saldo rekening koran untuk BANYAK BKU sekaligus (tabel semua BKU) */
+  post('/rekon/saldo-masal', (req, res) => {
+    if (!guard(req, res, 'rekon', 'create')) return;
+    const tanggal = req.body.tanggal || todayISO();
+    const catatan = String(req.body.catatan || '');
+    const masuk = Object.keys(req.body)
+      .filter(k => /^saldo_\d+$/.test(k) && String(req.body[k]).trim() !== '')
+      .map(k => ({ id: Number(k.slice(6)), nominal: lib.parseMoney(req.body[k]) }));
+    if (!masuk.length) return res.redirect(req.BASE + '/rekon?err=' + encodeURIComponent('Isi minimal satu saldo rekening koran.'));
+    const ins = db.prepare('INSERT INTO rekon_saldo (bku_id,tanggal,saldo_koran,catatan,created_at) VALUES (?,?,?,?,?)');
+    db.transaction(() => {
+      for (const r of masuk) ins.run(r.id, tanggal, r.nominal, catatan, nowStamp());
+    })();
+    dbm.logAudit(req.user, 'TAMBAH', 'rekon',
+      `Input saldo rekening koran ${masuk.length} BKU (total ${rupiah(masuk.reduce((a, b) => a + b.nominal, 0))}) tanggal ${tanggal}`);
+    res.redirect(req.BASE + '/rekon?ok=' + encodeURIComponent(`Saldo rekening koran ${masuk.length} BKU disimpan.`));
   });
 
   post('/rekon/saldo', (req, res) => {
