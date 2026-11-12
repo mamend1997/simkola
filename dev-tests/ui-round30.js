@@ -48,6 +48,23 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
   await page.fill('input[name=admin_email]', 'tampilan@smk.sch.id');
   await page.fill('input[name=admin_password]', 'rahasiaTampil1');
   await page.fill('input[name=admin_password2]', 'rahasiaTampil1');
+
+  /* ---------- 1b. VERIFIKASI OTP NOMOR WHATSAPP (4 digit) ---------- */
+  ok('blok verifikasi OTP tampil', (await page.locator('[data-otp-box]').count()) === 1);
+  ok('tombol daftar terkunci sebelum verifikasi', await page.locator('#btnDaftar').isDisabled());
+  await page.fill('#fDaftarTelp', '081200006661');
+  await page.click('[data-otp-kirim]');
+  await page.waitForSelector('[data-otp-demo]', { timeout: 8000 });
+  const kodeOtp = (await page.locator('[data-otp-demo]').getAttribute('data-otp-demo')).trim();
+  ok('kode OTP 4 digit tersedia (mode uji gateway)', /^\d{4}$/.test(kodeOtp), kodeOtp);
+  const digits = page.locator('[data-otp-digit]');
+  for (let i = 0; i < 4; i++) await digits.nth(i).fill(kodeOtp[i]);
+  await page.click('[data-otp-verifikasi]');
+  await page.waitForFunction(() => {
+    var s = document.querySelector('[data-otp-status]');
+    return s && /terverifikasi/i.test(s.textContent);
+  }, null, { timeout: 8000 });
+  ok('nomor WhatsApp terverifikasi & tombol daftar aktif', !(await page.locator('#btnDaftar').isDisabled()));
   await Promise.all([page.waitForNavigation(), page.click('#btnDaftar')]);
   await page.waitForTimeout(1200);
 

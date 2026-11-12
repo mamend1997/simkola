@@ -1070,6 +1070,31 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
             <input type="text" name="wa_admin_number" value="${esc(saas.get('wa_admin_number', ''))}" placeholder="08xxxxxxxxxx / 628xxxxxxxxxx">
             <div class="hint">Dipakai tombol "Langganan via WhatsApp" pada pilihan paket di halaman pendaftaran sekolah.</div></div>
           <hr class="sep">
+          ${(() => {
+            const otp = saas.daftarOtpCfg();
+            const wc = saas.waConfig();
+            return `<div class="card-head" style="padding:0 0 8px"><div><h3>Verifikasi WhatsApp Pendaftaran (OTP)</h3>
+              <div class="sub">Nomor WhatsApp pendaftar diverifikasi dengan kode OTP 4 digit sebelum pendaftaran dikirim</div></div></div>
+            ${wc.aktif && wc.url
+              ? `<div class="alert ok">${ui.icon('check')}<div>Gateway WhatsApp <b>aktif</b> — kode OTP pendaftaran dikirim lewat gateway yang sama dengan informasi tagihan perpanjangan.</div></div>`
+              : `<div class="alert warn">${ui.icon('alert')}<div>Gateway WhatsApp <b>belum aktif</b>. Kode OTP belum dapat dikirim sungguhan — aktifkan di menu <a href="${req.BASE}/super-admin/wa"><b>WA Gateway</b></a>. Selama belum aktif, kode akan ditampilkan di layar bila opsi mode uji dicentang.</div></div>`}
+            <div class="row3">
+              <div class="field"><label>Verifikasi OTP Pendaftaran</label>
+                <select name="daftar_otp_aktif">
+                  <option value="1" ${otp.aktif ? 'selected' : ''}>Aktif (wajib verifikasi)</option>
+                  <option value="0" ${otp.aktif ? '' : 'selected'}>Nonaktif</option>
+                </select></div>
+              <div class="field"><label>Masa Berlaku Kode (menit)</label>
+                <input type="number" name="daftar_otp_menit" value="${otp.menit}" min="1" max="60"></div>
+              <div class="field"><label>Jeda Kirim Ulang (detik)</label>
+                <input type="number" name="daftar_otp_jeda" value="${otp.jeda}" min="0" max="600"></div>
+            </div>
+            <input type="hidden" name="daftar_otp_demo" value="0">
+            <label class="check mb-2"><input type="checkbox" name="daftar_otp_demo" value="1" ${otp.demo ? 'checked' : ''}>
+              Tampilkan kode di layar bila gateway WhatsApp belum aktif (mode uji)</label>
+            <div class="hint" style="margin-bottom:4px">Maksimal ${otp.maxPerJam}× kirim per nomor per jam &amp; 5 percobaan verifikasi per kode.</div>`;
+          })()}
+          <hr class="sep">
           <div class="card-head" style="padding:0 0 8px"><div><h3>Domain, Subdomain &amp; Server</h3>
             <div class="sub">Dipakai pada petunjuk DNS custom domain sekolah</div></div></div>
           <div class="row2">
@@ -1158,6 +1183,16 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (b.captcha_secret !== undefined) saas.set('captcha_secret', String(b.captcha_secret).trim());
       if (b.reg_limit_per_hour !== undefined) saas.set('reg_limit_per_hour', String(Math.max(1, Number(b.reg_limit_per_hour) || 2)));
       if (b.reg_block_hours !== undefined) saas.set('reg_block_hours', String(Math.max(0, Number(b.reg_block_hours) || 24)));
+      /* verifikasi OTP pendaftaran — nilai boolean dinormalkan '1'/'0' (jangan simpan 'true'/'false') */
+      if (b.daftar_otp_aktif !== undefined) saas.set('daftar_otp_aktif', /^(1|true|on|ya)$/i.test(String(b.daftar_otp_aktif)) ? '1' : '0');
+      if (b.daftar_otp_menit !== undefined) saas.set('daftar_otp_menit', String(Math.max(1, Math.min(60, Number(b.daftar_otp_menit) || 10))));
+      if (b.daftar_otp_jeda !== undefined) saas.set('daftar_otp_jeda', String(Math.max(0, Math.min(600, Number(b.daftar_otp_jeda) || 0))));
+      /* checkbox diikuti hidden "0" → nilai terakhir yang dipakai; kiriman parsial tidak menghapus setelan */
+      if (b.daftar_otp_demo !== undefined) {
+        const raw = [].concat(b.daftar_otp_demo);
+        const last = raw[raw.length - 1];
+        saas.set('daftar_otp_demo', /^(1|true|on|ya)$/i.test(String(last)) ? '1' : '0');
+      }
       if (b.wa_admin_number !== undefined) saas.set('wa_admin_number', String(b.wa_admin_number || '').trim());
       if (b.saas_base_url !== undefined) saas.set('saas_base_url', String(b.saas_base_url || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, ''));
       if (b.saas_server_ip !== undefined) saas.set('saas_server_ip', String(b.saas_server_ip || '').trim());
@@ -2470,6 +2505,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           ${ed ? `<a class="btn btn-sm" href="${req.BASE}/super-admin/petunjuk">${ui.icon('x')}Batal</a>` : ''}</div>
         <form method="post" action="${req.BASE}/super-admin/petunjuk/simpan">
           <input type="hidden" name="id" value="${ed ? ed.id : ''}">
+          <input type="hidden" name="thumbnail_b64" id="gThumbB64">
           <div class="row2">
             <div class="field"><label>Judul Panduan *</label><input type="text" name="judul" required value="${esc(ed ? ed.judul : '')}" placeholder="Cara mencatat pembayaran iuran"></div>
             <div class="field"><label>Kategori</label><input type="text" name="kategori" value="${esc(ed ? (ed.kategori || '') : '')}" placeholder="Iuran &amp; SPP"></div>
@@ -2479,29 +2515,40 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           <div class="field"><label>Isi Panduan (Markdown / teks kaya)</label>
             <textarea name="konten" id="fGuideBody" rows="12" placeholder="# Langkah 1&#10;1. Buka menu Iuran&#10;2. Klik Bayar&#10;&#10;**Catatan:** …">${esc(ed ? (ed.konten || '') : '')}</textarea>
             <div class="hint">Dukungan: <code>#</code> judul, <code>-</code> daftar, <code>**tebal**</code>, <code>kode</code>.</div></div>
+          <div class="row2">
+            <div class="field"><label>URL Thumbnail / Gambar Pratayang (opsional)</label>
+              <input type="text" name="thumbnail_url" value="${esc(ed ? (ed.thumbnail_url || '') : '')}" placeholder="https://…/gambar-panduan.jpg">
+              <div class="hint">Rasio disarankan <b>16:9</b>. Bila kosong, kartu memakai gambar dari video YouTube (atau ikon bawaan).</div></div>
+            <div class="field"><label>Unggah Thumbnail (PNG/JPG/WebP, maks 5 MB)</label>
+              <input type="file" accept="image/*" data-b64="gThumbB64" data-max="5">
+              <div class="hint" id="gThumbB64-info">${ed && ed.thumbnail_url ? 'Thumbnail saat ini: ' + esc(ed.thumbnail_url) : 'Kosongkan bila tidak ingin mengunggah.'}</div></div>
+          </div>
           <div class="row3">
             <div class="field"><label>Video YouTube (opsional)</label><input type="text" name="video_url" value="${esc(ed ? (ed.video_url || '') : '')}" placeholder="https://youtu.be/…"></div>
             <div class="field"><label>Lampiran / PDF (opsional)</label><input type="text" name="lampiran_url" value="${esc(ed ? (ed.lampiran_url || '') : '')}" placeholder="https://…/panduan.pdf"></div>
             <div class="field"><label>Urutan</label><input type="number" name="urutan" value="${ed ? Number(ed.urutan || 0) : rows.length + 1}" min="0"></div>
           </div>
           <label class="check mb-2"><input type="checkbox" name="published" value="1" ${!ed || ed.published ? 'checked' : ''}> Terbitkan (tampil di sekolah)</label>
+          <div class="alert info mb-2">${ui.icon('info')}<div>Video &amp; PDF dibuka <b>langsung di dalam aplikasi</b> (modal viewer) pada halaman Petunjuk Pengguna sekolah — pengguna tidak perlu membuka tab baru.</div></div>
           <div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}${ed ? 'Simpan Perubahan' : 'Tambah Panduan'}</button></div>
         </form>
       </div>
       <div class="card">
         <div class="card-head"><div><h3>Daftar Petunjuk (${rows.length})</h3><div class="sub">Sinkron otomatis ke semua sekolah</div></div></div>
-        <div class="table-wrap" style="max-height:64vh;overflow:auto"><table><thead><tr><th>#</th><th>Judul</th><th>Kategori</th><th>Status</th><th></th></tr></thead><tbody>
+        <div class="table-wrap" style="max-height:64vh;overflow:auto"><table><thead><tr><th>#</th><th>Thumb</th><th>Judul</th><th>Kategori</th><th>Media</th><th>Status</th><th></th></tr></thead><tbody>
           ${rows.length ? rows.map(g => `<tr>
             <td class="num">${g.urutan || '-'}</td>
+            <td>${(g.thumbnail_url || '').trim() ? `<img src="${esc(g.thumbnail_url)}" alt="Thumb" width="72" height="41" loading="lazy" decoding="async" style="width:72px;height:41px;object-fit:cover;border-radius:6px;border:1px solid var(--line)">` : '<span class="t-sub">—</span>'}</td>
             <td><b>${esc(g.judul)}</b><div class="t-sub">${esc((g.ringkas || '').slice(0, 70))}</div></td>
             <td class="small">${esc(g.kategori || '-')}</td>
+            <td class="small nowrap">${g.video_url ? ui.badge('Video', 'red', 'plain') : ''}${(g.lampiran_url || '').trim() ? ' ' + ui.badge(/\.pdf(\?|#|$)/i.test(g.lampiran_url) ? 'PDF' : 'Lampiran', 'amber', 'plain') : ''}${!g.video_url && !(g.lampiran_url || '').trim() ? '<span class="t-sub">—</span>' : ''}</td>
             <td>${g.published ? ui.badge('Terbit', 'green') : ui.badge('Draf', 'gray')}</td>
             <td class="nowrap">
               <a class="btn btn-sm" href="${req.BASE}/super-admin/petunjuk?edit=${g.id}">${ui.icon('edit')}</a>
               <form method="post" action="${req.BASE}/super-admin/petunjuk/${g.id}/hapus" style="display:inline" data-confirm="Hapus panduan ini dari semua sekolah?">
                 <button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>
             </td></tr>`).join('')
-        : `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px">Belum ada panduan.</td></tr>`}
+        : `<tr><td colspan="7" class="muted" style="text-align:center;padding:16px">Belum ada panduan.</td></tr>`}
         </tbody></table></div>
         <div class="alert info mt-2">${ui.icon('info')}<div>Akun sekolah hanya dapat <b>membaca</b> panduan; seluruh upaya tambah/ubah/hapus dari sisi sekolah ditolak (403).</div></div>
       </div>
@@ -2509,12 +2556,18 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     res.html(shell(req, { title: 'Master Petunjuk Pengguna', sub: 'Sumber tunggal materi panduan seluruh sekolah', active: '/super-admin/petunjuk', content, user: u }));
   });
 
-  post('/super-admin/petunjuk/simpan', (req, res) => {
+  post('/super-admin/petunjuk/simpan', async (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     try {
+      let thumbnail = String(req.body.thumbnail_url || '').trim();
+      if (req.body.thumbnail_b64) {
+        thumbnail = await uploadMedia(req.body.thumbnail_b64, 'panduan-thumb-' + Date.now() + '.webp',
+          { jenis: 'panduan', tenantId: 1 });
+      }
       const row = saas.guideSave({
         id: req.body.id, judul: req.body.judul, kategori: req.body.kategori, ringkas: req.body.ringkas,
         konten: req.body.konten, video_url: req.body.video_url, lampiran_url: req.body.lampiran_url,
+        thumbnail_url: thumbnail,
         urutan: req.body.urutan, published: req.body.published ? 1 : 0, oleh: u.nama
       });
       if (!row) throw new Error('Judul panduan wajib diisi.');

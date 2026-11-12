@@ -335,8 +335,18 @@
   })();
 
   /* modal */
-  function open(id) { const m = document.getElementById(id); if (m) { m.classList.add('show'); document.body.style.overflow = 'hidden'; const f = m.querySelector('input:not([type=hidden]),select,textarea'); if (f) setTimeout(() => f.focus(), 80); } }
-  function close(m) { m.classList.remove('show'); document.body.style.overflow = ''; }
+  /* iframe di dalam modal (video panduan / dokumen PDF) dimuat saat modal dibuka
+     dan dilepas saat ditutup → halaman ringan & pemutaran video berhenti. */
+  function hydrateFrames(m) {
+    if (!m) return;
+    m.querySelectorAll('iframe[data-src]').forEach(f => { if (!f.getAttribute('src')) f.setAttribute('src', f.dataset.src); });
+  }
+  function unloadFrames(m) {
+    if (!m) return;
+    m.querySelectorAll('iframe[data-src]').forEach(f => f.removeAttribute('src'));
+  }
+  function open(id) { const m = document.getElementById(id); if (m) { m.classList.add('show'); document.body.style.overflow = 'hidden'; hydrateFrames(m); const f = m.querySelector('input:not([type=hidden]),select,textarea'); if (f) setTimeout(() => f.focus(), 80); } }
+  function close(m) { if (!m) return; m.classList.remove('show'); unloadFrames(m); document.body.style.overflow = ''; }
   $$('[data-open]').forEach(b => b.addEventListener('click', () => open(b.dataset.open)));
   $$('[data-close]').forEach(b => b.addEventListener('click', () => close(document.getElementById(b.dataset.close))));
   document.querySelectorAll('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m) close(m); }));

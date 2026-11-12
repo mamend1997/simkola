@@ -27,6 +27,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const { otpDaftar } = require('./otp');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'r33-'));
 const DB = path.join(TMP, 'k.sqlite');
@@ -83,9 +84,11 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
   // daftarkan sekolah baru
   const NAMA = 'SDN Percobaan Onboarding 33';
   const EMAIL = 'admin@onboarding33.sch.id';
+  const otpBaru = await otpDaftar(base, '081200003333');
   r = await req('POST', '/register', {
     nama: NAMA, admin_nama: 'Admin Baru', admin_email: EMAIL, admin_password: 'rahasia123',
-    admin_password2: 'rahasia123', jenjang: 'SD', alamat: 'Jl. Onboarding 33', telp: '081200003333'
+    admin_password2: 'rahasia123', jenjang: 'SD', alamat: 'Jl. Onboarding 33', telp: '081200003333',
+    otp_token: otpBaru
   }, { who: 'baru' });
   ok('registrasi sekolah baru berhasil', r.status === 303 && !/err=/.test(r.loc), dec(r.loc));
   const tBaru = ctl.prepare('SELECT * FROM tenants WHERE nama=?').get(NAMA);

@@ -33,10 +33,26 @@ CREATE TABLE IF NOT EXISTS master_guides (
   konten TEXT,
   video_url TEXT,
   lampiran_url TEXT,
+  thumbnail_url TEXT,
   urutan INTEGER NOT NULL DEFAULT 0,
   published INTEGER NOT NULL DEFAULT 1,
   dibuat_oleh TEXT, created_at TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS daftar_otp (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  phone TEXT NOT NULL,
+  kode TEXT NOT NULL,
+  expires_at TEXT,
+  expires_ms INTEGER,
+  created_ms INTEGER,
+  tries INTEGER NOT NULL DEFAULT 0,
+  verified INTEGER NOT NULL DEFAULT 0,
+  ip TEXT,
+  created_at TEXT,
+  verified_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_daftar_otp_phone ON daftar_otp(phone, id);
 CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   judul TEXT NOT NULL,
@@ -71,6 +87,8 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
 `);
   const cols = (t) => S.pragma(`table_info("${t}")`).map(c => c.name);
   const addCol = (t, name, ddl) => { if (!cols(t).includes(name)) S.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${ddl}`); };
+  /* gambar pratayang (thumbnail) kartu panduan — kontrol Super Admin, tampil di sekolah */
+  addCol('master_guides', 'thumbnail_url', 'TEXT');
   addCol('tenants', 'portal_slug', 'TEXT');
   addCol('tenants', 'custom_domain', 'TEXT');
   addCol('tenants', 'custom_domain_status', "TEXT NOT NULL DEFAULT ''");
@@ -483,15 +501,16 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     const fields = [
       judul, String(d.kategori || '').trim(), String(d.ringkas || ''),
       String(d.konten || ''), String(d.video_url || '').trim(), String(d.lampiran_url || '').trim(),
+      String(d.thumbnail_url || '').trim(),
       Number.isFinite(urut) ? urut : 0, d.published ? 1 : 0, String(d.oleh || ''), now
     ];
     if (d.id && guideById(d.id)) {
       S.prepare(`UPDATE master_guides SET judul=?,kategori=?,ringkas=?,konten=?,video_url=?,lampiran_url=?,
-        urutan=?,published=?,dibuat_oleh=?,updated_at=? WHERE id=?`).run(...fields, Number(d.id));
+        thumbnail_url=?,urutan=?,published=?,dibuat_oleh=?,updated_at=? WHERE id=?`).run(...fields, Number(d.id));
       return guideById(d.id);
     }
-    const info = S.prepare(`INSERT INTO master_guides (judul,kategori,ringkas,konten,video_url,lampiran_url,urutan,published,dibuat_oleh,updated_at,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(...fields, now);
+    const info = S.prepare(`INSERT INTO master_guides (judul,kategori,ringkas,konten,video_url,lampiran_url,thumbnail_url,urutan,published,dibuat_oleh,updated_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(...fields, now);
     return guideById(Number(info.lastInsertRowid));
   }
   function guideDelete(id) {
@@ -503,6 +522,120 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     const upd = S.prepare('UPDATE master_guides SET urutan=? WHERE id=?');
     ids.forEach((id, i) => upd.run(i + 1, Number(id)));
     return ids.length;
+  }
+
+  /* ==================================================================
+     OTP 4 DIGIT PENDAFTARAN SEKOLAH BARU (WhatsApp Gateway pusat)
+     ------------------------------------------------------------------
+     Nomor WhatsApp pendaftar diverifikasi SEBELUM formulir boleh
+     disubmit. Kode dikirim lewat gateway WhatsApp yang sama dengan
+     informasi tagihan perpanjangan (menu WA Gateway Super Admin).
+     Penyimpanan sementara di control plane (belum ada database sekolah).
+     ================================================================== */
+  const OTP_KODE_LEN = 4;
+  const OTP_MAX_TRIES = 5;
+  const OTP_MAX_KIRIM_JAM = 5;
+  function bool01(v, def = false) {
+    if (v === undefined || v === null || v === '') return def;
+    return /^(1|true|on|ya|yes)$/i.test(String(v).trim());
+  }
+  function daftarOtpCfg() {
+    const menit = Math.max(1, Math.min(60, Number(get('daftar_otp_menit', '10')) || 10));
+    const jeda = Math.max(0, Math.min(600, Number(get('daftar_otp_jeda', '60')) || 0));
+    return {
+      aktif: bool01(get('daftar_otp_aktif', '1'), true),
+      menit,
+      jeda,
+      /* kode boleh ditampilkan di layar hanya bila gateway belum aktif (mode uji) */
+      demo: bool01(get('daftar_otp_demo', '1'), true),
+      maxPerJam: OTP_MAX_KIRIM_JAM
+    };
+  }
+  function otpKodeBaru() {
+    // 4 digit, tanpa awalan 0 agar mudah dibaca & diketik
+    return String(1000 + Math.floor(Math.random() * 9000));
+  }
+  function otpDaftarPurge() {
+    try { S.prepare('DELETE FROM daftar_otp WHERE created_ms < ?').run(Date.now() - 24 * 60 * 60 * 1000); } catch (e) { }
+  }
+  function otpDaftarGet(token) {
+    const t = String(token || '').trim();
+    if (!t) return null;
+    return S.prepare('SELECT * FROM daftar_otp WHERE token=?').get(t) || null;
+  }
+  /**
+   * Buat & kirim kode OTP ke nomor WhatsApp pendaftar.
+   * → { ok, token, menit, kode (hanya mode uji), target, err }
+   */
+  async function otpDaftarSend(phoneRaw, ip) {
+    const cfg = daftarOtpCfg();
+    if (!cfg.aktif) return { ok: false, err: 'Verifikasi OTP sedang dinonaktifkan.' };
+    const target = lib.normPhone(phoneRaw);
+    if (!target) return { ok: false, err: 'Nomor WhatsApp tidak valid. Gunakan format 08xx… atau 62xx…' };
+    otpDaftarPurge();
+    const now = Date.now();
+    /* 1) jeda kirim ulang per nomor */
+    const last = S.prepare('SELECT * FROM daftar_otp WHERE phone=? ORDER BY id DESC LIMIT 1').get(target);
+    if (last && cfg.jeda > 0) {
+      const sisa = Math.ceil((Number(last.created_ms || 0) + cfg.jeda * 1000 - now) / 1000);
+      if (sisa > 0) return { ok: false, err: `Tunggu ${sisa} detik sebelum meminta kode baru.` };
+    }
+    /* 2) batas pengiriman per nomor per jam */
+    const perJam = S.prepare('SELECT COUNT(*) c FROM daftar_otp WHERE phone=? AND created_ms >= ?').get(target, now - 60 * 60 * 1000).c;
+    if (perJam >= cfg.maxPerJam) return { ok: false, err: 'Terlalu banyak permintaan kode untuk nomor ini. Coba lagi dalam 1 jam.' };
+    /* 3) batas pengiriman per IP per jam (anti spam) — 3x lipat batas nomor */
+    const ipKey = String(ip || '').slice(0, 60);
+    if (ipKey) {
+      const perIp = S.prepare('SELECT COUNT(*) c FROM daftar_otp WHERE ip=? AND created_ms >= ?').get(ipKey, now - 60 * 60 * 1000).c;
+      if (perIp >= cfg.maxPerJam * 3) return { ok: false, err: 'Terlalu banyak permintaan OTP dari jaringan ini. Coba lagi nanti.' };
+    }
+    const kode = otpKodeBaru();
+    const token = lib.token(16);
+    const expMs = now + cfg.menit * 60 * 1000;
+    S.prepare(`INSERT INTO daftar_otp (token,phone,kode,expires_at,expires_ms,created_ms,tries,verified,ip,created_at)
+      VALUES (?,?,?,?,?,?,0,0,?,?)`)
+      .run(token, target, kode, lib.plusMinutesStamp(cfg.menit), expMs, now, ipKey, lib.stampID());
+    const sent = await sendWA(target, `*Pendaftaran Sekolah Baru*\nKode OTP pendaftaran Anda: *${kode}*\n\n`
+      + `Kode berlaku ${cfg.menit} menit. Jangan bagikan kode ini kepada siapa pun — petugas kami tidak pernah memintanya.`);
+    const demo = (!sent.ok && cfg.demo);
+    logSaas(null, sent.ok ? 'OTP DAFTAR TERKIRIM' : (demo ? 'OTP DAFTAR MODE UJI' : 'OTP DAFTAR GAGAL'), 'daftar',
+      `${target} → ${sent.ok ? 'kode terkirim via WhatsApp' : (sent.reason || 'gateway belum aktif')}`);
+    return { ok: true, token, menit: cfg.menit, target, demo, demo_kode: demo ? kode : '', kirim: sent };
+  }
+  /** verifikasi kode OTP pendaftaran (maks 5 percobaan) */
+  function otpDaftarVerify(token, kode) {
+    const row = otpDaftarGet(token);
+    if (!row) return { ok: false, err: 'Sesi verifikasi tidak ditemukan. Silakan kirim ulang kode OTP.' };
+    if (Number(row.verified)) return { ok: true, row };
+    if (Number(row.expires_ms || 0) && Number(row.expires_ms) < Date.now()) {
+      return { ok: false, err: 'Kode OTP sudah kedaluwarsa. Silakan kirim ulang kode baru.' };
+    }
+    if (Number(row.tries) >= OTP_MAX_TRIES) return { ok: false, err: 'Terlalu banyak percobaan. Kirim ulang kode OTP baru.' };
+    const inp = String(kode || '').replace(/\D/g, '');
+    if (!new RegExp('^\\d{' + OTP_KODE_LEN + '}$').test(inp) || inp !== String(row.kode)) {
+      S.prepare('UPDATE daftar_otp SET tries=tries+1 WHERE token=?').run(row.token);
+      return { ok: false, err: 'Kode OTP salah. Periksa kembali pesan WhatsApp Anda.' };
+    }
+    S.prepare('UPDATE daftar_otp SET verified=1, verified_at=? WHERE token=?').run(lib.stampID(), row.token);
+    logSaas(null, 'OTP DAFTAR VERIFIKASI', 'daftar', `Nomor ${row.phone} berhasil diverifikasi`);
+    return { ok: true, row: Object.assign({}, row, { verified: 1 }) };
+  }
+  /**
+   * Dipakai saat submit pendaftaran: token harus sudah berstatus verified,
+   * belum kedaluwarsa, dan nomor yang diisi harus SAMA dengan nomor terverifikasi.
+   */
+  function otpDaftarValid(token, phoneRaw) {
+    const row = otpDaftarGet(token);
+    if (!row) return { ok: false, err: 'Verifikasi nomor WhatsApp belum dilakukan. Klik "Kirim Kode OTP" lalu masukkan kodenya.' };
+    if (!Number(row.verified)) return { ok: false, err: 'Kode OTP belum diverifikasi. Masukkan 4 digit kode dari WhatsApp Anda.' };
+    if (Number(row.expires_ms || 0) && Number(row.expires_ms) < Date.now()) {
+      return { ok: false, err: 'Verifikasi OTP sudah kedaluwarsa (lebih dari ' + daftarOtpCfg().menit + ' menit). Silakan verifikasi ulang.' };
+    }
+    const target = lib.normPhone(phoneRaw);
+    if (!target || target !== String(row.phone)) {
+      return { ok: false, err: 'Nomor WhatsApp yang diisi berbeda dengan nomor yang diverifikasi. Verifikasi ulang nomor tersebut.' };
+    }
+    return { ok: true, row, phone: target };
   }
 
   /* ================= Pengumuman global ================= */
@@ -774,6 +907,7 @@ CREATE INDEX IF NOT EXISTS idx_ticket_msg ON ticket_messages(ticket_id, id);
     portalAccess, portalDefaults, portalText, portalTitle, portalTitleFull, fillTitle, portalTextError,
     npsnNormalize, npsnError, setTenantNpsn, tenantNpsn, serverIp,
     guideRows, guideById, guideSave, guideDelete, guideReorder,
+    daftarOtpCfg, otpDaftarSend, otpDaftarVerify, otpDaftarGet, otpDaftarValid, otpDaftarPurge,
     announcementRows, announcementById, announcementSave, announcementDelete, visibleAnnouncements,
     maintenance, setMaintenance,
     TICKET_STATUS, TICKET_KATEGORI, ticketKode, ticketCreate, ticketById, ticketsOf, ticketsAll,

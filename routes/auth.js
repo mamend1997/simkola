@@ -114,6 +114,14 @@ ${ui.themeCss(tema)}
     const base = req.BASE;
     const q = req.query;
     const v = k => lib.esc(q.get(k) || '');
+    /* ---- verifikasi nomor WhatsApp (OTP 4 digit) ---- */
+    const otpCfg = (() => { try { return saas.daftarOtpCfg(); } catch (e) { return { aktif: false, menit: 10 }; } })();
+    const otpTokenQ = String(q.get('otp') || '').trim();
+    const otpCheck = otpCfg.aktif && otpTokenQ
+      ? (() => { try { return saas.otpDaftarValid(otpTokenQ, q.get('telp')); } catch (e) { return { ok: false }; } })()
+      : { ok: false };
+    const otpVerified = !!otpCheck.ok;
+    const otpToken = otpVerified ? otpTokenQ : '';
     const defPkg = saas.defaultPackage();
     const pkgs = saas.packageRows();
     // paket terpilih: dari query (bila valid) → selain itu paket default bila bisa daftar mandiri
@@ -196,7 +204,29 @@ ${ui.themeCss(tema)}
           <div class="field"><label>Password Admin</label><input type="password" name="admin_password" required minlength="6" placeholder="minimal 6 karakter"></div>
           <div class="field"><label>Ulangi Password</label><input type="password" name="admin_password2" required minlength="6" placeholder="ulangi password"></div>
         </div>
-        <div class="field"><label>Nomor WhatsApp / Telepon</label><input type="text" name="telp" value="${v('telp')}" placeholder="08xx"></div>
+        <div class="field"><label>Nomor WhatsApp / Telepon${otpCfg.aktif ? ' <span style="color:var(--red)">*</span>' : ''}</label>
+          <div class="otp-row">
+            <input type="text" name="telp" id="fDaftarTelp" value="${v('telp')}" ${otpCfg.aktif ? 'required' : ''}
+              inputmode="tel" autocomplete="tel" placeholder="08xxxxxxxxxx">
+            ${otpCfg.aktif ? `<button type="button" class="btn" id="btnOtpKirim" data-otp-kirim>${ui.icon('send')}Kirim Kode OTP</button>` : ''}
+          </div>
+          <div class="hint">${otpCfg.aktif
+        ? `Nomor ini akan diverifikasi dengan <b>kode OTP 4 digit</b> yang dikirim lewat WhatsApp — sekaligus dipakai untuk informasi tagihan perpanjangan aplikasi.`
+        : 'Dipakai untuk informasi tagihan perpanjangan aplikasi.'}</div>
+        </div>
+        ${otpCfg.aktif ? `<div class="otp-box${otpVerified ? ' verified' : ''}" id="otpBox" data-otp-box>
+          <div class="otp-head">${ui.icon('shield')}<div><b>Verifikasi Nomor WhatsApp</b>
+            <div class="small muted">Masukkan <b>4 digit kode OTP</b> yang dikirim ke WhatsApp Anda sebelum mendaftar.</div></div></div>
+          <div class="otp-digits">
+            ${[0, 1, 2, 3].map(i => `<input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1"
+              data-otp-digit${otpVerified ? ' disabled' : ''} aria-label="Digit OTP ${i + 1}">`).join('')}
+            <button type="button" class="btn btn-sm btn-primary" id="btnOtpVerif" data-otp-verifikasi ${otpVerified ? 'disabled' : ''}>${ui.icon('check')}Verifikasi</button>
+          </div>
+          <div class="otp-status ${otpVerified ? 'ok' : ''}" id="otpStatus" data-otp-status>${otpVerified
+        ? 'Nomor WhatsApp sudah terverifikasi.'
+        : `Kode berlaku ${otpCfg.menit} menit.`}</div>
+          <input type="hidden" name="otp_token" id="otpToken" value="${lib.esc(otpToken)}">
+        </div>` : `<input type="hidden" name="otp_token" value="">`}
         <div class="field"><label>Jenjang Pendidikan</label>
           <select name="jenjang">
             ${Object.entries(dbm.JENJANG).map(([k, val]) => `<option value="${lib.esc(k)}" ${v('jenjang') === lib.esc(k) ? 'selected' : ''}>${lib.esc(val.label)}${val.preset.length ? ' — tingkat ' + val.preset.join(', ') : ''}</option>`).join('')}
@@ -209,7 +239,8 @@ ${ui.themeCss(tema)}
         </div>
         <div class="alert info" id="pkNote">${ui.icon('info')}<div id="pkNoteBody">${pkNoteDefault}</div></div>
         ${captchaHtml}
-        <button class="btn btn-primary btn-block" type="submit" id="btnDaftar">Daftarkan Sekolah</button>
+        <button class="btn btn-primary btn-block" type="submit" id="btnDaftar" data-otp-gate="${otpCfg.aktif && !otpVerified ? '1' : '0'}"
+          ${otpCfg.aktif && !otpVerified ? 'disabled' : ''}>Daftarkan Sekolah</button>
         <a class="btn btn-success btn-block" id="btnWa" style="display:none;background:#25D366;border-color:#25D366;color:#fff"
           target="_blank" rel="noopener" href="#">${ui.icon('send')}Langganan via WhatsApp Admin</a>
       </form>
@@ -250,12 +281,156 @@ ${ui.themeCss(tema)}
         });
         sync();
       })();
+      ${otpCfg.aktif ? `
+      (function () {
+        var OTP_BASE = ${JSON.stringify(base)};
+        var form = document.getElementById('btnDaftar') ? document.getElementById('btnDaftar').form : null;
+        var btn = document.getElementById('btnDaftar');
+        var telp = document.getElementById('fDaftarTelp');
+        var sendBtn = document.getElementById('btnOtpKirim');
+        var verifBtn = document.getElementById('btnOtpVerif');
+        var tok = document.getElementById('otpToken');
+        var st = document.getElementById('otpStatus');
+        var box = document.getElementById('otpBox');
+        var digits = Array.prototype.slice.call(document.querySelectorAll('[data-otp-digit]'));
+        if (!form || !btn || !telp || !tok) return;
+        var verified = !!tok.value;
+        function say(html, tone) {
+          if (!st) return;
+          st.className = 'otp-status' + (tone ? ' ' + tone : '');
+          st.innerHTML = html;
+        }
+        function syncGate() {
+          btn.disabled = !verified;
+          btn.setAttribute('data-otp-gate', verified ? '0' : '1');
+          if (box) box.classList.toggle('verified', verified);
+        }
+        function setVerified(on) {
+          verified = !!on;
+          if (!on) tok.value = '';
+          syncGate();
+        }
+        function kode() { return digits.map(function (d) { return d.value; }).join(''); }
+        digits.forEach(function (d, i) {
+          d.addEventListener('input', function () {
+            d.value = (d.value || '').replace(/[^0-9]/g, '').slice(0, 1);
+            if (d.value && digits[i + 1]) digits[i + 1].focus();
+          });
+          d.addEventListener('keydown', function (e) {
+            if (e.key === 'Backspace' && !d.value && digits[i - 1]) { digits[i - 1].focus(); }
+            if (e.key === 'Enter') { e.preventDefault(); if (verifBtn) verifBtn.click(); }
+          });
+          d.addEventListener('paste', function (e) {
+            var t = (e.clipboardData || window.clipboardData).getData('text') || '';
+            t = t.replace(/[^0-9]/g, '').slice(0, 4);
+            if (!t) return;
+            e.preventDefault();
+            digits.forEach(function (x, j) { x.value = t[j] || ''; });
+          });
+        });
+        if (sendBtn) sendBtn.addEventListener('click', function () {
+          var nomor = (telp.value || '').trim();
+          if (!nomor) { say('Isi nomor WhatsApp terlebih dahulu.', 'err'); telp.focus(); return; }
+          sendBtn.disabled = true;
+          say('Mengirim kode OTP…', '');
+          fetch(OTP_BASE + '/register/otp/kirim', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ telp: nomor })
+          }).then(function (r) { return r.json(); }).then(function (j) {
+            sendBtn.disabled = false;
+            if (!j || !j.ok) { say((j && j.err) || 'Gagal mengirim kode OTP.', 'err'); return; }
+            setVerified(false);
+            tok.value = j.token;
+            digits.forEach(function (x) { x.disabled = false; x.value = ''; });
+            if (verifBtn) verifBtn.disabled = false;
+            if (j.demo_kode) {
+              say('Gateway WhatsApp belum aktif (mode uji). Kode OTP Anda: <b class="mono" data-otp-demo="' + j.demo_kode + '" style="letter-spacing:3px">' + j.demo_kode + '</b>', 'warn');
+            } else {
+              say('Kode OTP 4 digit telah dikirim ke WhatsApp <b>' + (j.target || nomor) + '</b>. Berlaku ' + (j.menit || 10) + ' menit.', 'ok');
+            }
+            if (digits[0]) digits[0].focus();
+          }).catch(function () {
+            sendBtn.disabled = false;
+            say('Tidak dapat menghubungi server. Periksa koneksi Anda.', 'err');
+          });
+        });
+        if (verifBtn) verifBtn.addEventListener('click', function () {
+          var k = kode();
+          if (!tok.value) { say('Klik "Kirim Kode OTP" terlebih dahulu.', 'err'); return; }
+          if (k.length !== 4) { say('Masukkan 4 digit kode OTP.', 'err'); return; }
+          verifBtn.disabled = true;
+          fetch(OTP_BASE + '/register/otp/verifikasi', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: tok.value, kode: k })
+          }).then(function (r) { return r.json(); }).then(function (j) {
+            verifBtn.disabled = false;
+            if (!j || !j.ok) { say((j && j.err) || 'Kode OTP salah.', 'err'); return; }
+            setVerified(true);
+            digits.forEach(function (x) { x.disabled = true; });
+            if (verifBtn) verifBtn.disabled = true;
+            say('Nomor WhatsApp <b>' + (j.phone || '') + '</b> terverifikasi. Silakan lanjutkan pendaftaran.', 'ok');
+          }).catch(function () {
+            verifBtn.disabled = false;
+            say('Tidak dapat menghubungi server. Periksa koneksi Anda.', 'err');
+          });
+        });
+        telp.addEventListener('input', function () {
+          if (verified) {
+            setVerified(false);
+            digits.forEach(function (x) { x.disabled = false; x.value = ''; });
+            if (verifBtn) verifBtn.disabled = false;
+            say('Nomor berubah — silakan verifikasi ulang nomor WhatsApp Anda.', 'warn');
+          }
+        });
+        syncGate();
+      })();` : ''}
       </script>`
     }));
   }
 
   get('/register', (req, res) => registerForm(req, res));
   get('/daftar', (req, res) => registerForm(req, res));
+
+  /* ================================================================
+     VERIFIKASI NOMOR WHATSAPP PENDAFTAR (OTP 4 DIGIT)
+     Kode dikirim lewat WA Gateway pusat (menu WA Gateway Super Admin)
+     — gateway yang sama dengan informasi tagihan perpanjangan.
+     ================================================================ */
+  post('/register/otp/kirim', async (req, res) => {
+    const b = req.body || {};
+    const cfg = (() => { try { return saas.daftarOtpCfg(); } catch (e) { return { aktif: false }; } })();
+    if (!cfg.aktif) return res.json({ ok: false, err: 'Verifikasi OTP sedang dinonaktifkan oleh administrator.' }, 400);
+    try {
+      const r = await saas.otpDaftarSend(String(b.telp || '').trim(), saas.clientIpOf(req));
+      if (!r.ok) return res.json({ ok: false, err: r.err || 'Gagal mengirim kode OTP.' }, 400);
+      /* gateway aktif tetapi penolakan/gagal kirim & mode uji mati → jangan mengaku terkirim */
+      if (!r.demo && (!r.kirim || !r.kirim.ok)) {
+        return res.json({
+          ok: false,
+          err: 'Kode OTP gagal dikirim via WhatsApp (' + ((r.kirim && r.kirim.reason) || 'gateway belum aktif') + '). Coba lagi beberapa saat atau hubungi admin layanan.'
+        }, 502);
+      }
+      return res.json({
+        ok: true, token: r.token, menit: r.menit, target: r.target,
+        demo: !!r.demo, demo_kode: r.demo_kode || '',
+        pesan: r.kirim && r.kirim.ok ? 'Kode OTP dikirim via WhatsApp.' : ''
+      });
+    } catch (e) {
+      console.error('[otp-daftar]', e.message);
+      return res.json({ ok: false, err: 'Terjadi kesalahan saat mengirim kode OTP.' }, 500);
+    }
+  });
+
+  post('/register/otp/verifikasi', (req, res) => {
+    const b = req.body || {};
+    try {
+      const r = saas.otpDaftarVerify(String(b.token || '').trim(), String(b.kode || '').trim());
+      if (!r.ok) return res.json({ ok: false, err: r.err }, 400);
+      return res.json({ ok: true, phone: lib.phoneDisplay(r.row.phone) });
+    } catch (e) {
+      return res.json({ ok: false, err: 'Terjadi kesalahan saat memverifikasi kode OTP.' }, 500);
+    }
+  });
 
   post('/register', async (req, res) => {
     const base = req.BASE;
@@ -264,7 +439,12 @@ ${ui.themeCss(tema)}
     const nama = String(b.nama || '').trim();
     const email = String(b.admin_email || '').trim();
     const p1 = String(b.admin_password || ''), p2 = String(b.admin_password2 || '');
-    const keep = { nama, admin_email: email, admin_nama: b.admin_nama, alamat: b.alamat, kepala: b.kepala, telp: b.telp, jenjang: b.jenjang };
+    const keep = {
+      nama, admin_email: email, admin_nama: b.admin_nama, alamat: b.alamat, kepala: b.kepala,
+      telp: b.telp, jenjang: b.jenjang,
+      // token OTP yang sudah terverifikasi disertakan agar pengguna tidak perlu verifikasi ulang
+      otp: b.otp_token || ''
+    };
     const ip = saas.clientIpOf(req);
 
     // ---- 1) RATE LIMIT / IP THROTTLING (maks. N pendaftaran per jam, blokir X jam) ----
@@ -289,6 +469,14 @@ ${ui.themeCss(tema)}
     if (p1.length < 6) return fail('Password minimal 6 karakter.');
     if (p1 !== p2) return fail('Konfirmasi password tidak sama.');
     const jenjang = dbm.JENJANG[String(b.jenjang || '')] ? String(b.jenjang) : '';
+
+    /* ---- verifikasi nomor WhatsApp (OTP 4 digit) WAJIB sebelum submit ---- */
+    const otpCfg = (() => { try { return saas.daftarOtpCfg(); } catch (e) { return { aktif: false }; } })();
+    if (otpCfg.aktif) {
+      if (!String(b.telp || '').trim()) return fail('Nomor WhatsApp wajib diisi & diverifikasi dengan kode OTP.');
+      const otp = (() => { try { return saas.otpDaftarValid(String(b.otp_token || '').trim(), b.telp); } catch (e) { return { ok: false, err: 'Verifikasi OTP gagal diproses.' }; } })();
+      if (!otp.ok) return fail(otp.err || 'Nomor WhatsApp belum terverifikasi.');
+    }
 
     // ---- 3b) PAKET: hanya paket "daftar mandiri" yang boleh langsung mendaftar.
     // Paket berbayar diarahkan ke WhatsApp admin (sesuai harga paket) tanpa membuat tenant.

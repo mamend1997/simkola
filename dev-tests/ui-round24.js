@@ -3,6 +3,7 @@
 const { spawn } = require('child_process');
 const path = require('path'); const os = require('os'); const fs = require('fs');
 const { chromium } = require('playwright');
+const { otpDaftar } = require('./otp');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ui24-'));
 const PORT = 3931;
@@ -19,11 +20,13 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
 (async () => {
   for (let i = 0; i < 90; i++) { try { if ((await fetch(base + '/login')).status === 200) break } catch (e) { } await sleep(150); }
   // daftarkan sekolah baru (SD) untuk uji alur sekolah
+  const otpUi = await otpDaftar(base, '081200007771');
   await fetch(base + '/register', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       nama: 'SD UI Uji', admin_nama: 'Admin UI', admin_email: 'admin@sd-uji.sch.id',
-      admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', telp: '08123'
+      admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', telp: '081200007771',
+      otp_token: otpUi
     }).toString(), redirect: 'manual'
   });
   const Database = require('better-sqlite3');

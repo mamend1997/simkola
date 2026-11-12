@@ -3,6 +3,7 @@
 const { spawn } = require('child_process');
 const path = require('path'); const os = require('os'); const fs = require('fs');
 const { chromium } = require('playwright');
+const { otpDaftar } = require('./otp');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'uick-'));
 const PORT = 3989;
 const SDB = path.join(TMP, 's.db');
@@ -17,9 +18,10 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
 
 (async () => {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(base + '/login')).status === 200) break } catch (e) { } await sleep(150); }
+  const otpUi = await otpDaftar(base, '081200008881');
   await fetch(base + '/register', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ nama: 'SMP Negeri 2 Cikoneng', alamat: 'Jl. Melati 5', kepala: 'Dra. Ani', admin_nama: 'Bendahara', admin_email: 'admin@smpn2.sch.id', admin_password: 'rahasia123', admin_password2: 'rahasia123', telp: '08123', paket: 'basic' }).toString(),
+    body: new URLSearchParams({ nama: 'SMP Negeri 2 Cikoneng', alamat: 'Jl. Melati 5', kepala: 'Dra. Ani', admin_nama: 'Bendahara', admin_email: 'admin@smpn2.sch.id', admin_password: 'rahasia123', admin_password2: 'rahasia123', telp: '081200008881', paket: 'basic', otp_token: otpUi }).toString(),
     redirect: 'manual'
   });
 

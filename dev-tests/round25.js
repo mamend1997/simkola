@@ -14,6 +14,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const { otpDaftar } = require('./otp');
 
 const PORT = process.env.R25_PORT || 3911;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-'));
@@ -126,16 +127,20 @@ const ck = sc => String(sc || '').split(';')[0];
   // pilih paket berbayar → harus ke WhatsApp, tenant TIDAK dibuat
   const regBase = {
     nama: 'SMA Berbayar Uji', admin_nama: 'Admin Bayar', admin_email: 'admin@sma-bayar.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SMA/MA', telp: '0812'
+    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SMA/MA', telp: '081200002501'
   };
-  r = await req('POST', '/register', Object.assign({}, regBase, { paket: 'standard' }));
+  const otpBerbayar = await otpDaftar(base, regBase.telp);
+  r = await req('POST', '/register', Object.assign({}, regBase, { paket: 'standard', otp_token: otpBerbayar }));
   ok('paket berbayar diarahkan ke WhatsApp admin', r.status === 303 && /wa\.me\/6281234567890/.test(r.loc), r.loc);
   ok('pesan WhatsApp memuat nama paket & harga', decodeURIComponent(r.loc).includes('Standard') && decodeURIComponent(r.loc).includes('150.000'), decodeURIComponent(r.loc).slice(0, 160));
   ok('tenant TIDAK dibuat untuk paket berbayar', !sdb.prepare("SELECT id FROM tenants WHERE nama='SMA Berbayar Uji'").get());
 
   // pilih Basic → langsung daftar + trial 7 hari
-  r = await req('POST', '/register', Object.assign({}, regBase, { nama: 'SD Trial Uji', admin_email: 'admin@sd-trial.sch.id', jenjang: 'SD/MI', paket: 'basic' }));
-  ok('paket Basic langsung mendaftar', r.status === 303 && /Pendaftaran%20berhasil/.test(r.loc), r.loc);
+  const telpTrial = '081200002502';
+  const otpTrial = await otpDaftar(base, telpTrial);
+  r = await req('POST', '/register', Object.assign({}, regBase, { nama: 'SD Trial Uji', admin_email: 'admin@sd-trial.sch.id', jenjang: 'SD/MI', paket: 'basic', telp: telpTrial, otp_token: otpTrial }));
+  /* ronde 30: pendaftaran berhasil langsung masuk dashboard (auto-login) → /?welcome=1 */
+  ok('paket Basic langsung mendaftar', r.status === 303 && /welcome=1/.test(r.loc), r.loc);
   const tTrial = sdb.prepare("SELECT * FROM tenants WHERE nama='SD Trial Uji'").get();
   ok('tenant Basic dibuat', !!tTrial);
   ok('paket tersimpan = basic', tTrial.paket === 'basic', tTrial.paket);

@@ -559,7 +559,9 @@ CREATE TABLE IF NOT EXISTS ekskul_honor (
   id INTEGER PRIMARY KEY AUTOINCREMENT, periode TEXT, nama_pembina TEXT NOT NULL,
   kehadiran REAL NOT NULL DEFAULT 0, harga_satuan REAL NOT NULL DEFAULT 0,
   keterangan TEXT, status TEXT NOT NULL DEFAULT 'pending', bku_id INTEGER,
-  transaksi_id INTEGER, created_at TEXT, posted_at TEXT, posted_by TEXT
+  transaksi_id INTEGER, created_at TEXT, posted_at TEXT, posted_by TEXT,
+  /* bulan pembukuan ke BKU (boleh BEDA dengan periode kinerja/honor) */
+  posting_periode TEXT
 );
 /* ---------- mutasi bank & cash (tidak lewat BKU) ---------- */
 CREATE TABLE IF NOT EXISTS mutasi_kas (
@@ -1345,9 +1347,12 @@ function bootstrap() {
     if (!itCols2.includes('beasiswa_locked')) db.exec('ALTER TABLE iuran_tagihan ADD COLUMN beasiswa_locked INTEGER NOT NULL DEFAULT 0');
     if (!itCols2.includes('beasiswa_id')) db.exec('ALTER TABLE iuran_tagihan ADD COLUMN beasiswa_id INTEGER');
 
-    /* ---------- honor ekskul: jenis ekstrakurikuler ---------- */
+    /* ---------- honor ekskul: jenis ekstrakurikuler & bulan posting BKU ---------- */
     const ekCols = db.prepare('PRAGMA table_info(ekskul_honor)').all().map(c => c.name);
     if (!ekCols.includes('jenis')) db.exec("ALTER TABLE ekskul_honor ADD COLUMN jenis TEXT DEFAULT ''");
+    /* periode KINERJA/HONOR (kolom periode) dipisahkan dari BULAN POSTING ke BKU
+       — mis. honor Oktober dibukukan pada BKU November karena BKU Oktober ditutup. */
+    if (!ekCols.includes('posting_periode')) db.exec('ALTER TABLE ekskul_honor ADD COLUMN posting_periode TEXT');
 
     /* ---------- portal publik: sumber catatan (siswa / piutang pegawai / slip) ---------- */
     const ppCols = db.prepare('PRAGMA table_info(portal_pesan)').all().map(c => c.name);

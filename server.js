@@ -598,6 +598,8 @@ function tenantPortalPath(tenant, kind) {
 const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/login'];
 function isPublicPath(pathname) {
   if (['/login', '/register', '/daftar', '/logout'].includes(pathname)) return true;
+  /* verifikasi OTP pendaftaran sekolah (tanpa sesi) */
+  if (pathname === '/register/otp/kirim' || pathname === '/register/otp/verifikasi') return true;
   /* callback payment gateway (diverifikasi lewat signature, tanpa sesi) */
   if (pathname === '/pay/callback') return true;
   // dokumen legalitas layanan dapat dibuka tanpa login

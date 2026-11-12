@@ -10,6 +10,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const { otpDaftar } = require('./otp');
 
 const PORT = process.env.R24_PORT || 3941;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'r24-'));
@@ -128,9 +129,11 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
   /* ============ 5. REGISTRASI: kode acak, trial, paket default, jenjang ============ */
   const regBody = n => ({
     nama: 'SD Negeri Uji ' + n, admin_nama: 'Admin Uji', admin_email: 'admin' + n + '@sduji.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', paket: 'basic', telp: '081234567'
+    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', paket: 'basic', telp: '0812345670' + n
   });
-  r = await req('POST', '/register', regBody(1));
+  /* setiap pendaftaran wajib lolos verifikasi OTP nomor WhatsApp */
+  const otp1 = await otpDaftar(base, '08123456701');
+  r = await req('POST', '/register', Object.assign(regBody(1), { otp_token: otp1 }));
   /* ronde 30: setelah daftar langsung masuk dashboard sekolah baru (?welcome=1) */
   ok('registrasi sekolah baru (langsung ke dashboard)', r.status === 303 && /\/\?welcome=1$/.test(r.loc), r.loc);
   const t1 = sdb.prepare("SELECT * FROM tenants WHERE nama='SD Negeri Uji 1'").get();
@@ -144,12 +147,14 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
   ok('akun admin sekolah baru bisa dipakai', !!t1db.prepare("SELECT id FROM users WHERE email='admin1@sduji.sch.id'").get());
 
   /* kode acak tidak berurutan */
-  r = await req('POST', '/register', regBody(2));
+  const otp2 = await otpDaftar(base, '08123456702');
+  r = await req('POST', '/register', Object.assign(regBody(2), { otp_token: otp2 }));
   const t2 = sdb.prepare("SELECT * FROM tenants WHERE nama='SD Negeri Uji 2'").get();
   ok('kode sekolah kedua juga acak & berbeda', t2 && t2.school_code !== t1.school_code && /^[A-Z0-9]{4}$/.test(t2.school_code), t2 && t2.school_code);
 
   /* ============ 6. ANTI-SPAM (rate limit 2/jam) ============ */
-  r = await req('POST', '/register', regBody(3));
+  const otp3 = await otpDaftar(base, '08123456703');
+  r = await req('POST', '/register', Object.assign(regBody(3), { otp_token: otp3 }));
   ok('pendaftaran ke-3 dari IP sama diblokir', r.status === 303 && /Terlalu%20banyak%20permintaan%20pendaftaran/.test(r.loc), r.loc);
   ok('sekolah ke-3 TIDAK dibuat', !sdb.prepare("SELECT id FROM tenants WHERE nama='SD Negeri Uji 3'").get());
   const blockedRow = sdb.prepare("SELECT * FROM reg_attempts WHERE hasil='blocked' ORDER BY id DESC LIMIT 1").get();

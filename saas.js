@@ -209,6 +209,11 @@ const DEFAULT_SETTINGS = {
   captcha_secret: '',
   reg_limit_per_hour: '2',
   reg_block_hours: '24',
+  // verifikasi nomor WhatsApp pendaftar dengan kode OTP 4 digit (WA Gateway pusat)
+  daftar_otp_aktif: '1',
+  daftar_otp_menit: '10',
+  daftar_otp_jeda: '60',
+  daftar_otp_demo: '1',
   // nomor WhatsApp admin untuk paket berbayar (tombol di halaman pendaftaran)
   wa_admin_number: '',
   // pembayaran perpanjangan

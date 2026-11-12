@@ -1535,3 +1535,79 @@ Detail lengkap ada di `AGENTS.md` root (bagian "Ronde 43 SIMKEU"). Ringkas:
 - **Tahun ajaran**: `salin_bku` (menyalin BKU TA sebelumnya) menggantikan pembuatan 17 BKU standar.
 - **Kode BKU**: `dbm.nextBkuKode(jenis)`.
 - Test: `node dev-tests/round42.js` (84 cek).
+
+---
+
+## Ronde 44 — Petunjuk Pengguna (thumbnail + embedded viewer), OTP 4 digit pendaftaran, periode honor ≠ bulan posting BKU
+
+### 1. Petunjuk Pengguna: kartu bergambar + viewer di dalam aplikasi
+- **Schema control plane** (`saas_extra.js`): `master_guides.thumbnail_url` (CREATE TABLE + `addCol` untuk DB lama).
+  `guideSave()` menerima & menyimpan `thumbnail_url`.
+- **Super Admin** (`/super-admin/petunjuk`): field `thumbnail_url` + unggah `data-b64="gThumbB64"`
+  (POST → `uploadMedia(..., { jenis:'panduan', tenantId:1 })`), kolom **Thumb** & **Media** di daftar.
+- **Halaman sekolah** (`routes/panduan.js`, tetap READ ONLY — POST 403):
+  - `thumbOf(g)` = `thumbnail_url` → **gambar otomatis YouTube** (`i.ytimg.com/vi/<id>/hqdefault.jpg`) → ikon.
+  - Kartu sekarang `<div class="guide-card" data-guide>` (bukan `<a>`), berisi `<a class="guide-thumb">` +
+    tombol `Baca panduan` / `Putar Video` / `Lihat PDF`. Jangan menaruh `<button>` di dalam `<a>`.
+  - **Modal viewer** dikumpulkan di array `viewers` lalu dirender SETELAH grid kartu:
+    video `.video-embed` (YouTube embed), dokumen `.pdf-embed` (iframe; Google Drive/Docs otomatis `/preview`).
+    Keduanya memakai `iframe data-src` → dimuat oleh `public/app.js` saat modal dibuka (`hydrateFrames`) dan
+    `src` dilepas saat ditutup (`unloadFrames`) → halaman ringan & video berhenti.
+  - Halaman rincian juga memuat `.guide-hero` (thumbnail besar), video embed, dan PDF embed.
+
+### 2. OTP 4 digit pendaftaran sekolah baru (WA Gateway pusat)
+- **Tabel** `daftar_otp` (control plane): `token` unik, `phone` (62…), `kode`, `expires_at`, `expires_ms`,
+  `created_ms`, `tries`, `verified`, `ip`, `created_at`, `verified_at`.
+- **Setelan** (`saas_settings`): `daftar_otp_aktif` (default `1`), `daftar_otp_menit` (10), `daftar_otp_jeda` (60 dtk),
+  `daftar_otp_demo` (1 = tampilkan kode di layar bila gateway belum aktif). Diatur di
+  **Super Admin → Branding Sistem → Verifikasi WhatsApp Pendaftaran (OTP)**.
+- **Helper** (`saas_extra.js`): `daftarOtpCfg`, `otpDaftarSend(phone, ip)` (normalisasi `lib.normPhone`,
+  jeda kirim ulang, maks 5×/nomor/jam & 3×5/ip/jam, kirim lewat **`sendWA` gateway pusat** — gateway yang sama
+  dengan informasi tagihan perpanjangan), `otpDaftarVerify(token, kode)` (maks 5 percobaan), `otpDaftarValid(token, phone)`
+  (wajib `verified=1`, belum kedaluwarsa, **nomor sama**).
+- **Route** (`routes/auth.js`): `POST /register/otp/kirim` & `POST /register/otp/verifikasi` (JSON, tanpa sesi →
+  wajib ditambahkan ke `isPublicPath()` di `server.js`). `POST /register` menolak bila OTP belum terverifikasi
+  (hanya saat `daftar_otp_aktif='1'`). Error redirect menyertakan `otp=<token>` agar pengguna tidak perlu
+  verifikasi ulang.
+- **UI**: nomor WhatsApp + tombol **Kirim Kode OTP**, 4 kotak digit (`data-otp-digit`, auto-advance, paste),
+  status `data-otp-status`, kode mode uji `data-otp-demo`. Tombol `#btnDaftar` `disabled` sampai terverifikasi.
+  Ganti nomor setelah verifikasi = otomatis membatalkan verifikasi.
+- **Gotcha (pernah terjadi)**: di handler kirim, `setVerified(false)` MEMBUAT `tok.value=''` — panggil
+  `setVerified(false)` **sebelum** `tok.value = j.token`, kalau dibalik token hilang dan verifikasi selalu gagal.
+- **Gotcha setelan**: `daftar_otp_demo` memakai **hidden `value="0"` + checkbox `value="1"`** dan handler membaca
+  nilai TERAKHIR (`[].concat(b.daftar_otp_demo)`), supaya POST parsial ke `/super-admin/branding` tidak mematikan
+  mode uji secara diam-diam.
+- Bila gateway aktif tetapi kirim gagal & mode uji mati → endpoint membalas `{ok:false}` + pesan jelas
+  (tidak mengaku "kode terkirim").
+
+### 3. Honor ekskul: periode kinerja/honor ≠ bulan posting BKU
+- **Kolom baru** `ekskul_honor.posting_periode` (CREATE TABLE + ALTER di `runMigrations`).
+- Helper `routes/ekskul.js`: `postingOf(r)` (fallback ke `periode`), `lastDayOf('YYYY-MM')`, `uraianBatch(rows)`.
+- **Input** (grid & modal): field **Periode Kinerja/Honor** + **Bulan Posting ke BKU** (default = periode).
+- **Posting** (`POST /ekskul/antrean/posting`) menerima `posting_periode`:
+  tanggal transaksi = **hari terakhir bulan posting**, nomor bukti `<kode>/EKS/<YYYYMM posting>/<seq>`,
+  kunci periode dicek pada bulan posting, bulan posting harus di dalam rentang TA BKU; semua item batch
+  menyimpan `posting_periode` tersebut. **`periode` item tidak pernah diubah.**
+- **Uraian transaksi**: `Honor Pembina Ekstrakurikuler <jenis> <periode honor> (n pembina)` +
+  `— dibukukan <bulan posting>` bila berbeda → laporan honor tetap menunjukkan periode asli.
+- **Item terposting**: bulan posting terkunci (readonly di UI, diabaikan server saat edit).
+- Tampilan: kolom **Bulan Posting BKU** di daftar honor & riwayat antrean (+ badge "beda"),
+  input bulan posting per kelompok di antrean, cetak `Dibukukan ke BKU <bulan>`, export XLSX menambah
+  kolom **PERIODE HONOR** & **BULAN POSTING BKU**.
+
+### Test
+```bash
+node dev-tests/round43.js     # 90 cek: thumbnail + viewer (video/PDF/Drive), OTP (kirim/verifikasi/jeda/
+                              # kedaluwarsa/nomor beda/rate-limit/sakelar), ekskul periode vs posting
+                              # (tanggal transaksi, uraian, nomor bukti, periode tertutup, di luar TA, export, cetak)
+node dev-tests/ui-round43.js  # 39 cek Playwright: thumbnail termuat, modal viewer (iframe data-src), form
+                              # super admin, OTP di browser (gate + verifikasi + sukses daftar), bulan posting ekskul
+                              # (input awal, posting via UI, kolom di daftar), mobile 390px, tanpa error JS
+node dev-tests/otp.js         # helper test: kirim + verifikasi OTP (memakai demo_kode saat gateway belum aktif)
+```
+Disesuaikan: `round24/25/30/33`, `saas`, `ui-round24`, `ui-saas` (registrasi kini wajib `otp_token`),
+`ui-round30` (mengisi blok OTP di browser), `round25` (redirect auto-login `/?welcome=1`).
+
+**Gotcha alat (penting)**: teks pengganti yang mengandung `$'` atau `$&` BISA diinterpretasikan sebagai pola
+pengganti (mis. `new RegExp('...}$')` → `$'` = "sisa berkas") sehingga berkas bisa terduplikasi. Untuk potongan
+kode seperti itu gunakan Python/heredoc, bukan tool Edit, dan selalu `node --check` setelah menyunting berkas besar.

@@ -18,6 +18,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const { otpDaftar } = require('./otp');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'r30-'));
 const DB = path.join(TMP, 'k.sqlite');
@@ -65,10 +66,11 @@ async function req(method, url, body, opt = {}) {
   const SEKOLAH = 'SMK Negeri 30 Uji';
   const EMAIL = 'bendahara@smk30.sch.id';
   const PASS = 'rahasiaUji30';
+  const otp1 = await otpDaftar(base, '081200000030');
   let r = await req('POST', '/register', {
     nama: SEKOLAH, admin_nama: 'Ibu Bendahara', admin_email: EMAIL,
     admin_password: PASS, admin_password2: PASS, jenjang: 'SMK',
-    alamat: 'Jl. Uji No. 30', telp: '081200000030'
+    alamat: 'Jl. Uji No. 30', telp: '081200000030', otp_token: otp1
   }, { who: 'baru' });
   ok('daftar berhasil & redirect', r.status === 303 && !/err=/.test(r.loc), dec(r.loc));
   ok('redirect langsung ke dashboard (bukan /login)', /\/\?welcome=1$/.test(r.loc) && !/\/login/.test(r.loc), r.loc);
@@ -152,9 +154,11 @@ async function req(method, url, body, opt = {}) {
   ok('token sukses palsu ditolak', r.status === 303 && /kedaluwarsa/.test(dec(r.loc)), dec(r.loc));
 
   /* ============ 5. PENDAFTARAN KEDUA TETAP TERPISAH ============ */
+  const otp2 = await otpDaftar(base, '081200000031');
   const r2 = await req('POST', '/register', {
     nama: 'SMA Dua Uji', admin_nama: 'Pak Dua', admin_email: 'pakdua@sma2.sch.id',
-    admin_password: 'rahasiaDua', admin_password2: 'rahasiaDua', jenjang: 'SMA'
+    admin_password: 'rahasiaDua', admin_password2: 'rahasiaDua', jenjang: 'SMA',
+    telp: '081200000031', otp_token: otp2
   }, { who: 'dua' });
   const tenant2 = ctl.prepare('SELECT * FROM tenants WHERE nama=?').get('SMA Dua Uji');
   ok('pendaftaran kedua juga langsung ke dashboard', r2.status === 303 && /welcome=1/.test(r2.loc), r2.loc);
