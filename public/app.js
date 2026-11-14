@@ -2297,4 +2297,128 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     radios.forEach(r => r.addEventListener('change', apply));
     apply();
   })();
+
+  /* ===================================================================
+     Combobox "Nama Penerima / Penyetor"
+     Pilih nama dari master pegawai (dropdown dengan pencarian) ATAU ketik
+     manual — nilainya tetap teks bebas. Data dari <script id="pihakData">.
+     =================================================================== */
+  (function pihakPicker() {
+    const dataEl = document.getElementById('pihakData');
+    if (!dataEl) return;
+    let list = [];
+    try { list = JSON.parse(dataEl.textContent || '[]') || []; } catch (e) { list = []; }
+    if (!Array.isArray(list) || !list.length) return;
+
+    const low = s => String(s == null ? '' : s).toLowerCase();
+    const escTxt = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    let current = null;
+
+    function close() {
+      if (!current) return;
+      current.menu.hidden = true;
+      current = null;
+    }
+    function place(st) {
+      const r = st.input.getBoundingClientRect();
+      const m = st.menu;
+      m.style.left = Math.max(8, r.left) + 'px';
+      m.style.width = Math.max(240, r.width) + 'px';
+      if (window.innerHeight - r.bottom < 250 && r.top > 270) {
+        m.style.top = 'auto';
+        m.style.bottom = Math.max(8, window.innerHeight - r.top + 4) + 'px';
+      } else {
+        m.style.bottom = 'auto';
+        m.style.top = (r.bottom + 4) + 'px';
+      }
+    }
+    function draw(st) {
+      const term = low(st.q).trim();
+      const shown = (term ? list.filter(p => low(p.nama).includes(term) || low(p.jabatan).includes(term)) : list).slice(0, 80);
+      st.shown = shown;
+      if (st.active >= shown.length) st.active = -1;
+      const head = '<div class="pihak-head">Pilih dari data pegawai (' +
+        (term ? shown.length + ' cocok' : list.length + ' pegawai') + ') · atau ketik manual</div>';
+      const body = shown.length
+        ? shown.map((p, i) => '<button type="button" class="pihak-opt' + (i === st.active ? ' active' : '') +
+          '" data-pihak-opt="' + i + '"><span class="nm">' + escTxt(p.nama) + '</span>' +
+          (p.jabatan ? '<span class="jb">' + escTxt(p.jabatan) + '</span>' : '') + '</button>').join('')
+        : '<div class="pihak-empty">Tidak ada pegawai yang cocok. Teks yang Anda ketik tetap disimpan apa adanya.</div>';
+      st.menu.innerHTML = head + body;
+    }
+    function open(st) {
+      if (current && current !== st) close();
+      current = st;
+      st.q = '';
+      st.active = list.findIndex(p => low(p.nama) === low(st.input.value));
+      if (st.active > 79) st.active = -1;
+      draw(st);
+      st.menu.hidden = false;
+      place(st);
+    }
+    function pick(st, i) {
+      const p = st.shown[i];
+      if (!p) return;
+      st.input.value = p.nama;
+      st.input.dispatchEvent(new Event('input', { bubbles: true }));
+      st.input.dispatchEvent(new Event('change', { bubbles: true }));
+      close();
+    }
+
+    $$('input[data-pihak]').forEach(input => {
+      const wrap = input.closest('.pihak-pick');
+      if (!wrap) return;
+      const menu = wrap.querySelector('[data-pihak-menu]');
+      if (!menu) return;
+      wrap.setAttribute('data-pihak-ready', '1');
+      const st = { input, menu, active: -1, shown: [], q: '' };
+
+      input.addEventListener('focus', () => { if (!current || current.input !== input) open(st); });
+      input.addEventListener('click', () => { if (!current || current.input !== input) open(st); });
+      input.addEventListener('input', () => {
+        if (!current || current.input !== input) return;
+        st.q = input.value; st.active = -1;
+        draw(st); place(st);
+      });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { close(); return; }
+        if (!current || current.input !== input) {
+          if (e.key === 'ArrowDown') { e.preventDefault(); open(st); }
+          return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const n = st.shown.length;
+          if (!n) return;
+          st.active = e.key === 'ArrowDown' ? (st.active + 1) % n : (st.active <= 0 ? n - 1 : st.active - 1);
+          draw(st);
+          const el = menu.querySelector('[data-pihak-opt="' + st.active + '"]');
+          if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter') {
+          if (st.active >= 0) { e.preventDefault(); pick(st, st.active); }
+          else close();
+        }
+      });
+      const btn = wrap.querySelector('[data-pihak-btn]');
+      if (btn) btn.addEventListener('click', e => {
+        e.preventDefault();
+        if (current && current.input === input) { close(); return; }
+        input.focus(); open(st);
+      });
+      menu.addEventListener('mousedown', e => {
+        const b = e.target.closest('[data-pihak-opt]');
+        if (!b) return;
+        e.preventDefault();
+        pick(st, Number(b.dataset.pihakOpt));
+      });
+    });
+
+    document.addEventListener('mousedown', e => {
+      if (!current) return;
+      if (current.menu.contains(e.target) || current.input.contains(e.target)) return;
+      close();
+    });
+    window.addEventListener('resize', close);
+    document.addEventListener('scroll', () => { if (current) place(current); }, true);
+  })();
 })();

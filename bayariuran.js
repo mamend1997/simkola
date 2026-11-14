@@ -62,6 +62,7 @@ function cfg(dbm, saas) {
     key2: g('bayar_key2'),
     callback: g('bayar_callback'),
     base: g('bayar_base'),
+    kasera_api: g('bayar_kasera_api', 'auto') || 'auto',
     expire_menit: Math.max(5, Number(g('bayar_expire_menit', '60')) || 60)
   };
   const punyaKredensial = !!sekolah.key || sekolah.provider === 'sandbox';
@@ -216,11 +217,18 @@ async function createGateway({ dbm, saas, tenant, siswa, items, total, taId, bas
       c.provider, oid, taId || null, now);
   const id = Number(info.lastInsertRowid);
   const cb = (baseUrl ? String(baseUrl).replace(/\/$/, '') : '') + '/portal/pay/callback?t=' + encodeURIComponent(tenant ? tenant.id : 1);
-  const charge = await paygw.createCharge({ ...c, callback_url: cb, return_url: baseUrl || '' }, {
-    order_id: oid, amount: total,
-    label: `Iuran ${siswa.nama || ''}`.trim(),
-    customer: { nama: siswa.nama || 'Orang Tua', phone: siswa.parent_phone || '' }
-  });
+  const charge = await paygw.createCharge(
+    {
+      ...c, callback_url: cb, return_url: baseUrl || '',
+      /* Kasera Pay: endpoint webhook terpusat (sekolah ditentukan dari nomor pesanan) */
+      webhook_url: (baseUrl ? String(baseUrl).replace(/\/$/, '') : '') + '/api/webhook/kasera'
+    },
+    {
+      order_id: oid, amount: total,
+      label: `Iuran ${siswa.nama || ''}`.trim(),
+      customer: { nama: siswa.nama || 'Orang Tua', phone: siswa.parent_phone || '' }
+    }
+  );
   if (!charge.ok) {
     dbm.db.prepare("UPDATE iuran_checkout SET status='batal', alasan=? WHERE id=?")
       .run('Gagal membuat QRIS: ' + (charge.error || 'tidak diketahui'), id);

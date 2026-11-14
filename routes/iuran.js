@@ -270,6 +270,39 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </div>`;
     };
 
+    /* ---- tautan publik Grup Iuran (tanpa login) ---- */
+    const pubLink = g => (g.public_token
+      ? c.absUrl('/' + dbm.portalSlugs().base + '/publik/iuran/' + g.public_token) : '');
+    const publiForm = g => {
+      const link = pubLink(g);
+      return `<div class="alert info">${ui.icon('info')}<div>Halaman publik menampilkan <b>daftar siswa</b> pada grup ini beserta <b>tagihan, pembayaran, sisa, dan status</b> masing-masing, ditutup dengan <b>total tagihan</b> &amp; <b>grand total dana diterima</b>. Tidak perlu login.</div></div>
+        ${link ? `<div class="field"><label>Tautan Publik Aktif</label>
+          <input value="${esc(link)}" readonly onclick="this.select()">
+          <div class="toolbar" style="margin-top:8px">
+            <button type="button" class="btn btn-sm" data-copy="${esc(link)}">${ui.icon('copy')}Salin Tautan</button>
+            <a class="btn btn-sm" href="${esc(link)}" target="_blank" rel="noopener">${ui.icon('link')}Buka Halaman</a>
+          </div></div>`
+          : `<div class="alert warn">${ui.icon('alert')}<div>Belum ada tautan publik. Tekan <b>Generate Link Publik</b> untuk membuat kode acak.</div></div>`}
+        <form method="post" action="${c.base}/iuran/publik" style="margin-top:6px">
+          <input type="hidden" name="id" value="${g.id}">
+          <input type="hidden" name="ta" value="${esc(taId || '')}">
+          <input type="hidden" name="aksi" value="${link ? 'regen' : 'generate'}">
+          <button class="btn btn-primary btn-sm" data-confirm="${link
+          ? 'Buat tautan BARU? Tautan lama langsung tidak berlaku lagi.'
+          : 'Buat tautan publik acak untuk grup iuran ini?'}">${ui.icon('refresh')}${link ? 'Generate Ulang Link' : 'Generate Link Publik'}</button>
+        </form>
+        <form method="post" action="${c.base}/iuran/publik" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+          <input type="hidden" name="id" value="${g.id}">
+          <input type="hidden" name="ta" value="${esc(taId || '')}">
+          <input type="hidden" name="aksi" value="toggle">
+          <input type="hidden" name="aktif" value="${g.is_public ? '0' : '1'}">
+          <label class="check" style="display:block;margin-bottom:8px">
+            <input type="checkbox" ${g.is_public ? 'checked' : ''} disabled> Tautan publik <b>${g.is_public ? 'AKTIF' : 'NON-AKTIF'}</b>
+          </label>
+          <button class="btn btn-sm ${g.is_public ? 'btn-danger' : ''}">${ui.icon(g.is_public ? 'unlock' : 'eye')}${g.is_public ? 'Nonaktifkan Akses Publik' : 'Aktifkan Akses Publik'}</button>
+        </form>`;
+    };
+
     const form = (g, fid) => `<form method="post" action="${c.base}/iuran/save" id="${fid}" data-iuran-form>
       <input type="hidden" name="id" value="${g ? g.id : ''}">
       <div class="row2">
@@ -301,7 +334,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           ${c.can('iuran', 'create') ? ui.openModalBtn('mAddGrup', 'Tambah Grup Iuran') : ''}
         </div></div>
       ${groups.length ? `<div class="table-wrap sticky-head"><table><thead><tr>
-        <th>Nama Grup</th><th>Jenis</th><th>Tahun Ajaran</th><th class="num">Nominal (total)</th><th class="num">Siswa</th><th>Status</th><th class="right">Aksi</th>
+        <th>Nama Grup</th><th>Jenis</th><th>Tahun Ajaran</th><th class="num">Nominal (total)</th><th class="num">Siswa</th><th>Status</th><th>Publik</th><th class="right">Aksi</th>
       </tr></thead><tbody>
       ${groups.map(g => `<tr>
         <td class="t-strong">${esc(g.nama)}</td>
@@ -310,15 +343,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td class="num">${rupiah(g.total_nominal)}${g.jenis === 'bulanan' ? `<div class="t-sub">${g.nominal.filter(n => n.bulan).length} bulan</div>` : ''}</td>
         <td class="num">${g.jumlah_siswa}</td>
         <td>${g.aktif ? ui.badge('Aktif', 'green') : ui.badge('Non-Aktif', 'gray')}</td>
+        <td class="nowrap">${g.is_public ? ui.badge('Aktif', 'green') : ui.badge('Privat', 'gray')}</td>
         <td class="right nowrap">
           <a class="btn btn-sm" href="${c.base}/iuran/grup/${g.id}">${ui.icon('eye')}Detail</a>
+          ${editable ? `<button class="btn btn-sm ${g.is_public ? 'btn-soft' : ''}" data-open="mPubG${g.id}" title="Pengaturan tautan publik">${ui.icon('link')}Publik</button>` : ''}
           ${editable ? `<button class="btn btn-sm btn-icon" data-open="mEd${g.id}" title="Edit">${ui.icon('edit')}</button>` : ''}
           ${c.can('iuran', 'delete') ? `<form method="post" action="${c.base}/iuran/delete" style="display:inline" data-confirm="Hapus grup iuran ${esc(g.nama)} beserta tagihannya?"><input type="hidden" name="id" value="${g.id}"><button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>` : ''}
         </td></tr>
         ${late('mEd' + g.id, {
         title: 'Edit Grup Iuran — ' + g.nama, body: form(g, 'fmEd' + g.id), wide: true,
         footer: `<button class="btn" data-close="mEd${g.id}">Batal</button><button class="btn btn-primary" form="fmEd${g.id}">Simpan</button>`
-      })}`).join('')}
+      })}
+        ${editable ? late('mPubG' + g.id, {
+        title: 'Tautan Publik — ' + g.nama, body: publiForm(g),
+        footer: `<button class="btn" data-close="mPubG${g.id}">Tutup</button>`
+      }) : ''}`).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada grup iuran', 'Buat grup iuran (mis. Iuran SPP, Iuran Praktik) lalu tetapkan ke kelas/siswa.')}
       ${late.html()}
     </div>
@@ -348,6 +387,34 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     }) : ''}
     <p class="help mt-2">Setelah grup dibuat, buka <b>Detail</b> untuk menetapkan grup ke kelas/siswa tertentu dan mengubah nominalnya.</p>`;
     page(req, res, { title: 'Grup Iuran', sub: 'Kelompok tagihan iuran siswa & penetapan nominal', active: 'iuran', content });
+  });
+
+  /* =========================================================
+     DOMAIN PUBLIK GRUP IURAN — generate / regenerate / toggle
+     ========================================================= */
+  post('/iuran/publik', (req, res) => {
+    guard(req, res, 'iuran', 'edit');
+    const id = Number(req.body.id || 0);
+    const g = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(id);
+    const taQs = req.body.ta ? 'ta=' + encodeURIComponent(req.body.ta) : '';
+    let back = req.BASE + '/iuran' + (taQs ? '?' + taQs : '');
+    if (!g) return res.redirect(back + (taQs ? '&' : '?') + 'err=' + encodeURIComponent('Grup iuran tidak ditemukan.'));
+    const sep = taQs ? '&' : '?';
+    const aksi = String(req.body.aksi || 'toggle');
+    if (aksi === 'generate' || aksi === 'regen') {
+      const r = dbm.publicTokenEnsure('iuran', id, aksi === 'regen');
+      if (!r) return res.redirect(back + sep + 'err=' + encodeURIComponent('Gagal membuat tautan publik.'));
+      dbm.publicSetActive('iuran', id, true);
+      dbm.logAudit(req.user, aksi === 'regen' ? 'GENERATE ULANG LINK PUBLIK' : 'GENERATE LINK PUBLIK', 'iuran',
+        `Tautan publik grup iuran ${g.nama} ${aksi === 'regen' ? 'diperbarui' : 'dibuat'} (token …${r.token.slice(-6)}) & diaktifkan`);
+      return res.redirect(back + sep + 'ok=' + encodeURIComponent(`Tautan publik ${g.nama} ${aksi === 'regen' ? 'diperbarui' : 'dibuat'} dan diaktifkan.`));
+    }
+    const aktif = String(req.body.aktif || '0') === '1';
+    if (aktif && !g.public_token) dbm.publicTokenEnsure('iuran', id, true);
+    dbm.publicSetActive('iuran', id, aktif);
+    dbm.logAudit(req.user, aktif ? 'AKTIFKAN LINK PUBLIK' : 'NONAKTIFKAN LINK PUBLIK', 'iuran',
+      `Akses publik grup iuran ${g.nama} ${aktif ? 'diaktifkan' : 'dinonaktifkan'}`);
+    return res.redirect(back + sep + 'ok=' + encodeURIComponent(`Akses publik ${g.nama} ${aktif ? 'diaktifkan' : 'dinonaktifkan'}.`));
   });
 
   /* =========================================================
@@ -1922,8 +1989,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   /* =========================================================
      ANTREAN POSTING BKU
      ========================================================= */
-  function queueRows(taId) {
-    const rows = dbm.iuranBayarRows({ taId, status: 'pending' });
+  /** kelompokkan penerimaan pending per (grup + tanggal + BKU) → satu transaksi BKU */
+  function queueRows(rows) {
     const map = new Map();
     for (const b of rows) {
       const key = (b.grup_id || 0) + '|' + String(b.tanggal).slice(0, 10) + '|' + (b.bku_id || 0);
@@ -1947,14 +2014,41 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     return coaPenerimaanList().map(x => `<option value="${x.id}" ${String(x.id) === String(sel) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('');
   }
 
-  /** toolbar hapus masal (ceklis + pilih semua + tombol hapus) — `scope` = selector tabel sasaran */
-  function deleteToolbar(n, c, scope) {
+  /* ------------------------------------------------------------------
+     KETERANGAN PEMBUKUAN tiap penerimaan — mengikuti pilihan yang dibuat
+     saat pembayaran iuran diinput:
+       pending  → "Masuk BKU"  (menunggu posting ke BKU)
+       manual   → "Non-BKU"    (data saja, tidak menambah kas BKU)
+     ------------------------------------------------------------------ */
+  function ketPembukuan(row) {
+    const st = String((row && row.status) || '');
+    if (st === 'manual' || st === 'nonbku') {
+      return { label: 'Non-BKU (Data Saja)', cls: 'blue', note: 'tidak masuk BKU' };
+    }
+    if (st === 'posted') return { label: 'Sudah Masuk BKU', cls: 'green', note: row.bku_nama || '' };
+    if (st === 'beasiswa' || (row && row.sumber === 'beasiswa')) return { label: 'Beasiswa Otomatis', cls: 'green', note: 'bukan kas' };
+    if (st === 'void') return { label: 'Void', cls: 'red', note: 'dibatalkan' };
+    return { label: 'Masuk BKU', cls: 'amber', note: row && row.bku_nama ? row.bku_nama : 'antrean posting' };
+  }
+  function ketCell(row) {
+    const k = ketPembukuan(row);
+    return `<span class="badge ${k.cls}">${esc(k.label)}</span>${k.note ? `<div class="t-sub">${esc(k.note)}</div>` : ''}`;
+  }
+  /** kode rekening penerimaan yang dipakai saat posting satu baris */
+  function coaFor(row, coaDefId) {
+    const g = row && row.grup_id ? db.prepare('SELECT coa_id FROM iuran_grup WHERE id=?').get(row.grup_id) : null;
+    return (g && g.coa_id) || coaDefId || '';
+  }
+
+  /** toolbar aksi masal (ceklis + pilih semua + tombol eksekusi) — `scope` = selector tabel sasaran */
+  function deleteToolbar(n, c, scope, extra = '') {
     if (!c.can('iuran', 'delete') || !n) return '';
     const sc = scope ? ` data-check-scope="${scope}"` : '';
     return `<div class="toolbar">
-      <span class="small muted">Centang baris untuk hapus masal.</span>
+      <span class="small muted">Centang baris untuk aksi masal.</span>
       <button type="button" class="btn btn-sm" data-check-all="ids"${sc}>${ui.icon('check')}Pilih Semua</button>
       <button type="button" class="btn btn-sm" data-check-none="ids"${sc}>${ui.icon('x')}Hapus Ceklis</button>
+      ${extra}
       <button class="btn btn-sm btn-danger" type="submit" form="fHapusAntrean" data-confirm-click="Hapus semua data pembayaran yang dicentang? Data akan hilang dari riwayat transaksi siswa dan (bila sudah terposting) transaksi BKU-nya juga dihapus.">${ui.icon('trash')}Hapus Terpilih (<b data-check-count="ids"${sc}>0</b>)</button>
     </div>`;
   }
@@ -1963,20 +2057,44 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     guard(req, res, 'iuran', 'view');
     const c = ctx(req);
     const taId = c.taId;
-    const queue = queueRows(taId);
-    const pendingRows = dbm.iuranBayarRows({ taId, status: 'pending' });
-    // penerimaan yang sengaja disimpan sebagai DATA SAJA (non-BKU) — bisa dibuka & dikembalikan
-    const nonBkuRows = dbm.iuranBayarRows({ taId, status: 'manual' }).slice(0, 30);
-    const bukuss = db.prepare("SELECT * FROM bku WHERE status='aktif' AND tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY jenis DESC, urutan").all(taId || 0);
     const editable = c.can('iuran', 'edit');
+
+    /* ---------- FILTER PERIODE: bulan (YYYY-MM) atau rentang tanggal ---------- */
+    const qBulan = /^\d{4}-\d{2}$/.test(req.query.get('bulan') || '') ? req.query.get('bulan') : '';
+    let qDari = /^\d{4}-\d{2}-\d{2}$/.test(req.query.get('dari') || '') ? req.query.get('dari') : '';
+    let qSampai = /^\d{4}-\d{2}-\d{2}$/.test(req.query.get('sampai') || '') ? req.query.get('sampai') : '';
+    const akhirBulan = ym => {
+      const y = Number(String(ym).slice(0, 4)), m = Number(String(ym).slice(5, 7));
+      const hari = new Date(Date.UTC(y, m, 0)).getUTCDate();   // hari terakhir bulan tsb
+      return ym + '-' + String(hari).padStart(2, '0');
+    };
+    if (qBulan) { qDari = qBulan + '-01'; qSampai = akhirBulan(qBulan); }
+    if (qDari && qSampai && qDari > qSampai) { const tmp = qDari; qDari = qSampai; qSampai = tmp; }
+    const filterAktif = !!(qBulan || qDari || qSampai);
+    const inRange = r => (!qDari || String(r.tanggal || '') >= qDari) && (!qSampai || String(r.tanggal || '') <= qSampai);
+    const labelBulan = ym => `${BULAN[Number(String(ym).slice(5, 7)) - 1] || ym} ${String(ym).slice(0, 4)}`;
+
+    /* SELURUH riwayat penerimaan TA ini — tanpa batas 30 baris */
+    const rowsAll = dbm.iuranBayarRows({ taId });
+    const bulanOpts = [...new Set(rowsAll.map(r => String(r.tanggal || '').slice(0, 7)).filter(v => /^\d{4}-\d{2}$/.test(v)))].sort().reverse();
+    const pendingRows = rowsAll.filter(r => r.status === 'pending' && inRange(r));
+    const nonBkuRows = rowsAll.filter(r => (r.status === 'manual' || r.status === 'nonbku') && inRange(r));
+    const queue = queueRows(pendingRows);
+
+    const bukuss = db.prepare("SELECT * FROM bku WHERE status='aktif' AND tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY jenis DESC, urutan").all(taId || 0);
+    const bkuDefault = bukuss.length ? bukuss[0].id : '';
     const coaDef = coaIuran();
     const coaDefId = coaDef ? coaDef.id : '';
     const yesterday = dbm.dateOffsetISO(-1);   // kemarin menurut jam WIB
     const late = modalCollector();
-    /** modal edit satu penerimaan: ubah nominal / tanggal / atau ubah status menjadi Non-BKU */
+    const periodeInfo = qBulan
+      ? `bulan ${labelBulan(qBulan)}`
+      : (qDari || qSampai ? `tanggal ${qDari ? tglID(qDari) : '…'} s.d. ${qSampai ? tglID(qSampai) : '…'}` : 'seluruh periode');
+
+    /** modal edit satu penerimaan: ubah nominal / tanggal / atau ubah status pembukuan */
     function editModal(b) {
       return {
-        title: 'Edit Penerimaan Iuran', body: `<form method="post" action="${c.base}/iuran/antrean/edit" id="fe${b.id}">
+        title: 'Tinjau / Edit Penerimaan Iuran', body: `<form method="post" action="${c.base}/iuran/antrean/edit" id="fe${b.id}">
           <input type="hidden" name="id" value="${b.id}">
           <input type="hidden" name="back" value="/iuran/antrean">
           <div class="row2">
@@ -1987,24 +2105,42 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             <div class="field"><label>Tanggal Bayar</label><input type="date" name="tanggal" value="${esc(b.tanggal)}"></div>
             <div class="field"><label>Status Pembukuan</label>
               <select name="status_tujuan">
-                <option value="pending" ${b.status !== 'manual' ? 'selected' : ''}>Antrean Posting BKU</option>
+                <option value="pending" ${b.status !== 'manual' ? 'selected' : ''}>Masuk BKU (antrean posting)</option>
                 <option value="manual" ${b.status === 'manual' ? 'selected' : ''}>Non-BKU (data saja, tidak masuk BKU)</option>
               </select>
               <div class="hint">Pilih <b>Non-BKU</b> bila penerimaan ini tidak boleh menambah kas BKU.</div></div>
           </div>
-          <div class="field"><label>BKU Sasaran (dipakai bila status Antrean Posting)</label>
+          <div class="field"><label>BKU Sasaran (dipakai bila status Masuk BKU)</label>
             <select name="bku_id"><option value="">— Pilih BKU —</option>
               ${bukuss.map(x => `<option value="${x.id}" ${String(x.id) === String(b.bku_id) ? 'selected' : ''}>${esc(x.nama)}</option>`).join('')}
             </select></div>
           <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(b.keterangan || '')}"></div>
         </form>`,
-        footer: `<button class="btn" data-close="mE${b.id}">Batal</button><button class="btn btn-primary" form="fe${b.id}">Simpan Perubahan</button>`
+        footer: `<button class="btn" data-close="mE${b.id}">Batal</button><button class="btn btn-primary" form="fe${b.id}">${ui.icon('save')}Simpan Perubahan</button>`
       };
     }
+
+    /* bar filter periode (berlaku untuk Antrean Posting, Rincian, & Riwayat Non-BKU) */
+    const filterBar = `<form method="get" action="${c.base}/iuran/antrean" class="period-bar">
+      <div class="pb-field"><label>Bulan</label>
+        <select name="bulan">
+          <option value="">Semua Bulan</option>
+          ${bulanOpts.map(m => `<option value="${m}" ${m === qBulan ? 'selected' : ''}>${esc(labelBulan(m))}</option>`).join('')}
+        </select></div>
+      <div class="pb-field"><label>Tanggal Mulai</label><input type="date" name="dari" value="${esc(qBulan ? '' : qDari)}"></div>
+      <div class="pb-field"><label>Tanggal Akhir</label><input type="date" name="sampai" value="${esc(qBulan ? '' : qSampai)}"></div>
+      <div class="pb-actions">
+        <button class="btn btn-sm btn-primary">${ui.icon('filter')}Terapkan Filter</button>
+        ${filterAktif ? `<a class="btn btn-sm" href="${c.base}/iuran/antrean">${ui.icon('x')}Reset</a>` : ''}
+      </div>
+      <div class="pb-info">${filterAktif ? `Filter aktif: <b>${esc(periodeInfo)}</b>` : 'Seluruh riwayat ditampilkan (tanpa batas jumlah)'}
+        · ${pendingRows.length} belum terposting · ${nonBkuRows.length} Non-BKU</div>
+    </form>`;
 
     const content = `<div class="between mb-2">
       <div class="toolbar">
         <span class="badge ${queue.length ? 'amber' : 'green'}">${queue.length} kelompok penerimaan menunggu posting</span>
+        <span class="badge blue plain">${nonBkuRows.length} penerimaan Non-BKU</span>
       </div>
       <div class="toolbar"><a class="btn btn-sm" href="${c.base}/transaksi">${ui.icon('receipt')}Buka BKU</a></div>
     </div>
@@ -2050,15 +2186,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       }).join('')}
       </tbody></table></div></div>`;
     })()}
-    ${queue.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Terdapat ${queue.length} penerimaan grup iuran belum di-posting ke BKU.</b>
+    ${filterBar}
+    ${queue.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Terdapat ${queue.length} kelompok penerimaan grup iuran belum di-posting ke BKU.</b>
       ${queue.filter(q => q.tanggal <= yesterday).length ? `Termasuk ${queue.filter(q => q.tanggal <= yesterday).length} kelompok dari hari sebelumnya.` : ''}
-      Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.
-      Bila penerimaan tersebut memang <b>tidak boleh masuk BKU</b>, pilih <b>Hanya Simpan Data (Non-BKU)</b>.</div></div>` : ''}
+      Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.</div></div>` : ''}
     <div class="card mb-3">
-      <div class="card-head"><div><h3>Antrean Posting BKU</h3><div class="sub">Akumulasi penerimaan harian per grup iuran</div></div></div>
+      <div class="card-head"><div><h3>Antrean Posting BKU</h3>
+        <div class="sub">Akumulasi penerimaan harian per grup iuran · ${filterAktif ? esc(periodeInfo) : 'seluruh periode'}</div></div></div>
       ${queue.length ? `<form id="fQueueMass" method="post" action="${c.base}/iuran/antrean/posting-masal">
+        <input type="hidden" name="back" value="/iuran/antrean">
         <div class="between mb-1">
-          <div class="small muted">Centang kelompok penerimaan untuk aksi masal (tinjau/edit, posting BKU, atau simpan Non-BKU).
+          <div class="small muted">Centang kelompok penerimaan untuk aksi masal.
             Terpilih: <b data-check-count="qids" data-check-scope="#tblAntreanQueue">0</b> kelompok.</div>
           <div class="toolbar">
             <button type="button" class="btn btn-sm" data-check-all="qids" data-check-scope="#tblAntreanQueue">${ui.icon('check')}Pilih Semua</button>
@@ -2067,33 +2205,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
                 data-mass-target="mMassTinjau">${ui.icon('edit')}Tinjau / Edit Masal (<b data-check-count="qids" data-check-scope="#tblAntreanQueue">0</b>)</button>
             <button class="btn btn-sm btn-green" type="submit"
               data-confirm-click="Posting ke BKU semua kelompok penerimaan yang dicentang? Setiap kelompok menjadi satu transaksi BKU.">
-              ${ui.icon('check')}Posting BKU Masal (<b data-check-count="qids" data-check-scope="#tblAntreanQueue">0</b>)</button>
-            <button class="btn btn-sm" type="submit" formaction="${c.base}/iuran/antrean/nonbku"
-              data-confirm-click="Simpan sebagai DATA SAJA (Non-BKU) semua penerimaan yang dicentang? BKU tidak bertambah.">
-              ${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button>` : ''}
+              ${ui.icon('check')}Posting BKU Masal (<b data-check-count="qids" data-check-scope="#tblAntreanQueue">0</b>)</button>` : ''}
           </div></div>
       </form>
-      <div class="table-wrap sticky-head"><table id="tblAntreanQueue"><thead><tr>
-        <th style="width:34px"><input type="checkbox" data-check-all-box="qids" title="Pilih semua"></th>
-        <th>Tanggal</th><th>Grup Iuran</th><th>BKU Sasaran</th><th class="num">Transaksi</th><th class="num">Total Diterima</th><th class="right">Aksi</th>
+      <div class="table-scroll tall"><table id="tblAntreanQueue"><thead><tr>
+        <th style="width:34px"><input type="checkbox" data-check-all-box="qids" data-check-scope="#tblAntreanQueue" title="Pilih semua"></th>
+        <th>Tanggal</th><th>Grup Iuran</th><th>Keterangan</th><th class="num">Transaksi</th><th class="num">Total Diterima</th><th class="right">Aksi</th>
       </tr></thead><tbody>
       ${queue.map((q, i) => `<tr>
         <td><input type="checkbox" form="fQueueMass" name="ids" data-check-item="qids" value="${q.rows.map(r => r.id).join(',')}"></td>
         <td class="nowrap">${tglID(q.tanggal)}${q.tanggal <= yesterday ? ' <span class="badge red plain">terlambat</span>' : ''}</td>
         <td class="t-strong">${esc(q.grup_nama)}</td>
-        <td>${esc(q.bku_nama)}</td>
+        <td>${ketCell({ status: 'pending', bku_nama: q.bku_nama })}</td>
         <td class="num">${q.n}</td><td class="num t-strong">${rupiah(q.total)}</td>
         <td class="right">
           <div class="toolbar" style="justify-content:flex-end;gap:6px;flex-wrap:wrap">
             <button class="btn btn-sm" data-open="mQ${i}">${ui.icon('edit')}Tinjau / Edit</button>
-            ${editable ? `<form method="post" action="${c.base}/iuran/antrean/posting" data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?">
-              <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
+            ${editable ? `<form method="post" action="${c.base}/iuran/antrean/posting" style="display:inline"
+              data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?">
               <input type="hidden" name="bku_id" value="${q.bku_id || ''}">
               <input type="hidden" name="coa_id" value="${q.coa_id || coaDefId}">
-              <button class="btn btn-sm btn-green">${ui.icon('check')}Posting ke BKU</button></form>
-            <form method="post" action="${c.base}/iuran/antrean/nonbku" data-confirm="Simpan ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} (${rupiah(q.total)}) sebagai DATA SAJA tanpa mencatat ke BKU?">
-              <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
-              <button class="btn btn-sm">${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button></form>` : ''}
+              <button class="btn btn-sm btn-green" name="ids" value="${q.rows.map(r => r.id).join(',')}">${ui.icon('check')}Posting ke BKU</button></form>` : ''}
           </div>
         </td></tr>
         ${late('mQ' + i, {
@@ -2115,57 +2247,100 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         footer: `<button class="btn" data-close="mQ${i}">Tutup</button>${editable ? `<button class="btn" form="fq${i}" formaction="${c.base}/iuran/antrean/nonbku" formmethod="post">${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button>
           <button class="btn btn-green" form="fq${i}">${ui.icon('check')}Posting ke BKU</button>` : ''}`
       })}`).join('')}
-      </tbody></table></div>` : ui.emptyState('Antrean kosong', 'Semua penerimaan iuran sudah diposting ke BKU atau disimpan sebagai data non-BKU.')}
+      </tbody></table></div>` : ui.emptyState('Antrean kosong', filterAktif
+        ? `Tidak ada penerimaan belum terposting pada ${periodeInfo}. Ubah filter periode untuk melihat periode lain.`
+        : 'Semua penerimaan iuran sudah diposting ke BKU atau disimpan sebagai data non-BKU.')}
     </div>
+
     <form id="fHapusAntrean" method="post" action="${c.base}/iuran/bayar/hapus-masal">
       <input type="hidden" name="back" value="/iuran/antrean">
+      <input type="hidden" name="bku_id" value="${bkuDefault}">
     </form>
     <div class="card">
-      <div class="card-head"><div><h3>Rincian Penerimaan Belum Terposting</h3><div class="sub">${pendingRows.length} pembayaran · dapat diedit, dijadikan Non-BKU, atau dihapus masal</div></div>
-        ${deleteToolbar(pendingRows.length, c, '#tblAntreanPending')}</div>
-      ${pendingRows.length ? `<div class="table-scroll short"><table id="tblAntreanPending"><thead><tr>
+      <div class="card-head"><div><h3>Rincian Penerimaan Belum Terposting</h3>
+        <div class="sub">${pendingRows.length} pembayaran · ${filterAktif ? esc(periodeInfo) : 'seluruh periode'} · semua data ditampilkan dalam kotak bergulir</div></div></div>
+      ${pendingRows.length ? `<form id="fPilih" method="post" action="${c.base}/iuran/antrean/posting-masal">
+        <input type="hidden" name="back" value="/iuran/antrean">
+        <div class="between mb-1">
+          <div class="small muted">Centang penerimaan untuk aksi masal.
+            Terpilih: <b data-check-count="ids" data-check-scope="#tblAntreanPending">0</b> penerimaan.</div>
+          <div class="toolbar">
+            <button type="button" class="btn btn-sm" data-check-all="ids" data-check-scope="#tblAntreanPending">${ui.icon('check')}Pilih Semua</button>
+            <button type="button" class="btn btn-sm" data-check-none="ids" data-check-scope="#tblAntreanPending">${ui.icon('x')}Hapus Ceklis</button>
+            ${editable ? `<button class="btn btn-sm" type="button" data-open="mMassTinjau" data-mass-review="fPilih"
+                data-mass-target="mMassTinjau">${ui.icon('edit')}Tinjau / Edit Masal (<b data-check-count="ids" data-check-scope="#tblAntreanPending">0</b>)</button>
+            <button class="btn btn-sm btn-green" type="submit"
+              data-confirm-click="Posting ke BKU semua penerimaan yang dicentang? Satu kelompok (grup + tanggal) menjadi satu transaksi BKU.">
+              ${ui.icon('check')}Posting ke BKU (<b data-check-count="ids" data-check-scope="#tblAntreanPending">0</b>)</button>
+            ${c.can('iuran', 'delete') ? `<button class="btn btn-sm btn-danger" type="submit" formaction="${c.base}/iuran/bayar/hapus-masal"
+              data-confirm-click="Hapus semua penerimaan yang dicentang? Data hilang dari riwayat siswa dan transaksi BKU terkait (bila ada) ikut dihapus.">
+              ${ui.icon('trash')}Hapus Terpilih (<b data-check-count="ids" data-check-scope="#tblAntreanPending">0</b>)</button>` : ''}` : ''}
+          </div></div>
+      </form>
+      <div class="table-scroll tall"><table id="tblAntreanPending"><thead><tr>
         <th style="width:36px"><input type="checkbox" data-check-all-box="ids" data-check-scope="#tblAntreanPending" title="Pilih semua"></th>
-        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Jumlah</th><th class="num">Potongan</th><th class="num">Dibayar</th><th></th></tr></thead><tbody>
-        ${pendingRows.map(b => `<tr><td><input type="checkbox" form="fHapusAntrean" name="ids" value="${b.id}"></td>
+        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th>Keterangan</th>
+        <th class="num">Jumlah</th><th class="num">Potongan</th><th class="num">Dibayar</th><th class="right">Aksi</th></tr></thead><tbody>
+        ${pendingRows.map(b => `<tr><td><input type="checkbox" form="fPilih" name="ids" data-check-item="ids" value="${b.id}"></td>
           <td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
           <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
+          <td>${ketCell(b)}</td>
           <td class="num">${rupiah(b.jumlah)}</td><td class="num">${rupiah(b.potongan)}</td><td class="num t-strong">${rupiah(b.dibayar)}</td>
-          <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}" title="Edit / jadikan Non-BKU">${ui.icon('edit')}</button>` : ''}</td></tr>
+          <td class="right nowrap">
+            <div class="toolbar" style="justify-content:flex-end;gap:6px">
+              ${editable ? `<button class="btn btn-sm" data-open="mE${b.id}">${ui.icon('edit')}Tinjau / Edit</button>
+              <form method="post" action="${c.base}/iuran/antrean/posting" style="display:inline"
+                data-confirm="Posting penerimaan ${esc(b.siswa_nama)} (${rupiah(b.dibayar)}) ke ${esc(b.bku_nama || 'BKU sasaran')}?">
+                <input type="hidden" name="bku_id" value="${b.bku_id || ''}">
+                <input type="hidden" name="coa_id" value="${coaFor(b, coaDefId)}">
+                <button class="btn btn-sm btn-green" name="ids" value="${b.id}">${ui.icon('check')}Posting</button></form>` : ''}
+            </div></td></tr>
           ${late('mE' + b.id, editModal(b))}`).join('')}
-      </tbody></table></div>` : ui.emptyState('Tidak ada penerimaan tertunda')}
+      </tbody></table></div>` : ui.emptyState('Tidak ada penerimaan tertunda', filterAktif ? `Tidak ada penerimaan belum terposting pada ${periodeInfo}.` : '')}
     </div>
     <div class="card mt-3">
-      <div class="card-head"><div><h3>Penerimaan Non-BKU (Data Saja)</h3>
-        <div class="sub">${nonBkuRows.length} penerimaan terakhir · tidak masuk BKU, hanya mengurangi tagihan siswa</div></div>
-        ${deleteToolbar(nonBkuRows.length, c, '#tblAntreanNonBku')}</div>
-      ${nonBkuRows.length ? `<div class="table-scroll short"><table id="tblAntreanNonBku"><thead><tr>
+      <div class="card-head"><div><h3>Riwayat Penerimaan Non-BKU (Data Saja)</h3>
+        <div class="sub">${nonBkuRows.length} penerimaan · ${filterAktif ? esc(periodeInfo) : 'seluruh riwayat'} · tidak masuk BKU, hanya mengurangi tagihan siswa</div></div>
+        ${deleteToolbar(nonBkuRows.length, c, '#tblAntreanNonBku', editable && bkuDefault ? `<button class="btn btn-sm" type="submit" form="fHapusAntrean" formaction="${c.base}/iuran/antrean/kembali"
+          data-confirm-click="Kembalikan semua penerimaan Non-BKU yang dicentang ke antrean posting BKU?">
+          ${ui.icon('refresh')}Kembalikan ke Antrean (<b data-check-count="ids" data-check-scope="#tblAntreanNonBku">0</b>)</button>` : '')}</div>
+      ${nonBkuRows.length ? `<div class="table-scroll tall"><table id="tblAntreanNonBku"><thead><tr>
         <th style="width:36px"><input type="checkbox" data-check-all-box="ids" data-check-scope="#tblAntreanNonBku" title="Pilih semua"></th>
-        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th class="num">Dibayar</th><th>Status</th><th></th></tr></thead><tbody>
-        ${nonBkuRows.map(b => `<tr><td><input type="checkbox" form="fHapusAntrean" name="ids" value="${b.id}"></td>
+        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th>Keterangan</th><th class="num">Dibayar</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+        ${nonBkuRows.map(b => `<tr><td><input type="checkbox" form="fHapusAntrean" name="ids" data-check-item="ids" data-check-scope="#tblAntreanNonBku" value="${b.id}"></td>
           <td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
           <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
+          <td>${ketCell(b)}</td>
           <td class="num t-strong">${rupiah(b.dibayar)}</td><td>${bayarStatusBadge(b.status, b.sumber)}</td>
-          <td class="right">${editable ? `<button class="btn btn-sm btn-icon" data-open="mE${b.id}" title="Edit / kembalikan ke antrean BKU">${ui.icon('edit')}</button>` : ''}</td></tr>
+          <td class="right nowrap">
+            <div class="toolbar" style="justify-content:flex-end;gap:6px">
+              ${editable ? `<button class="btn btn-sm" data-open="mE${b.id}">${ui.icon('edit')}Tinjau / Edit</button>
+              <form method="post" action="${c.base}/iuran/antrean/kembali" style="display:inline"
+                data-confirm="Kembalikan penerimaan Non-BKU ${esc(b.siswa_nama)} (${rupiah(b.dibayar)}) ke antrean posting BKU?">
+                <input type="hidden" name="bku_id" value="${bkuDefault}">
+                <button class="btn btn-sm" name="ids" value="${b.id}" ${bkuDefault ? '' : 'disabled title="Belum ada BKU aktif"'}>${ui.icon('refresh')}Kembalikan ke Antrean</button></form>` : ''}
+            </div></td></tr>
           ${late('mE' + b.id, editModal(b))}`).join('')}
-      </tbody></table></div>` : `<div class="help">Belum ada penerimaan yang disimpan sebagai Non-BKU. Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> pada antrean di atas.</div>`}
+      </tbody></table></div>` : `<div class="help">Belum ada penerimaan yang disimpan sebagai Non-BKU${filterAktif ? ` pada ${esc(periodeInfo)}` : ''}. Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> pada Tinjau / Edit bila penerimaan tidak boleh menambah kas BKU.</div>`}
     </div>
     ${editable ? ui.modal('mMassTinjau', {
       title: 'Tinjau / Edit Masal Penerimaan', wide: true,
       body: `<form method="post" action="${c.base}/iuran/antrean/posting-masal" id="fMassTinjau">
-        <div class="alert info">${ui.icon('info')}<div>Semua kelompok penerimaan yang dicentang akan <b>diposting ke BKU</b> memakai BKU &amp; kode akun di bawah.
+        <input type="hidden" name="back" value="/iuran/antrean">
+        <div class="alert info">${ui.icon('info')}<div>Semua penerimaan yang dicentang akan <b>diposting ke BKU</b> memakai BKU &amp; kode akun di bawah.
           Setiap kelompok (grup + tanggal) tetap menjadi <b>satu transaksi</b> tersendiri.
           Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> bila penerimaan tidak boleh menambah kas BKU.</div></div>
         <div data-mass-ids></div>
-        <div class="field"><label>Kelompok Penerimaan Terpilih</label>
+        <div class="field"><label>Penerimaan Terpilih</label>
           <div class="small" data-mass-summary style="padding:8px 10px;background:#FFF7ED;border:1px solid var(--line);border-radius:10px">
-            Belum ada kelompok yang dipilih.</div></div>
+            Belum ada penerimaan yang dipilih.</div></div>
         <div class="row2">
           <div class="field"><label>BKU Sasaran</label>
-            <select name="bku_id" required>
-              <option value="">— Ikuti BKU tiap kelompok —</option>
+            <select name="bku_id">
+              <option value="">— Ikuti BKU tiap penerimaan —</option>
               ${bukuss.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}
             </select>
-            <div class="hint">Kosongkan pilihan ini agar tiap kelompok memakai BKU yang tercatat pada penerimaannya.</div></div>
+            <div class="hint">Kosongkan pilihan ini agar tiap penerimaan memakai BKU yang tercatat pada datanya.</div></div>
           <div class="field"><label>Kode Akun / Rekening Penerimaan</label>
             <select name="coa_id" required>${coaOptions('')}</select>
             <div class="hint">Default: <b>${esc((coaDef || {}).kode || '4.1.07')} · ${esc((coaDef || {}).nama || 'Penerimaan Kegiatan Siswa')}</b>.</div></div>
@@ -2177,6 +2352,28 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     }) : ''}
     ${late.html()}`;
     page(req, res, { title: 'Antrean Posting BKU', sub: 'Penerimaan iuran yang belum masuk BKU', active: 'iuran_queue', content });
+  });
+
+  /** kembalikan penerimaan Non-BKU ke antrean posting BKU (per baris / masal) */
+  post('/iuran/antrean/kembali', (req, res) => {
+    guard(req, res, 'iuran', 'edit');
+    const back = req.BASE + '/iuran/antrean';
+    const ids = [].concat(req.body.ids || []).flatMap(v => String(v).split(',')).map(Number).filter(Boolean);
+    if (!ids.length) return res.redirect(back + '?err=' + encodeURIComponent('Tidak ada penerimaan yang dipilih.'));
+    const bkuId = Number(req.body.bku_id || 0);
+    const bku = bkuId ? db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId) : null;
+    if (!bku) return res.redirect(back + '?err=' + encodeURIComponent('Belum ada BKU aktif sebagai sasaran. Tambah atau buka BKU terlebih dahulu.'));
+    if (bku.status !== 'aktif') return res.redirect(back + '?err=' + encodeURIComponent(`BKU ${bku.nama} sudah ditutup.`));
+    const rows = db.prepare(`SELECT * FROM iuran_bayar WHERE id IN (${ids.map(() => '?').join(',')}) AND status IN ('manual','nonbku')`).all(...ids);
+    if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Penerimaan Non-BKU tidak ditemukan (mungkin sudah dipindahkan).'));
+    const total = rows.reduce((s, r) => s + Number(r.dibayar || 0), 0);
+    db.transaction(() => {
+      const upd = db.prepare("UPDATE iuran_bayar SET status='pending', bku_id=?, transaksi_id=NULL, posted_at=NULL WHERE id=?");
+      for (const r of rows) upd.run(bku.id, r.id);
+    })();
+    dbm.logAudit(req.user, 'KEMBALI ANTREAN', 'iuran',
+      `${rows.length} penerimaan Non-BKU (${rupiah(total)}) dikembalikan ke antrean posting BKU ${bku.nama}`);
+    res.redirect(back + '?ok=' + encodeURIComponent(`${rows.length} penerimaan (${rupiah(total)}) dikembalikan ke antrean posting BKU ${bku.nama}.`));
   });
 
   post('/iuran/antrean/edit', (req, res) => {

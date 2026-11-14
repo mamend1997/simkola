@@ -144,7 +144,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <div class="field"><label>Uraian / Keterangan</label><textarea name="uraian" required>${esc(t.uraian)}</textarea>
         <div class="hint">Terbilang: <b class="js-terbilang" style="color:var(--o-700)"></b></div></div>
       <div class="row2">
-        <div class="field"><label>Nama Penerima / Penyetor</label><input name="nama_pihak" value="${esc(t.nama_pihak || '')}"></div>
+        <div class="field"><label>Nama Penerima / Penyetor</label>
+          ${ui.pihakInput('nama_pihak', t.nama_pihak || '', 'placeholder="Pilih dari data pegawai atau ketik manual"')}
+          <div class="hint">Klik kolom untuk memilih dari <b>master pegawai</b>, atau ketik nama bebas.</div></div>
         <div class="field"><label>Alasan Koreksi (wajib, dicatat di audit log)</label>
           <input name="alasan" required placeholder="Contoh: salah input nominal, koreksi tanggal"></div>
       </div>
@@ -346,7 +348,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     ${askKoreksi && bolehAjukan && !lockOf(askKoreksi.tanggal, 'edit') ? ui.modal('mRowKoreksi', {
       title: 'Ajukan Koreksi', wide: true, body: ajukanForm(askKoreksi, 'RowKoreksi'),
       footer: `<a class="btn" href="${pageHref([])}#trx${askKoreksi.id}">Batal</a><button class="btn btn-primary" form="fRowKoreksi">${ui.icon('upload')}Kirim Pengajuan</button>`
-    }).replace('class="modal" id="mRowKoreksi"', 'class="modal show" id="mRowKoreksi"') : ''}`;
+    }).replace('class="modal" id="mRowKoreksi"', 'class="modal show" id="mRowKoreksi"') : ''}
+    ${ui.pihakData(dbm.pegawaiList(true))}`;
 
     page(req, res, {
       title: 'Detail BKU', sub: `${b.nama} · ${ta.nama || '-'}`, active: 'bku', content

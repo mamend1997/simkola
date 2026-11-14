@@ -38,6 +38,8 @@ const ok = (n, c, x) => {
   else { fail++; fails.push(n + (x ? ' — ' + x : '')); console.log('  ✗ ' + n + (x ? ' — ' + x : '')); }
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* tanggal hari ini pada zona aplikasi (WIB) */
+const HARI_INI = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
 
 async function req(method, url, body, opt = {}) {
   const headers = {};
@@ -257,24 +259,34 @@ const ck = sc => String(sc || '').split(';')[0];
 
   r = await req('GET', '/ekskul/antrean', null, { cookie: cT });
   ok('antrean menampilkan judul periode honor', /Periode Honor Oktober 2026/.test(r.text));
-  ok('antrean menyediakan input bulan posting per kelompok', /name="posting_periode" value="2026-11"/.test(r.text));
+  ok('antrean menyediakan input TANGGAL transaksi (bukan bulan posting)', /name="tanggal" value="/.test(r.text) && !/name="posting_periode"/.test(r.text.split('Riwayat Antrean')[0]));
+  ok('input tanggal transaksi otomatis terisi hari ini', new RegExp('name="tanggal" value="' + HARI_INI + '"').test(r.text), HARI_INI);
 
-  /* bulan posting yang berbeda dari periode tetap menulis transaksi di bulan posting */
+  /* tanggal transaksi = tanggal aktual entry data (bukan akhir bulan) */
   r = await req('POST', '/ekskul/antrean/posting', {
-    periode: '2026-10', jenis: 'Pramuka', bku_id: bku.id, posting_periode: '2026-11'
+    periode: '2026-10', jenis: 'Pramuka', bku_id: bku.id, tanggal: '2026-11-05'
   }, { cookie: cT });
-  ok('posting honor dengan bulan posting berbeda berhasil', r.status === 303 && /ok=/.test(r.loc), decodeURIComponent(r.loc).slice(0, 160));
+  ok('posting honor dengan tanggal transaksi eksplisit berhasil', r.status === 303 && /ok=/.test(r.loc), decodeURIComponent(r.loc).slice(0, 160));
   const trx = tdb.prepare("SELECT * FROM transaksi WHERE uraian LIKE '%Honor Pembina Ekstrakurikuler Pramuka%'").get();
   ok('transaksi BKU dibuat', !!trx);
-  ok('tanggal transaksi = hari terakhir bulan posting (30 Nov 2026)', trx && trx.tanggal === '2026-11-30', trx && trx.tanggal);
+  ok('tanggal transaksi = tanggal entry (5 Nov 2026), BUKAN akhir bulan', trx && trx.tanggal === '2026-11-05', trx && trx.tanggal);
   ok('uraian transaksi tetap menyebut periode honor Oktober 2026', trx && /Oktober 2026/.test(trx.uraian), trx && trx.uraian);
   ok('uraian mencatat bulan pembukuan November 2026', trx && /dibukukan November 2026/.test(trx.uraian), trx && trx.uraian);
-  ok('nomor bukti memakai bulan posting (202611)', trx && /202611/.test(trx.no_bukti), trx && trx.no_bukti);
+  ok('nomor bukti memakai bulan transaksi (202611)', trx && /202611/.test(trx.no_bukti), trx && trx.no_bukti);
   ok('nominal transaksi = total honor (4×50.000 + 3×60.000)', trx && Number(trx.nominal) === 380000, trx && trx.nominal);
   rows = tdb.prepare("SELECT * FROM ekskul_honor WHERE periode='2026-10'").all();
   ok('semua item menjadi terposting', rows.every(x => x.status === 'posted'));
   ok('periode honor TIDAK berubah setelah posting', rows.every(x => x.periode === '2026-10'));
-  ok('bulan posting tersimpan pada item', rows.every(x => x.posting_periode === '2026-11'));
+  ok('bulan transaksi tersimpan pada item', rows.every(x => x.posting_periode === '2026-11'));
+
+  /* tanpa field tanggal → otomatis tanggal hari ini (zona WIB) */
+  await req('POST', '/ekskul/save-grid', {
+    jenis: 'Rohis', periode: '2026-11',
+    nama_pembina: ['Umar'], kehadiran: ['1'], harga_satuan: ['25.000'], keterangan: ['']
+  }, { cookie: cT });
+  r = await req('POST', '/ekskul/antrean/posting', { periode: '2026-11', jenis: 'Rohis', bku_id: bku.id }, { cookie: cT });
+  const trxHari = tdb.prepare("SELECT * FROM transaksi WHERE uraian LIKE '%Honor Pembina Ekstrakurikuler Rohis%'").get();
+  ok('tanpa field tanggal → transaksi memakai tanggal hari ini', r.status === 303 && trxHari && trxHari.tanggal === HARI_INI, trxHari && trxHari.tanggal);
 
   r = await req('GET', '/ekskul/antrean', null, { cookie: cT });
   ok('riwayat antrean memakai kolom Periode Honor & Bulan Posting', /Periode Honor/.test(r.text) && /Bulan Posting BKU/.test(r.text));
@@ -305,15 +317,15 @@ const ck = sc => String(sc || '').split(';')[0];
   }, { cookie: cT });
   ok('item honor baru untuk periode Oktober (BKU sudah ditutup) tersimpan', r.status === 303 && /ok=/.test(r.loc));
   r = await req('POST', '/ekskul/antrean/posting', {
-    periode: '2026-10', jenis: 'PMR', bku_id: bku.id, posting_periode: '2026-10'
+    periode: '2026-10', jenis: 'PMR', bku_id: bku.id, tanggal: '2026-10-20'
   }, { cookie: cT });
-  ok('posting ke bulan yang SUDAH DITUTUP ditolak', r.status === 303 && /err=/.test(r.loc) && /ditutup|Tutup BKU/i.test(decodeURIComponent(r.loc)), decodeURIComponent(r.loc).slice(-160));
+  ok('posting dengan tanggal di periode yang SUDAH DITUTUP ditolak', r.status === 303 && /err=/.test(r.loc) && /ditutup|Tutup BKU/i.test(decodeURIComponent(r.loc)), decodeURIComponent(r.loc).slice(-160));
   r = await req('POST', '/ekskul/antrean/posting', {
-    periode: '2026-10', jenis: 'PMR', bku_id: bku.id, posting_periode: '2026-11'
+    periode: '2026-10', jenis: 'PMR', bku_id: bku.id, tanggal: '2026-11-10'
   }, { cookie: cT });
-  ok('posting ke bulan BERIKUTNYA (belum ditutup) berhasil meski periode Oktober tertutup', r.status === 303 && /ok=/.test(r.loc), decodeURIComponent(r.loc).slice(-190));
+  ok('posting dengan tanggal di bulan BERIKUTNYA (belum ditutup) berhasil meski periode Oktober tertutup', r.status === 303 && /ok=/.test(r.loc), decodeURIComponent(r.loc).slice(-190));
   const trx2 = tdb.prepare("SELECT * FROM transaksi WHERE uraian LIKE '%Honor Pembina Ekstrakurikuler PMR%'").get();
-  ok('transaksi PMR jatuh di November 2026, periode tetap Oktober', trx2 && trx2.tanggal === '2026-11-30' && /Oktober 2026/.test(trx2.uraian), trx2 && trx2.tanggal);
+  ok('transaksi PMR memakai tanggal entry 10 Nov 2026, periode tetap Oktober', trx2 && trx2.tanggal === '2026-11-10' && /Oktober 2026/.test(trx2.uraian), trx2 && trx2.tanggal);
 
   /* bulan posting di luar tahun pelajaran BKU ditolak */
   r = await req('POST', '/ekskul/save-grid', {
@@ -322,9 +334,9 @@ const ck = sc => String(sc || '').split(';')[0];
   }, { cookie: cT });
   ok('item honor Futsal tersimpan', r.status === 303 && /ok=/.test(r.loc));
   r = await req('POST', '/ekskul/antrean/posting', {
-    periode: '2026-10', jenis: 'Futsal', bku_id: bku.id, posting_periode: '2030-01'
+    periode: '2026-10', jenis: 'Futsal', bku_id: bku.id, tanggal: '2030-01-15'
   }, { cookie: cT });
-  ok('bulan posting di luar tahun pelajaran ditolak', r.status === 303 && /err=/.test(r.loc) && /tahun pelajaran/i.test(decodeURIComponent(r.loc)), decodeURIComponent(r.loc).slice(-150));
+  ok('tanggal transaksi di luar tahun pelajaran ditolak', r.status === 303 && /err=/.test(r.loc) && /tahun pelajaran/i.test(decodeURIComponent(r.loc)), decodeURIComponent(r.loc).slice(-150));
 
   /* edit item terposting tidak boleh memindahkan bulan posting */
   const postedRow = tdb.prepare("SELECT * FROM ekskul_honor WHERE jenis='Pramuka' ORDER BY id LIMIT 1").get();
@@ -333,7 +345,7 @@ const ck = sc => String(sc || '').split(';')[0];
     periode: '2026-10', posting_periode: '2026-12', kehadiran: '5', harga_satuan: '50.000', keterangan: ''
   }, { cookie: cT });
   const afterEdit = tdb.prepare('SELECT * FROM ekskul_honor WHERE id=?').get(postedRow.id);
-  ok('bulan posting item terposting tidak berubah saat diedit', afterEdit.posting_periode === '2026-11', afterEdit.posting_periode);
+  ok('bulan transaksi item terposting tidak berubah saat diedit', afterEdit.posting_periode === '2026-11', afterEdit.posting_periode);
   ok('nominal transaksi ikut tersinkron (5×50.000 + 3×60.000)', (() => {
     const t = tdb.prepare('SELECT * FROM transaksi WHERE id=?').get(trx.id);
     return Number(t.nominal) === 430000;

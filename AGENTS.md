@@ -1611,3 +1611,223 @@ Disesuaikan: `round24/25/30/33`, `saas`, `ui-round24`, `ui-saas` (registrasi kin
 **Gotcha alat (penting)**: teks pengganti yang mengandung `$'` atau `$&` BISA diinterpretasikan sebagai pola
 pengganti (mis. `new RegExp('...}$')` → `$'` = "sisa berkas") sehingga berkas bisa terduplikasi. Untuk potongan
 kode seperti itu gunakan Python/heredoc, bukan tool Edit, dan selalu `node --check` setelah menyunting berkas besar.
+
+---
+
+## Ronde 45 — Integrasi Kasera Pay (transaksi `/v1/transactions` + webhook `kasera-signature-v1`)
+
+### 1. Adapter (`paygw.js`)
+- Konstanta & helper baru: `KASERA` (`base: https://pay.kasera.id`, `base_sandbox: https://sandbox.kasera.id`,
+  `event_kurir: ['payment.paid','payment.settled','payment.capture']`), `KASERA_API_MODES = ['auto','transactions','qris']`,
+  `kaseraCfg()`, `kaseraSecrets()`, `kaseraCreateTransaction()`, `kaseraCheckTransaction()`,
+  `kaseraSignature()`, `kaseraVerifySignature()`, `kaseraEvent()`, `kaseraPayload()`, `kaseraUsable()`.
+- **Create** = `POST {base}/v1/transactions` dengan header `Authorization: Bearer <KASERA_API_KEY>`,
+  **`Idempotency-Key` = nomor pesanan**, `Accept`/`Content-Type: application/json`; body
+  `{ amount (integer rupiah), external_id, description }` (+ `currency/reference_id/order_id/customer/
+  callback_url/webhook_url/expiry_minutes`). `checkout_url` diambil dari `data|transaction|payment` atau root.
+- **Fallback** `/v1/qris` (kode lama) hanya bila endpoint transaksi tidak ada (404/405/501, error jaringan,
+  atau 2xx tanpa `checkout_url`/QR). `401/422` **tidak** di-fallback (cegah tagihan ganda).
+  `checkStatus` mencoba `/v1/transactions/{id}` lalu `/v1/qris/{id}`.
+- Resolusi kredensial: pengaturan aplikasi → env `KASERA_API_KEY` / `KASERA_WEBHOOK_SECRET` / `KASERA_BASE_URL`
+  (lihat `env.js describe()` dan `.env.example`). Mode bisa dikunci lewat `pay_gateway_kasera_api` (pusat) atau
+  `bayar_kasera_api` (sekolah) = `auto|transactions|qris`.
+- `verifyCallback(cfg, body, headers, raw)` sekarang menerima **body mentah** (argumen ke-4) dan header
+  `kasera-signature-v1` (juga `x-kasera-signature`, prefix `sha256=`), dibandingkan dengan
+  `crypto.timingSafeEqual`. `parseCallback` memakai `kaseraEvent()` sehingga envelope event
+  (`{id, event:'payment.paid', data:{external_id,…}}`) terbaca.
+
+### 2. Webhook `POST /api/webhook/kasera` (`server.js` + `saas.js`)
+- Dipasang **sebelum** blok maintenance & sebelum sesi (tanpa login), terdaftar di `isPublicPath()`.
+- Body mentah dibaca `readRawBody()`; `verifyCallback`/`kaseraVerifySignature` memakai byte asli (bukan
+  `JSON.stringify`) supaya HMAC cocok dengan yang dikirim Kasera.
+- `saas.kaseraHandleWebhook({ raw, body, headers, tenantHint })`:
+  1. kandidat secret = secret sekolah (dari nomor pesanan `IU<id>-…`, atau `?t=`) + secret pusat + env;
+     **tanpa secret → 503**, tanda tangan salah → **401** (tidak dicatat).
+  2. **deduplikasi** tabel control plane **`kasera_event`** (`event_id` PK, `hasil`: `ok|diabaikan|
+     tidak-ditemukan|jumlah-tidak-cocok|gagal`); event yang sudah `ok` → `{duplicate:true}` tanpa diproses ulang.
+  3. `payment.paid` (atau status lunas) → `external_id` dicari di `saas_payments` (perpanjangan) lalu
+     `iuran_checkout` (portal orang tua) → `gatewayMarkPaid` / `bayariuran.applyPaid`.
+     Nominal event < tagihan → **400**; order tak dikenal → **404**; event lain hanya dicatat.
+  4. Audit `WEBHOOK KASERA` + `console.error` jelas untuk setiap kegagalan.
+- Rute dikecualikan dari CSRF lewat konstanta `CSRF_EXEMPT` (`/api/webhook/kasera`, `/pay/webhook/kasera`,
+  `/pay/callback`, `/portal/pay/callback`, OTP pendaftaran, `/login`) + `isCsrfExempt()`.
+- `/pay/callback` & `/portal/pay/callback` kini juga membaca body mentah (`readRawBody` + `bodyOfRaw`) dan
+  meneruskannya ke `verifyCallback`, jadi signature Kasera lama tetap valid.
+- `saas.bayarGateway()` & `bayariuran.createGateway()` mengirim `webhook_url` ke gateway
+  (`<base>/api/webhook/kasera`); portal iuran tetap memakai `?t=<tenantId>` pada callback lamanya.
+
+### 3. Pengaturan (UI)
+- **Super Admin → QRIS & Harga**: kartu *Kasera Pay — Transaksi & Webhook Otomatis* (`data-pay-kasera-api`,
+  `pay_gateway_callback` = Webhook Secret, URL webhook read-only `data-pay-webhook`, badge status secret),
+  plus kartu **Log Webhook Kasera** (`[data-tbl="kasera-event"]`, `saas.kaseraEvents(8)`).
+- **Sekolah → Pembayaran Online** (`/pembayaran-online`): pilihan `bayar_kasera_api`, URL webhook, catatan
+  bahwa secret bisa dari gateway pusat / `KASERA_WEBHOOK_SECRET`.
+- `/perpanjang/qris?order=` menampilkan tombol **Buka Halaman Pembayaran** bila `checkout_url` ada
+  (halaman checkout Kasera), di samping QR/cadangan.
+
+### Tes
+```bash
+node dev-tests/round45.js   # 60 cek: adapter (URL/header/body/checkout_url/fallback/401 tanpa fallback),
+                            # signature v1 (valid/salah/raw beda/sha256=), event parse, CSRF exempt,
+                            # pengaturan via panel, webhook perpanjangan (401/200/duplicate/404/400/expired),
+                            # webhook iuran portal (secret sekolah), log event & tanpa sesi
+```
+Regresi lulus: `round37` (31), `pay-hybrid` (37), `round42` (84), `regress` (23).
+
+---
+
+## Ronde 46 — Domain Publik (tautan acak BKU & Grup Iuran) + tanggal honor ekskul = tanggal aktual
+
+### 1. Honor Pembina Ekskul — tanggal transaksi BKU = tanggal entry data
+- `routes/ekskul.js`: `lastDayOf()` **dihapus**, diganti `tanggalPosting(raw)` (validasi `YYYY-MM-DD`,
+  fallback `todayISO()` — WIB). Tidak ada lagi `date-override` ke akhir bulan.
+- `POST /ekskul/antrean/posting` menerima field **`tanggal`** (bukan `posting_periode` untuk tanggal):
+  - `transaksi.tanggal` = `tanggal` tersebut (default hari ini saat posting);
+  - `ekskul_honor.posting_periode` = **bulan dari tanggal itu** (dipakai tampilan "Bulan Posting BKU");
+  - kunci periode (`periodeLockError`) & nomor bukti `<kode>/EKS/<YYYYMM>/<seq>` memakai bulan tanggal tsb;
+  - validasi tahun pelajaran: tanggal harus di dalam `taRange(bku.tahun_ajaran_id)`.
+- Form antrean kini punya input **Tanggal Transaksi BKU** (`type=date`, default hari ini, hint
+  "otomatis tanggal hari ini — bukan akhir bulan"). Field item **Bulan Posting ke BKU** di form input grid/modal
+  tetap ada tetapi sifatnya **rencana bulan pembukuan** (hint sudah diperbarui).
+- `data-confirm` posting menyebut tanggal hari ini; flash + audit menyebut `tanggal transaksi <tgl>`.
+- Tes `round43.js` disesuaikan untuk perilaku baru (posting dengan `tanggal` eksplisit, default hari ini,
+  dan kasus periode ditutup diuji dengan tanggal di bulan yang ditutup).
+
+### 2. Domain publik BKU & Grup Iuran (tautan acak, tanpa login)
+- **Migrasi** (di `bootstrap()` **dan** `ensurePublicColumns(conn)` yang dipanggil `openTenantConn` agar DB
+  sekolah lama ikut termigrasi): `bku.public_token TEXT`, `bku.is_public INTEGER DEFAULT 0`,
+  `iuran_grup.public_token TEXT`, `iuran_grup.is_public INTEGER DEFAULT 0`, plus index unik parsial
+  `uq_bku_public_token` & `uq_iuran_grup_public_token`.
+- **Helper `db.js`** (diekspor): `newPublicToken()` (12 byte acak = 24 hex), `publicTokenEnsure(tabel,id,regen)`,
+  `publicSetActive(tabel,id,aktif)`, `publicFind(tabel,token)` (HANYA mengembalikan baris `is_public=1`).
+  Tabel yang didukung: `PUBLIC_TABEL = { bku:'bku', iuran:'iuran_grup' }`.
+- **Alamat publik**: `/<nama-sekolah>/publik/bku/<token>` dan `/<nama-sekolah>/publik/iuran/<token>`.
+  `portalSlugMap()` menambah kunci `<base>/publik` → path `/publik` (tenant ditentukan dari nama sekolah),
+  `publik` masuk `RESERVED_SLUGS`, dan `/publik/…` masuk `isPublicPath` (alamat tanpa prefiks tetap dilayani
+  sebagai fallback DB utama). Regenerasi token ⇒ tautan lama otomatis **404**.
+- **Halaman publik** `routes/publik.js` (memakai kelas `.portal-*`, `noindex,nofollow`, tanpa sesi):
+  - **BKU**: identitas sekolah + nama BKU/jenis/TA/kode, KPI saldo awal / penerimaan / pengeluaran / saldo buku,
+    tabel transaksi **status `posted`** (penerimaan, pengeluaran, **saldo berjalan** dari saldo awal),
+    paginasi 60 baris/halaman (`?hal=`). Transaksi `pending`/`void` tidak tampil.
+  - **Grup Iuran**: KPI Total Tagihan / Grand Total Dibayar / Sisa / jumlah lunas, tabel siswa
+    (**Nama, Kelas, NISN, Tagihan, Dibayar, Sisa, Status**) memakai `dbm.iuranTagihanRows({grupId})`,
+    tfoot **TOTAL TAGIHAN** dan **GRAND TOTAL DANA DITERIMA**.
+  - Token salah / sakelar nonaktif → **404** ber-branding "Tautan Publik Tidak Aktif".
+- **Kontrol admin**:
+  - `GET /bku` → kolom **Publik** (badge Aktif/Privat) + tombol **Publik** → modal `mPub<id>`
+    (tautan + Salin/Buka, **Generate Link Publik** / **Generate Ulang Link**, sakelar aktif–nonaktif).
+    `POST /bku/publik` (`aksi=generate|regen|toggle`).
+  - `GET /iuran` → kolom **Publik** + tombol **Publik** → modal `mPubG<id>`; `POST /iuran/publik` (sama).
+  - Keduanya `guard(…,'edit')`; generate otomatis mengaktifkan, regen mematikan tautan lama, sakelar
+    "aktif" pada grup/BKU tanpa token otomatis membuat token. Audit: `GENERATE LINK PUBLIK`,
+    `GENERATE ULANG LINK PUBLIK`, `AKTIFKAN/NONAKTIFKAN LINK PUBLIK`.
+- **Catatan tampilan**: aplikasi ini memakai CSS server-rendered (`public/app.css`, tema oranye), **bukan
+  Tailwind** — halaman publik dibuat konsisten dengan portal orang tua.
+
+### 3. Filter pada halaman publik (server-side, parameter GET — tautan tetap bisa dibagikan)
+**BKU** (`/publik/bku/<token>`):
+- `?bulan=YYYY-MM` — pilihan bulan diambil dari bulan yang benar-benar punya transaksi; mengisi
+  rentang `from`/`to` = awal..akhir bulan itu.
+- `?from=YYYY-MM-DD&to=YYYY-MM-DD` — rentang tanggal bebas (boleh hanya salah satu); nilai tidak valid
+  diabaikan, rentang terbalik dibetulkan otomatis. Memilih bulan/tanggal saling mengosongkan lewat
+  `onchange` inline, lalu `data-autosubmit` mengirim form.
+- `?ta=<id>` — **tahun pelajaran**: BKU terikat satu TA, sehingga filter ini berpindah (302) ke BKU
+  bernama **SAMA** pada TA tersebut **hanya bila baris itu juga `is_public=1`**; bila tidak ada, halaman
+  tetap pada BKU sekarang + pesan "belum dibagikan publik pada Tahun Pelajaran …" (tidak pernah membuka
+  data BKU non-publik). Dropdown TA hanya dirender bila ada ≥ 2 TA dengan BKU publik bernama sama.
+- KPI berubah menjadi **Saldo Awal Periode / Penerimaan / Pengeluaran / Saldo Akhir Periode** saat filter
+  aktif; saldo berjalan tetap dihitung dari `bku.saldo_awal` untuk SELURUH transaksi lalu disaring,
+  sehingga saldo pada baris hasil filter tetap benar. Kaki tabel = `TOTAL PERIODE FILTER`.
+- `hal` (paginasi) selalu digabung dengan filter aktif di tautan ‹ Sebelumnya / Berikutnya ›.
+
+**Grup Iuran** (`/publik/iuran/<token>`):
+- `?q=` mencari **nama / NISN / kelas** (case-insensitive, substring) dan `?kelas=` menyaring satu kelas
+  (pilihan kelas dibentuk dari kelas yang benar-benar ada di grup).
+- Bisa digabung; KPI, `tfoot` (`TOTAL TAGIHAN (HASIL FILTER)` & `GRAND TOTAL DANA DITERIMA`) dan
+  hitungan "N dari M siswa" dihitung dari baris hasil filter; tanpa hasil → empty state khusus filter.
+- Keduanya memakai baris filter kelas CSS `.portal-period` (sudah dipakai portal orang tua) + tombol
+  **Terapkan** & **Reset**; `data-autosubmit` membuat select langsung menerapkan.
+
+### Tes
+```bash
+node dev-tests/round46.js     # 112 cek API: generate/regen/toggle BKU & grup, isi halaman publik,
+                              # token lama mati, pending tidak tampil, 404 token salah, POST tanpa sesi, fallback slug,
+                              # filter bulan/rentang tanggal/tahun pelajaran BKU, filter nama & kelas grup iuran
+node dev-tests/ui-round46.js  # 46 cek Playwright: halaman publik desktop+mobile 390px tanpa overflow,
+                              # kolom & footer tabel rekap, filter bar (bulan, tanggal, nama, kelas) berfungsi,
+                              # modal Publik di halaman admin, tanpa error JS
+```
+Regresi lulus: `round9` (109), `round34` (105), `round42` (84), `round43` (92), `round18` (57),
+`newfeat` (89), `regress` (23).
+
+### Status live ronde 46
+- Dipublikasikan ulang (tanpa perubahan `public/app.css` / `public/app.js`, jadi `ASSET_V` tetap).
+- Diverifikasi pada **salinan** DB live (46 BKU · 635 transaksi · 38 grup iuran · 238 siswa):
+  migrasi kolom `public_token`/`is_public` + 2 index unik berhasil, aplikasi boot tanpa error,
+  `/login` 200, token palsu → 404 ber-branding, alamat portal lama tetap berfungsi.
+- **Mode perbaikan (maintenance) sedang AKTIF** sejak 2026-11-13 08:29 WIB (diaktifkan pemilik dari
+  Super Admin) sehingga seluruh halaman sekolah — termasuk halaman publik baru — membalas 503 sampai
+  dimatikan di **`/super-admin/pengumuman` → Mode Pemeliharaan**. `data/saas.db` **read-only** dari tool
+  agen, jadi status ini TIDAK bisa diubah dari sisi agen (hanya pemilik lewat panel Super Admin).
+
+---
+
+## Ronde 48 — Nama penerima (combobox pegawai + manual), Keterangan & 2 tombol Antrean, filter periode
+
+### 1. Combobox "Nama Penerima / Penyetor" (master pegawai ATAU manual)
+- `ui.pihakInput(name, value, extra)` → markup
+  `<div class="pihak-pick"><div class="pihak-box"><input data-pihak …>+tombol chevron</div><div data-pihak-menu hidden></div></div>`.
+- `ui.pihakData(rows)` → `<script type="application/json" id="pihakData">[{nama,jabatan}]</script>`,
+  **render SEKALI per halaman** (`JSON.stringify` lalu `<`,`>`,`&` di-escape `\u003c` dll).
+  Dipakai: `routes/transaksi.js` (form Pemasukan/Pengeluaran/Edit), `routes/bku_detail.js` (modal Edit Transaksi),
+  `routes/aset_akun.js` (form Transaksi Masuk/Keluar + edit mutasi).
+- Klien: blok `pihakPicker` di `public/app.js` — daftar dibuka saat fokus/klik, **filter saat mengetik**
+  (nama/jabatan), panah atas/bawah + Enter, klik di luar/`Escape` menutup, dan **nilai teks bebas tetap boleh**
+  (tanpa padanan → pesan "teks tetap disimpan apa adanya"). Menu `position:fixed` (z-index 130, di atas modal)
+  agar tidak terpotong `overflow` modal; posisi dihitung ulang saat scroll/`place()`.
+- **Gotcha yang terulang**: saat menambahkan blok JS baru lewat tool edit, `$$(` bisa berubah menjadi `$(` →
+  `$(...).forEach is not a function` dan seluruh blok mati. Setelah menyunting `public/app.js` **selalu**
+  `grep -n '\$(' public/app.js` + `node --check`.
+- Jangan memakai `id` datalist statis: satu halaman memuat 3 form dengan field `nama_pihak`, jadi data pegawai
+  dirender sebagai satu script JSON, bukan `<datalist>` per form.
+
+### 2. Antrean Posting — kolom Keterangan & dua tombol aksi
+- Helper di `routes/iuran.js`: `ketPembukuan(row)` / `ketCell(row)` (badge **Masuk BKU** untuk `pending`,
+  **Non-BKU (Data Saja)** untuk `manual/nonbku`, plus nama BKU sasaran) dan `coaFor(row, coaDefId)`.
+- Ketiga tabel (Antrean/kelompok, Rincian belum terposting, Riwayat Non-BKU) kini punya kolom **Keterangan**.
+- Setiap baris punya **dua** tombol: **Tinjau / Edit** + satu tombol eksekusi yang mengikuti pilihan pembukuan
+  saat pembayaran diinput → `pending`: **Posting ke BKU**; `manual`: **Kembalikan ke Antrean**.
+  Tombol "Hanya Simpan Data (Non-BKU)" per baris dihapus; opsi itu tetap ada di modal **Tinjau / Edit**
+  (footer, 3 tombol termasuk Tutup) dan di modal **Tinjau / Edit Masal**.
+- Aksi masal: antrean → `Tinjau / Edit Masal` + `Posting BKU Masal`; rincian pending →
+  `Tinjau / Edit Masal` + `Posting ke BKU` + `Hapus Terpilih`; riwayat Non-BKU →
+  `Kembalikan ke Antrean (n)` + `Hapus Terpilih`.
+- **Rute baru** `POST /iuran/antrean/kembali` (`ids`, `bku_id`) — mengembalikan baris `manual/nonbku` menjadi
+  `pending` + `bku_id` (tolak bila tidak ada BKU aktif), audit `KEMBALI ANTREAN`.
+- `queueRows(rows)` sekarang menerima **array baris** (bukan `taId`) sehingga bisa difilter.
+- `deleteToolbar(n, c, scope, extra)` menerima tombol tambahan (dipakai untuk "Kembalikan ke Antrean").
+- **Gotcha form per baris**: jangan menaruh `<input type="hidden" name="ids">` di dalam baris tabel —
+  `input[name="ids"]` di dalam `<table>` ikut terhitung oleh skrip ceklis/test. Pakai
+  `<button name="ids" value="…">Posting</button>` (tombol submit membawa nilai) + hidden hanya untuk
+  `bku_id`/`coa_id`.
+
+### 3. Tanpa batas 30 baris + filter periode
+- `const nonBkuRows = dbm.iuranBayarRows({ taId, status: 'manual' }).slice(0, 30)` **dihapus**; halaman mengambil
+  `dbm.iuranBayarRows({ taId })` sekali lalu memfilter `pending` / `manual` di memori (dasar pilihan bulan juga).
+- Bar filter `.period-bar` (GET `/iuran/antrean`): `?bulan=YYYY-MM` (hari terakhir dihitung `Date.UTC(y,m,0)`),
+  `?dari=&sampai=` (format divalidasi, rentang terbalik dibetulkan), tombol **Terapkan Filter** + **Reset**,
+  info "Filter aktif" & jumlah data. Nilai salah diabaikan (tanpa error).
+- CSS baru: `.pihak-pick/.pihak-box/.pihak-btn/.pihak-menu/.pihak-opt/.pihak-empty/.pihak-head` (+ varian dark)
+  dan `.period-bar/.pb-field/.pb-actions/.pb-info`.
+
+### Tes ronde 48
+```bash
+node dev-tests/round48.js     # 61 cek: markup combobox + simpan nama manual/pegawai, keterangan 3 tabel,
+                              # 2 tombol per baris, aksi masal, tanpa batas 30, filter bulan/rentang/terbalik,
+                              # kembali ke antrean, posting satu baris
+node dev-tests/ui-round48.js  # 37 cek Playwright: buka/filter/pilih/ketik manual/keyboard combobox,
+                              # badge & tombol antrean, filter lewat UI, mobile 390px, tanpa error JS
+```
+Regresi lulus: `regress` (23), `newfeat` (89), `round17` (59), `round42` (84), `round43` (92), `round34` (105),
+`round33` (81), `round26` (92), `round9` (109), `round46` (112), `round38` (36), `ui-round17` (24),
+`ui-round34` (55), `ui-round46` (46).

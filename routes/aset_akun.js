@@ -50,7 +50,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
       <div class="row2">
         <div class="field"><label>Kode Rekening (CoA)</label><select name="coa_id">${coaOpts('')}</select>
           <div class="hint">Opsional — dipakai untuk mengelompokkan transaksi akun ini per kode rekening.</div></div>
-        <div class="field"><label>Nama Penyetor / Penerima</label><input name="nama_pihak" placeholder="Nama orang / unit / vendor"></div>
+        <div class="field"><label>Nama Penyetor / Penerima</label>
+          ${ui.pihakInput('nama_pihak', '', 'placeholder="Pilih dari data pegawai atau ketik manual"')}</div>
       </div>
       <div class="field"><label>Uraian / Keterangan</label><input name="keterangan" required placeholder="${isPinjam ? 'Contoh: pinjaman kegiatan renovasi lab' : 'Contoh: pembelian peralatan laboratorium'}"></div>
       <div class="row2">
@@ -128,7 +129,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
             <div class="field"><label>No. Bukti</label><input name="no_bukti" value="${esc(m.no_bukti || '')}"></div>
             <div class="field"><label>Kode Rekening (CoA)</label><select name="coa_id">${coaOpts(m.coa_id)}</select></div>
             <div class="field"><label>Uraian</label><input name="keterangan" value="${esc(m.keterangan || '')}" required></div>
-            <div class="field"><label>Nama Penyetor / Penerima</label><input name="nama_pihak" value="${esc(m.nama_pihak || '')}"></div>
+            <div class="field"><label>Nama Penyetor / Penerima</label>
+              ${ui.pihakInput('nama_pihak', m.nama_pihak || '', 'placeholder="Pilih dari data pegawai atau ketik manual"')}</div>
             <div class="field"><label>Ganti Bukti / Nota (opsional)</label>
               <input type="hidden" name="bukti_b64" id="buktiEdit${m.id}">
               <input type="file" accept="image/*,application/pdf" data-b64="buktiEdit${m.id}" data-max="15">
@@ -168,7 +170,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
           <div class="hint">Nama akun dapat diubah kapan saja sesuai nama kegiatan riil. Riwayat transaksi tetap utuh.</div>
         </form>`,
         footer: `<button class="btn" data-close="mNamaAkun">Batal</button><button class="btn btn-primary" form="fNamaAkun">${ui.icon('save')}Simpan</button>`
-      }) : ''}`;
+      }) : ''}
+    ${ui.pihakData(dbm.pegawaiList(true))}`;
     page(req, res, {
       title: isPinjam ? 'Ledger Pinjaman Kegiatan' : 'Ledger Akun Aset',
       sub: akun.nama, active: 'aset', content

@@ -117,6 +117,13 @@ CREATE TABLE IF NOT EXISTS reg_attempts (
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reg_attempts_ip ON reg_attempts(ip, created_at);
+CREATE TABLE IF NOT EXISTS kasera_event (
+  event_id TEXT PRIMARY KEY,
+  tipe TEXT, status TEXT, order_id TEXT, jumlah REAL,
+  tenant_id INTEGER, sasaran TEXT, hasil TEXT, pesan TEXT,
+  diterima_at TEXT, diproses_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_kasera_event_waktu ON kasera_event(diterima_at);
 `;
 
 S.exec(SCHEMA);
@@ -1022,6 +1029,8 @@ function gatewayCfg() {
     key2: clean(get('pay_gateway_key2')),
     callback: clean(get('pay_gateway_callback')),
     base: clean(get('pay_gateway_base')),
+    /* khusus Kasera: auto | transactions | qris */
+    kasera_api: clean(get('pay_gateway_kasera_api')) || 'auto',
     expire_menit: Math.max(5, Number(get('pay_gateway_expire_menit')) || 60)
   };
 }
@@ -1029,6 +1038,11 @@ function gatewayCfg() {
 function payConfig(baseUrl) {
   const pub = paygw.publicConfig(get);
   pub.callback_url = baseUrl ? `${String(baseUrl).replace(/\/$/, '')}/pay/callback` : '';
+  /* endpoint webhook Kasera (didaftarkan pada dashboard Kasera Pay) */
+  pub.webhook_url = kaseraWebhookUrl(baseUrl);
+  pub.kasera_api = clean(get('pay_gateway_kasera_api')) || 'auto';
+  pub.webhook_secret_set = !!clean(get('pay_gateway_callback') || get('pay_gateway_key2')
+    || process.env.KASERA_WEBHOOK_SECRET);
   return pub;
 }
 
@@ -1059,7 +1073,12 @@ async function bayarGateway(tenantId, { durasi, paket, pengirim, catatan, oleh, 
   S.prepare('UPDATE saas_payments SET no_invoice=? WHERE id=?').run(invoiceNo(id), id);
 
   const charge = await paygw.createCharge(
-    { ...cfg, callback_url: base_url ? `${String(base_url).replace(/\/$/, '')}/pay/callback` : '', return_url: base_url || '' },
+    {
+      ...cfg,
+      callback_url: base_url ? `${String(base_url).replace(/\/$/, '')}/pay/callback` : '',
+      webhook_url: kaseraWebhookUrl(base_url),
+      return_url: base_url || ''
+    },
     { order_id: oid, amount: nominal, label: `Langganan ${d} hari — ${t.nama}`, customer: { nama: t.nama, email: t.email || '' } }
   );
   if (!charge.ok) {
@@ -1102,6 +1121,159 @@ async function gatewaySync(order_id) {
     return { status: 'approved', paid: true, payment: r.payment };
   }
   return { status: p.status, paid: false, gateway_status: st.status || '', error: st.error || '' };
+}
+
+/* ==================== WEBHOOK KASERA PAY ====================
+   Notifikasi pembayaran dari Kasera (tanpa sesi login). Keaslian dijamin
+   HMAC-SHA256 header `kasera-signature-v1` atas BODY MENTAH, lalu event
+   dideduplikasi lewat tabel kasera_event (event yang sama tidak diproses 2×).
+
+   Dua sasaran pembayaran:
+     · perpanjangan layanan sekolah  → order `SK-<tenant>-…` di saas_payments
+     · iuran portal orang tua        → order `IU<tenant>-…` di iuran_checkout
+   ============================================================ */
+function kaseraWebhookUrl(baseUrl) {
+  const b = String(baseUrl || '').replace(/\/+$/, '');
+  return b ? b + '/api/webhook/kasera' : '';
+}
+/** id sekolah dari nomor pesanan (SK-<id>-… / IU<id>-…) */
+function tenantIdFromOrder(order) {
+  const m = /^(?:SK|IU)[-_]?(\d+)-/i.exec(String(order || ''));
+  return m ? Number(m[1]) || 0 : 0;
+}
+/** konfigurasi gateway milik satu sekolah (dibaca di dalam konteks DB sekolah) */
+function tenantGateway(tenantId) {
+  const t = tenantId ? tenantById(tenantId) : null;
+  if (!t) return null;
+  try {
+    const bayariuran = require('./bayariuran');
+    return { tenant: t, cfg: dbm.runAsTenant(t, () => bayariuran.cfg(dbm, module.exports)) };
+  } catch (e) {
+    console.error('[kasera] gagal membaca konfigurasi sekolah', tenantId, e.message);
+    return null;
+  }
+}
+/** daftar secret yang dicoba saat memverifikasi tanda tangan webhook */
+function kaseraSecretList(tenantCfg) {
+  const out = [];
+  if (tenantCfg) out.push(...paygw.kaseraSecrets(tenantCfg));
+  out.push(...paygw.kaseraSecrets(gatewayCfg()));
+  return [...new Set(out.filter(Boolean))];
+}
+function kaseraEventRow(eventId) {
+  return S.prepare('SELECT * FROM kasera_event WHERE event_id=?').get(clean(eventId)) || null;
+}
+function kaseraEventSave(row) {
+  const r = row || {};
+  const lama = kaseraEventRow(r.event_id);
+  if (lama) {
+    S.prepare(`UPDATE kasera_event SET tipe=?,status=?,order_id=?,jumlah=?,tenant_id=?,sasaran=?,hasil=?,pesan=?,diproses_at=? WHERE event_id=?`)
+      .run(clean(r.tipe), clean(r.status), clean(r.order_id), Number(r.jumlah) || 0, Number(r.tenant_id) || null,
+        clean(r.sasaran), clean(r.hasil), clean(r.pesan), lib.nowStamp(), r.event_id);
+    return;
+  }
+  S.prepare(`INSERT INTO kasera_event(event_id,tipe,status,order_id,jumlah,tenant_id,sasaran,hasil,pesan,diterima_at,diproses_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(clean(r.event_id), clean(r.tipe), clean(r.status), clean(r.order_id), Number(r.jumlah) || 0,
+      Number(r.tenant_id) || null, clean(r.sasaran), clean(r.hasil), clean(r.pesan),
+      lib.nowStamp(), lib.nowStamp());
+}
+function kaseraEvents(limit = 12) {
+  return S.prepare('SELECT * FROM kasera_event ORDER BY diterima_at DESC, rowid DESC LIMIT ?').all(Math.max(1, Number(limit) || 12));
+}
+
+/**
+ * Proses satu notifikasi webhook Kasera.
+ * @param {{raw:string|Buffer, body:object, headers:object, tenantHint?:number}} input
+ * @returns {Promise<{code:number, out:object}>}
+ */
+async function kaseraHandleWebhook({ raw, body, headers = {}, tenantHint = 0 } = {}) {
+  const bahan = raw === undefined || raw === null ? JSON.stringify(body || {}) : raw;
+  let payload = body;
+  if (!payload || typeof payload !== 'object') {
+    try { payload = JSON.parse(String(bahan || '{}')); } catch (e) { payload = {}; }
+  }
+  const ev = paygw.kaseraEvent(payload);
+  const order = clean(ev.order_id);
+  const tenantId = Number(tenantHint) || tenantIdFromOrder(order) || 0;
+  const sasaranTenant = tenantGateway(tenantId);
+  const secrets = kaseraSecretList(sasaranTenant && sasaranTenant.cfg);
+
+  /* ---- 1. verifikasi tanda tangan ---- */
+  if (!secrets.length) {
+    console.error('[kasera] webhook ditolak: Webhook Secret belum diatur.');
+    return { code: 503, out: { ok: false, error: 'Webhook Secret Kasera belum diatur pada pengaturan pembayaran.' } };
+  }
+  const verif = paygw.kaseraVerifySignature(bahan, headers, secrets);
+  if (!verif.ok) {
+    console.error('[kasera] webhook ditolak:', verif.reason, '· order', order || '-');
+    return { code: 401, out: { ok: false, error: 'Tanda tangan webhook tidak valid.' } };
+  }
+
+  /* ---- 2. deduplikasi berdasarkan id event ---- */
+  const eventId = clean(ev.event_id) || ('ev-' + lib.token(8));
+  const sudah = kaseraEventRow(eventId);
+  if (sudah && sudah.hasil === 'ok') {
+    return { code: 200, out: { ok: true, duplicate: true, event_id: eventId, pesan: 'Event sudah pernah diproses.' } };
+  }
+  const dasar = {
+    event_id: eventId, tipe: ev.type || '(tanpa tipe)', status: ev.status, order_id: order,
+    jumlah: ev.amount, tenant_id: tenantId
+  };
+  if (!order) {
+    kaseraEventSave({ ...dasar, hasil: 'ditolak', pesan: 'external_id tidak ada pada event.' });
+    return { code: 400, out: { ok: false, error: 'external_id (nomor pesanan) tidak ada pada event.' } };
+  }
+
+  /* ---- 3. bukan pembayaran lunas → hanya dicatat ---- */
+  if (!ev.paid) {
+    kaseraEventSave({ ...dasar, sasaran: '-', hasil: 'diabaikan', pesan: `Event ${ev.type || 'tanpa tipe'} (${ev.status || '-'}) tidak menandai lunas.` });
+    return { code: 200, out: { ok: true, paid: false, event_id: eventId } };
+  }
+
+  try {
+    /* ---- 4a. perpanjangan layanan (control plane) ---- */
+    const pay = gatewayRow(order);
+    if (pay) {
+      if (Number(ev.amount) > 0 && Number(pay.nominal) > 0 && Number(ev.amount) < Number(pay.nominal)) {
+        kaseraEventSave({ ...dasar, sasaran: 'langganan', hasil: 'jumlah-tidak-cocok', pesan: `Dibayar ${ev.amount} < tagihan ${pay.nominal}` });
+        return { code: 400, out: { ok: false, error: 'Nominal pembayaran lebih kecil dari tagihan.' } };
+      }
+      const r = gatewayMarkPaid(order, 'Kasera Pay');
+      kaseraEventSave({ ...dasar, tenant_id: pay.tenant_id, sasaran: 'langganan', hasil: 'ok', pesan: r.sudah ? 'Sudah lunas sebelumnya.' : 'Perpanjangan aktif.' });
+      logSaas(null, 'WEBHOOK KASERA', 'pembayaran',
+        `Order ${order} lunas (${ev.status || 'PAID'}) — perpanjangan sekolah #${pay.tenant_id}`, pay.tenant_id);
+      return { code: 200, out: { ok: true, paid: true, sasaran: 'langganan', sudah: !!r.sudah } };
+    }
+
+    /* ---- 4b. iuran portal orang tua (database sekolah) ---- */
+    const t = tenantId ? tenantById(tenantId) : null;
+    if (!t) {
+      kaseraEventSave({ ...dasar, sasaran: '-', hasil: 'tidak-ditemukan', pesan: 'Order tidak dikenal.' });
+      return { code: 404, out: { ok: false, error: 'Transaksi tidak ditemukan.' } };
+    }
+    const bayariuran = require('./bayariuran');
+    const hasil = dbm.runAsTenant(t, () => {
+      const row = bayariuran.byOrder(dbm, order);
+      if (!row) return { code: 404, out: { ok: false, error: 'Transaksi iuran tidak ditemukan.' } };
+      if (Number(ev.amount) > 0 && Number(row.total) > 0 && Number(ev.amount) < Number(row.total)) {
+        return { code: 400, out: { ok: false, error: 'Nominal pembayaran lebih kecil dari tagihan.' } };
+      }
+      const r = bayariuran.applyPaid(dbm, row, { oleh: 'Kasera Pay', gatewayStatus: ev.status || 'PAID' });
+      return { code: 200, out: { ok: true, paid: true, sasaran: 'iuran', sudah: !!r.sudah, baris: r.baris } };
+    });
+    kaseraEventSave({
+      ...dasar, tenant_id: t.id, sasaran: 'iuran',
+      hasil: hasil.code === 200 ? 'ok' : (hasil.code === 400 ? 'jumlah-tidak-cocok' : 'tidak-ditemukan'),
+      pesan: hasil.code === 200 ? `Iuran ${t.nama} masuk antrean posting.` : (hasil.out.error || '')
+    });
+    if (hasil.code !== 200) console.error('[kasera] webhook order', order, '→', hasil.out.error);
+    return hasil;
+  } catch (e) {
+    console.error('[kasera] gagal memproses webhook', order, e);
+    kaseraEventSave({ ...dasar, sasaran: '-', hasil: 'gagal', pesan: e.message });
+    return { code: 500, out: { ok: false, error: e.message } };
+  }
 }
 
 function approvePayment(id, user) {
@@ -1300,6 +1472,7 @@ module.exports = {
   statusOf, isBlocked, todayISO, addDays, daysBetween, logSaas,
   paymentsOf, paymentsAll, paymentById, pendingPayment, latestRejected, submitPayment,
   paygw, payConfig, gatewayCfg, hargaTenant, bayarGateway, gatewayRow, gatewayMarkPaid, gatewaySync,
+  kaseraWebhookUrl, kaseraHandleWebhook, kaseraEvents, kaseraSecretList, tenantIdFromOrder,
   approvePayment, rejectPayment, runDailyJobs, stats, invoiceNo,
   createSession, getSession, destroySession, updateSession, takeWelcome,
   ensureAdmin, findAdmin, adminById, setAdminPassword,

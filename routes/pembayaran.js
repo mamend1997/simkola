@@ -93,8 +93,29 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             <div class="hint">Dibiarkan kosong = kredensial lama dipertahankan.</div></div>
         </div>
         <div class="row2">
-          <div class="field"><label>Callback Secret / Token (opsional)</label><input type="password" name="bayar_key2" value="" placeholder="${s.bayar_key2 ? '••••••• (tersimpan)' : 'opsional'}" autocomplete="new-password"></div>
-          <div class="field"><label>Base URL API gateway (opsional)</label><input name="bayar_base" value="${esc(s.bayar_base || '')}" placeholder="https://api.kasera.id"></div>
+          <div class="field"><label>Callback Secret / Token / Webhook Secret (opsional)</label><input type="password" name="bayar_key2" value="" placeholder="${s.bayar_key2 ? '••••••• (tersimpan)' : 'opsional'}" autocomplete="new-password">
+            <div class="hint">Kasera Pay: dipakai memverifikasi header <span class="mono">kasera-signature-v1</span> (HMAC-SHA256 body mentah).</div></div>
+          <div class="field"><label>Base URL API gateway (opsional)</label><input name="bayar_base" value="${esc(s.bayar_base || '')}" placeholder="https://pay.kasera.id"></div>
+        </div>
+        <div class="card" style="box-shadow:none;border:1px dashed var(--line);padding:14px;margin-bottom:14px">
+          <div class="card-head" style="margin-bottom:8px"><div><h4 style="margin:0">Kasera Pay — Pembayaran Iuran Otomatis</h4>
+            <div class="sub">POST <span class="mono">/v1/transactions</span> → halaman checkout · webhook <span class="mono">payment.paid</span> → iuran otomatis lunas</div></div></div>
+          <div class="row2">
+            <div class="field"><label>API Kasera yang dipakai</label>
+              <select name="bayar_kasera_api">
+                <option value="auto" ${(s.bayar_kasera_api || 'auto') === 'auto' ? 'selected' : ''}>Otomatis — /v1/transactions, QRIS lama sebagai cadangan</option>
+                <option value="transactions" ${s.bayar_kasera_api === 'transactions' ? 'selected' : ''}>Hanya /v1/transactions (checkout_url)</option>
+                <option value="qris" ${s.bayar_kasera_api === 'qris' ? 'selected' : ''}>Hanya /v1/qris (QRIS lama)</option>
+              </select>
+              <div class="hint">Pilih <b>qris</b> bila akun Kasera sekolah ini belum mengaktifkan API Transactions.</div></div>
+            <div class="field"><label>URL Webhook untuk dashboard Kasera</label>
+              <input value="${esc(c.absUrl('/api/webhook/kasera'))}" readonly>
+              <div class="hint">Daftarkan URL ini pada dashboard Kasera Pay. Sekolah dikenali otomatis dari nomor pesanan
+                (<span class="mono">IU&lt;id sekolah&gt;-…</span>), sehingga satu URL dipakai semua sekolah.</div></div>
+          </div>
+          <div class="alert info">${ui.icon('info')}<div>Bila kredensial sekolah kosong, sistem memakai <b>gateway pusat</b> (Super Admin).
+            Webhook Secret pusat diatur di <span class="mono">Super Admin → QRIS &amp; Harga</span>, atau lewat variabel lingkungan
+            <span class="mono">KASERA_WEBHOOK_SECRET</span>.</div></div>
         </div>
         <div class="field"><label>URL Callback untuk gateway</label>
           <input value="${esc((process.env.APP_BASE_URL || '') + c.base + '/portal/pay/callback')}" readonly>
@@ -148,6 +169,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     set('bayar_mode', String(b.bayar_mode) === 'production' ? 'production' : 'sandbox');
     set('bayar_merchant', String(b.bayar_merchant || '').trim());
     set('bayar_base', String(b.bayar_base || '').trim());
+    set('bayar_kasera_api', ['auto', 'transactions', 'qris'].includes(String(b.bayar_kasera_api || ''))
+      ? String(b.bayar_kasera_api) : 'auto');
     set('bayar_expire_menit', String(expire));
     set('bayar_instruksi', String(b.bayar_instruksi || '').trim());
     set('notif_bayar_aktif', b.notif_bayar_aktif ? '1' : '0');

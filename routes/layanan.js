@@ -286,7 +286,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
         ${approved
         ? `<div class="alert ok">${ui.icon('check')}<div><b>Pembayaran terverifikasi.</b> Masa aktif layanan sudah diperpanjang otomatis.</div></div>
            <a class="btn btn-primary btn-block" href="${c.base}/info-layanan">Lihat Info Layanan</a>`
-        : `<div style="display:grid;place-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
+        : `${py.checkout_url ? `<div class="alert info mb-2">${ui.icon('link')}<div><b>Halaman checkout ${esc(pay.provider_label)} tersedia.</b>
+             Selesaikan pembayaran pada halaman tersebut — status akan terverifikasi otomatis lewat webhook.</div></div>
+           <a class="btn btn-primary btn-block mb-2" href="${esc(py.checkout_url)}" target="_blank" rel="noopener">${ui.icon('link')}Buka Halaman Pembayaran</a>` : ''}
+           <div style="display:grid;place-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
              ${qrImg ? `<img src="${esc(qrImg)}" alt="QRIS" style="max-width:100%;max-height:320px;object-fit:contain">`
         : `<div class="mono" style="word-break:break-all;font-size:11px;padding:18px;text-align:center">${esc(qrTxt || 'QR tidak tersedia')}</div>`}
            </div>

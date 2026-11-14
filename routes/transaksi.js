@@ -80,7 +80,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <div class="hint">Terbilang: <b class="js-terbilang" style="color:var(--o-700)"></b></div></div>
       <div class="row2">
         <div class="field"><label>${jenis === 'pemasukan' ? 'Nama Penyetor / Penerima' : 'Nama Penerima'}</label>
-          <input name="nama_pihak" value="${esc(trx ? trx.nama_pihak : '')}" placeholder="Nama orang / instansi / toko"></div>
+          ${ui.pihakInput('nama_pihak', trx ? trx.nama_pihak : '', 'placeholder="Pilih dari data pegawai atau ketik manual"')}
+          <div class="hint">Klik kolom untuk memilih dari <b>master pegawai</b>, atau langsung ketik nama bebas.</div></div>
         <div class="field"><label>Upload Bukti Fisik / Nota (maks 15 MB)</label>
           <input type="hidden" name="nota_b64" id="nota_b64">
           <input type="file" accept="image/*,application/pdf" data-b64="nota_b64" data-max="15">
@@ -407,7 +408,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     <script>
       window.__PAGU = ${JSON.stringify(paguMap)};
       window.__THRESHOLD = ${threshold};
-    </script>`;
+    </script>
+    ${ui.pihakData(dbm.pegawaiList(true))}`;
 
     page(req, res, { title: 'Transaksi Keuangan', sub: 'Pencatatan pemasukan & pengeluaran BKU', active: 'transaksi', content });
   });

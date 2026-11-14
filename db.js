@@ -1,6 +1,7 @@
 'use strict';
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 // muat konfigurasi .env sebelum apa pun membaca process.env (DB_PATH, dsb.)
 require('./env');
 const Database = require('better-sqlite3');
@@ -184,8 +185,21 @@ function openTenantConn(id, file) {
   registerTimeFns(conn);
   conn.__tenantId = key;
   tenantConns.set(key, conn);
+  ensurePublicColumns(conn);
   try { migrateLegacyTimestamps(conn, 'settings'); } catch (e) { }
   return conn;
+}
+/** kolom tautan publik (BKU & Grup Iuran) — dipastikan ada untuk DB sekolah lama */
+function ensurePublicColumns(conn) {
+  const cols = t => { try { return conn.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
+  try {
+    const bc = cols('bku');
+    if (bc.length && !bc.includes('public_token')) conn.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
+    if (bc.length && !bc.includes('is_public')) conn.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+    const gc = cols('iuran_grup');
+    if (gc.length && !gc.includes('public_token')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN public_token TEXT');
+    if (gc.length && !gc.includes('is_public')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  } catch (e) { }
 }
 /** jalankan fn di dalam konteks database satu sekolah */
 function runAsTenant(tenant, fn) {
@@ -903,6 +917,49 @@ function nextBkuKode(jenis) {
   return pref + String(max + 1).padStart(2, '0');
 }
 
+/* ==========================================================================
+   DOMAIN PUBLIK: tautan acak untuk BKU & Grup Iuran (tanpa login)
+   --------------------------------------------------------------------------
+   Token = 24 karakter hex (96 bit, crypto.randomBytes) sehingga tidak dapat
+   ditebak. Halaman publik hanya dilayani bila `is_public = 1` DAN token pada
+   URL persis sama. Regenerasi token otomatis menonaktifkan tautan lama.
+   ========================================================================== */
+const PUBLIC_TABEL = { bku: 'bku', iuran: 'iuran_grup' };
+function newPublicToken() { return crypto.randomBytes(12).toString('hex'); }
+/**
+ * Pastikan baris punya token publik.
+ * `regen = true` selalu membuat token baru (tautan lama langsung mati).
+ * → { token, dibuat } atau null bila baris tidak ada.
+ */
+function publicTokenEnsure(tabel, id, regen) {
+  const t = PUBLIC_TABEL[tabel];
+  if (!t) return null;
+  const row = db.prepare(`SELECT id, public_token FROM ${t} WHERE id=?`).get(id);
+  if (!row) return null;
+  let token = String(row.public_token || '');
+  if (regen || !token) {
+    token = newPublicToken();
+    db.prepare(`UPDATE ${t} SET public_token=? WHERE id=?`).run(token, id);
+    return { token, dibuat: true };
+  }
+  return { token, dibuat: false };
+}
+/** aktif/nonaktifkan akses publik satu baris */
+function publicSetActive(tabel, id, aktif) {
+  const t = PUBLIC_TABEL[tabel];
+  if (!t) return false;
+  const info = db.prepare(`UPDATE ${t} SET is_public=? WHERE id=?`).run(aktif ? 1 : 0, id);
+  return info.changes > 0;
+}
+/** cari baris berdasarkan token publik (hanya yang aktif) */
+function publicFind(tabel, token) {
+  const t = PUBLIC_TABEL[tabel];
+  const tk = String(token || '').trim();
+  if (!t || !/^[a-f0-9]{8,64}$/i.test(tk)) return null;
+  return db.prepare(`SELECT * FROM ${t} WHERE public_token=? AND COALESCE(is_public,0)=1`).get(tk) || null;
+}
+
+
 function bootstrap() {
   /* database benar-benar baru (belum punya tabel) → semua data ditulis dengan
      jam WIB sejak awal, jadi migrasi penggeseran stempel waktu dilewati. */
@@ -1362,6 +1419,18 @@ function bootstrap() {
     for (const [col, ddl] of [['balasan', 'TEXT'], ['balas_oleh', 'TEXT'], ['balas_at', 'TEXT']])
       if (!ppCols.includes(col)) db.exec(`ALTER TABLE portal_pesan ADD COLUMN ${col} ${ddl}`);
 
+    /* ---------- domain publik: tautan acak BKU & Grup Iuran (tanpa login) ---------- */
+    {
+      const bc = db.prepare('PRAGMA table_info(bku)').all().map(c => c.name);
+      if (!bc.includes('public_token')) db.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
+      if (!bc.includes('is_public')) db.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+      const gc = db.prepare('PRAGMA table_info(iuran_grup)').all().map(c => c.name);
+      if (!gc.includes('public_token')) db.exec('ALTER TABLE iuran_grup ADD COLUMN public_token TEXT');
+      if (!gc.includes('is_public')) db.exec('ALTER TABLE iuran_grup ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_bku_public_token ON bku(public_token) WHERE public_token IS NOT NULL');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_iuran_grup_public_token ON iuran_grup(public_token) WHERE public_token IS NOT NULL');
+    }
+
     // default ukuran kertas & kop (DB lama yang belum punya)
     {
       const setif2 = db.prepare('INSERT OR IGNORE INTO settings (k,v) VALUES (?,?)');
@@ -1649,6 +1718,8 @@ const RESERVED_SLUGS = new Set(['login', 'logout', 'assets', 'favicon.ico', 'fav
   'program-keahlian', 'tutup-bulanan', 'desain-cetak', 'reset-tahun', 'audit-orphan', 'tampilan-menu',
   'tarif-honor', 'catatan-pegawai', 'pesan-orangtua', 'catatan-orangtua', 'siswa-nonaktif', 'portal-pegawai', 'portal-slip',
   'pengaturan-backup', 'tema', 'spp', 'petunjuk',
+  // halaman publik bertoken (BKU & Grup Iuran) tidak boleh dipakai sebagai slug portal sekolah
+  'publik',
   // multi-tenant: halaman layanan & portal SaaS tidak boleh dipakai sebagai slug portal sekolah
   'super-admin', 'info-layanan', 'perpanjang', 'register', 'daftar', 'akun']);
 function normalizePortalSlug(raw, fallback) {
@@ -4675,6 +4746,7 @@ module.exports = {
   PORTAL_SLUG_KEYS, PORTAL_SLUG_DEFAULT,
   portalPesanAdd, portalPesanList, portalPesanCount, beasiswaSiswaList, beasiswaGrupList, beasiswaGrupSet,
   portalPesanReply, portalPesanReplyClear, notifAdd, notifList, notifCount, notifRead, cloneBkuTa, nextBkuKode,
+  newPublicToken, publicTokenEnsure, publicSetActive, publicFind,
   CATATAN_STATUS, catatanAdd, catatanList, catatanCount, catatanReply, catatanStatus, catatanDelete,
   beasiswaSync, beasiswaSyncAll, beasiswaCleanup, resetTaData,
   // tampilan (tema, branding, penataan menu) + petunjuk pengguna

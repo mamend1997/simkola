@@ -889,6 +889,32 @@ function kwitansiKop(settings) {
 function moneyInput(name, value, extra = '') {
   return `<input type="text" inputmode="numeric" autocomplete="off" name="${name}" value="${esc(fmtMoney(value))}" data-money ${extra}>`;
 }
+
+/**
+ * Input nama penerima/penyetor: gabungan DROPDOWN PEGAWAI + ISIAN MANUAL.
+ * Nilai tetap dikirim sebagai teks bebas (nama_pihak), jadi bisa dipilih dari
+ * master pegawai maupun diketik sendiri. Daftar pegawai diambil dari
+ * <script id="pihakData"> yang dirender SEKALI per halaman lewat pihakData().
+ */
+function pihakInput(name, value, extra = '') {
+  return `<div class="pihak-pick">
+    <div class="pihak-box">
+      <input type="text" name="${name}" value="${esc(value || '')}" autocomplete="off" data-pihak ${extra}>
+      <button type="button" class="pihak-btn" data-pihak-btn tabindex="-1" title="Pilih dari data pegawai" aria-label="Pilih dari data pegawai">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+    </div>
+    <div class="pihak-menu" data-pihak-menu hidden></div>
+  </div>`;
+}
+/** daftar pegawai untuk combobox nama penerima — render SEKALI per halaman */
+function pihakData(rows) {
+  const list = (rows || [])
+    .map(p => ({ nama: String((p && p.nama) || '').trim(), jabatan: String((p && p.jabatan) || '').trim() }))
+    .filter(p => p.nama);
+  const json = JSON.stringify(list).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+  return `<script type="application/json" id="pihakData">${json}</script>`;
+}
 function signBlock(settings, opts = {}) {
   const tgl = opts.tanggal || '';
   // tempat default mengikuti setting print_tempat ("Cikoneng") — dapat diubah di Desain Templat Cetak
@@ -1050,4 +1076,4 @@ function importErrorModal(errors, opts = {}) {
   }).replace(`class="modal" id="${id}"`, `class="modal show" id="${id}"`);
 }
 
-module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, kopLines, kopCfg, kopFormatOf, kopKeyOf, hasKopCfg, KOP_DEFAULT, KOP_GARIS, KOP_GARIS_LABEL, kopBorder, autoKopLines, kopLogo, signBlock, docPage, printPage, orientToggle, moneyInput, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage, fillIdentitas, identitasKontak, identitasFooter, modeOf, BENTUK_LABEL, logoSrcset, fontLinks, logoPreconnect, originOf };
+module.exports = { ASSET_V, icon, layout, avatar, badge, bkuStatusBadge, trxStatusBadge, modal, openModalBtn, emptyState, prog, selectOptions, kop, kwitansiKop, kopLines, kopCfg, kopFormatOf, kopKeyOf, hasKopCfg, KOP_DEFAULT, KOP_GARIS, KOP_GARIS_LABEL, kopBorder, autoKopLines, kopLogo, signBlock, docPage, printPage, orientToggle, moneyInput, pihakInput, pihakData, chartSPP, chartLineSPP, importErrorModal, NAV, navCatalog, navVisibility, navOrdered, themeCss, hexToHsl, flashBlock, kwitansiSize, kwitansiPage, fillIdentitas, identitasKontak, identitasFooter, modeOf, BENTUK_LABEL, logoSrcset, fontLinks, logoPreconnect, originOf };

@@ -785,6 +785,15 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           const pay = saas.payConfig('');
           const cfg = saas.gatewayCfg();
           const absBase = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (req.BASE ? '(domain ini)' + req.BASE : '(domain ini)');
+          /* URL webhook absolut (host permintaan dipakai bila APP_BASE_URL kosong) */
+          const hostAbs = (() => {
+            const env = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
+            if (env) return env + req.BASE;
+            const h = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+            const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+            return h ? proto + '://' + h + req.BASE : '';
+          })();
+          const webhookAbs = (hostAbs || absBase) + '/api/webhook/kasera';
           return `<div class="card mb-3" data-pay-methods="1">
             <div class="card-head"><div><h3>${ui.icon('qris', 'i-sm')} Metode Pembayaran Hybrid</h3>
               <div class="sub">Aktifkan QRIS otomatis (payment gateway) &/atau QRIS manual</div></div></div>
@@ -820,8 +829,37 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
                   <input type="number" name="pay_gateway_expire_menit" min="5" max="1440" value="${pay.expire_menit}"></div>
               </div>
               <div class="field"><label>Base URL API Gateway (opsional)</label>
-                <input type="text" name="pay_gateway_base" placeholder="${esc(saas.get('pay_gateway_base', '') || 'https://api.kasera.id')}" data-pay-base>
-                <div class="hint">Khusus provider <b>Kasera</b>: isi bila base URL API berbeda. Kosongkan untuk default.</div></div>
+                <input type="text" name="pay_gateway_base" placeholder="${esc(saas.get('pay_gateway_base', '') || 'https://pay.kasera.id')}" data-pay-base>
+                <div class="hint">Khusus provider <b>Kasera</b>: isi bila base URL API berbeda. Kosongkan untuk default
+                  (<b>production</b> https://pay.kasera.id · <b>sandbox</b> https://sandbox.kasera.id).</div></div>
+              <div class="card" style="box-shadow:none;border:1px dashed var(--line);padding:14px;margin-bottom:14px">
+                <div class="card-head" style="margin-bottom:8px"><div><h4 style="margin:0">Kasera Pay — Transaksi &amp; Webhook Otomatis</h4>
+                  <div class="sub">POST <span class="mono">/v1/transactions</span> + verifikasi <span class="mono">kasera-signature-v1</span></div></div></div>
+                <div class="row2">
+                  <div class="field"><label>Webhook Secret (Callback Secret)</label>
+                    <input type="password" name="pay_gateway_callback" autocomplete="new-password"
+                      placeholder="${pay.callback_set ? '•••••••• (tersimpan — isi hanya bila ingin mengganti)' : 'tempel Webhook Secret dari dashboard Kasera'}">
+                    <div class="hint">Dipakai menghitung <span class="mono">HMAC-SHA256(body, secret)</span> pada header
+                      <span class="mono">kasera-signature-v1</span>. Boleh juga dari variabel lingkungan <span class="mono">KASERA_WEBHOOK_SECRET</span>.</div></div>
+                  <div class="field"><label>API Kasera yang dipakai</label>
+                    <select name="pay_gateway_kasera_api" data-pay-kasera-api>
+                      <option value="auto" ${(pay.kasera_api || 'auto') === 'auto' ? 'selected' : ''}>Otomatis — /v1/transactions, QRIS lama sebagai cadangan</option>
+                      <option value="transactions" ${pay.kasera_api === 'transactions' ? 'selected' : ''}>Hanya /v1/transactions (checkout_url)</option>
+                      <option value="qris" ${pay.kasera_api === 'qris' ? 'selected' : ''}>Hanya /v1/qris (QRIS lama)</option>
+                    </select>
+                    <div class="hint">Pilih <b>qris</b> bila akun Kasera Anda belum mengaktifkan API Transactions.</div></div>
+                </div>
+                <div class="field"><label>URL Webhook untuk dashboard Kasera</label>
+                  <input type="text" readonly value="${esc(pay.webhook_url || (absBase + '/api/webhook/kasera'))}" data-pay-webhook>
+                  <div class="hint">Daftarkan URL ini pada dashboard Kasera Pay. Status webhook: ${pay.webhook_secret_set
+              ? ui.badge('Secret terpasang', 'green') : ui.badge('Secret belum diisi', 'amber')}. Rute webhook tidak memakai sesi &amp; dikecualikan dari CSRF.</div></div>
+                <div class="row2">
+                  <div class="field"><label>API Key <span class="t-sub">(KASERA_API_KEY)</span></label>
+                    <div class="t-sub">Gunakan kolom <b>Server Key / API Key</b> di atas — dikirim sebagai <span class="mono">Authorization: Bearer</span>.</div></div>
+                  <div class="field"><label>Idempotency-Key</label>
+                    <div class="t-sub">Otomatis memakai nomor pesanan (order id) agar pembayaran tidak ganda saat jaringan terputus.</div></div>
+                </div>
+              </div>
               <div class="field"><label>URL Callback (daftarkan di dashboard provider)</label>
                 <input type="text" readonly value="${esc(absBase)}/pay/callback"></div>
               <div class="alert info">${ui.icon('info')}<div>${pay.provider === 'sandbox'
@@ -842,6 +880,25 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
             <div class="list-row"><div><div class="mt">Nama Pemilik</div><div class="nm">${esc(saas.get('qris_nama', '-'))}</div></div></div>
             <div class="list-row"><div><div class="mt">Nomor</div><div class="nm mono">${esc(saas.get('qris_nomor', '-'))}</div></div></div>
           </div>
+        </div>
+        <div class="card mb-3" data-kasera-log="1">
+          <div class="card-head"><div><h3>Log Webhook Kasera</h3><div class="sub">8 notifikasi terakhir — bukti pembayaran diproses otomatis</div></div></div>
+          ${(() => {
+            const ev = (() => { try { return saas.kaseraEvents(8); } catch (e) { return []; } })();
+            if (!ev.length) return `<div class="t-sub">Belum ada notifikasi masuk. Pastikan URL webhook di atas sudah didaftarkan pada dashboard Kasera Pay.</div>`;
+            const badgeOf = h => h === 'ok' ? ui.badge('Lunas', 'green')
+              : h === 'diabaikan' ? ui.badge('Diabaikan', 'gray')
+                : h === 'jumlah-tidak-cocok' ? ui.badge('Nominal beda', 'amber')
+                  : h === 'gagal' ? ui.badge('Gagal', 'red') : ui.badge(h || '-', 'gray');
+            return `<div class="table-wrap short"><table data-tbl="kasera-event"><thead><tr>
+              <th>Waktu</th><th>Event</th><th>Nomor Pesanan</th><th class="num">Nominal</th><th>Hasil</th></tr></thead><tbody>
+              ${ev.map(r => `<tr><td class="t-sub nowrap">${esc(lib.stampShort(r.diterima_at))}</td>
+                <td class="t-sub">${esc(r.tipe || '-')}</td>
+                <td class="mono t-sub">${esc(r.order_id || '-')}</td>
+                <td class="num">${rupiah(r.jumlah)}</td>
+                <td>${badgeOf(r.hasil)}<div class="t-sub">${esc(r.pesan || '')}</div></td></tr>`).join('')}
+              </tbody></table></div>`;
+          })()}
         </div>
         <div class="card">
           <div class="card-head"><div><h3>Ringkasan Harga</h3></div></div>
@@ -878,6 +935,18 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (String(b.pay_gateway_key || '').trim()) saas.set('pay_gateway_key', String(b.pay_gateway_key).trim());
       if (b.pay_gateway_key2 !== undefined) saas.set('pay_gateway_key2', String(b.pay_gateway_key2 || '').trim());
       if (b.pay_gateway_base !== undefined) saas.set('pay_gateway_base', String(b.pay_gateway_base || '').trim());
+      /* Kasera Pay: Webhook Secret (kasera-signature-v1) + pilihan API */
+      if (b.pay_gateway_callback !== undefined) saas.set('pay_gateway_callback', String(b.pay_gateway_callback || '').trim());
+      if (b.pay_gateway_kasera_api !== undefined) {
+        const apiMode = ['auto', 'transactions', 'qris'].includes(String(b.pay_gateway_kasera_api))
+          ? String(b.pay_gateway_kasera_api) : 'auto';
+        saas.set('pay_gateway_kasera_api', apiMode);
+      }
+      if (gatewayOn && provider === 'kasera' && !String(b.pay_gateway_callback || saas.get('pay_gateway_callback', '')).trim()
+        && !String(process.env.KASERA_WEBHOOK_SECRET || '').trim()) {
+        /* bukan penghalang: pembayaran tetap jalan, hanya notifikasi otomatis yang tidak terverifikasi */
+        console.warn('[kasera] Webhook Secret belum diisi — webhook akan ditolak sampai secret diatur.');
+      }
       saas.logSaas(u, 'EDIT PEMBAYARAN', 'saas',
         `Metode pembayaran: gateway ${gatewayOn ? 'ON' : 'OFF'} (${provider}/${mode}), manual ${manualOn ? 'ON' : 'OFF'}`);
       res.redirect(req.BASE + flash('/super-admin/qris', 'ok', 'Metode pembayaran diperbarui.'));

@@ -34,11 +34,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (isYm(r && r.posting_periode)) return String(r.posting_periode);
     return isYm(r && r.periode) ? String(r.periode) : '';
   }
-  /** tanggal transaksi = hari terakhir bulan posting */
-  function lastDayOf(ym) {
-    const [y, m] = String(ym).split('-').map(Number);
-    const d = new Date(y, m, 0);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  /**
+   * Tanggal transaksi BKU saat posting honor = TANGGAL AKTUAL entry data.
+   * Tidak pernah dipaksa ke akhir bulan (dulu memakai end-of-month sehingga
+   * honor yang diinput tanggal 12 selalu tercatat 30/31).
+   */
+  function tanggalPosting(raw) {
+    const v = String(raw || '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : todayISO();
   }
   /**
    * Uraian transaksi BKU. PERIODE HONOR selalu yang tercatat pada item (periode kinerja);
@@ -92,7 +95,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="hint">Bulan kinerja honor (mis. <b>Oktober</b>) — tercatat pada laporan honor.</div></div>
         <div class="field"><label>Bulan Posting ke BKU</label>
           <input type="month" name="posting_periode" value="${esc(r ? postingOf(r) : periode)}" ${r && r.status === 'posted' ? 'readonly' : ''}>
-          <div class="hint">Boleh berbeda dari periode honor (mis. honor Oktober dibukukan pada BKU November karena BKU Oktober sudah ditutup).</div></div>
+          <div class="hint">Rencana bulan pembukuan (boleh berbeda dari periode honor). Tanggal transaksi BKU diisi saat posting — otomatis tanggal hari ini.</div></div>
       </div>
       <div class="row2">
         <div class="field"><label>Jumlah Kehadiran</label><input type="text" inputmode="decimal" name="kehadiran" value="${esc(r ? String(r.kehadiran).replace('.', ',') : '')}" data-kehadiran required placeholder="12"></div>
@@ -122,10 +125,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="field"><label>Periode Kinerja / Honor</label><input type="month" name="periode" value="${esc(periode)}" required>
           <div class="hint">Bulan kinerja honor — inilah periode yang tercetak di laporan.</div></div>
         <div class="field"><label>Bulan Posting ke BKU</label><input type="month" name="posting_periode" value="${esc(periode)}">
-          <div class="hint">Boleh berbeda (mis. honor Oktober dibukukan pada BKU November).</div></div>
+          <div class="hint">Rencana bulan pembukuan. Tanggal transaksi BKU ditentukan saat posting (tanggal aktual).</div></div>
       </div>
       <div class="alert info">${ui.icon('info')}<div>Isi <b>banyak pembina dalam satu tabel</b> — baris yang namanya kosong otomatis diabaikan. Jumlah Diterima dihitung otomatis dari kehadiran × harga satuan.
-        <br><b>Periode honor</b> tetap tercatat apa adanya, sedangkan <b>bulan posting</b> menentukan bulan transaksi pada BKU.</div></div>
+        <br><b>Periode honor</b> tetap tercatat apa adanya, sedangkan <b>tanggal transaksi BKU</b> diisi saat posting (otomatis tanggal hari ini, tidak dipaksa ke akhir bulan).</div></div>
       <div class="table-wrap">
         <table class="grid-tbl"><thead><tr>
           <th style="width:34px">No</th><th>Nama Pembina</th><th>Kehadiran</th><th>Harga Satuan (Rp)</th><th>Jumlah Diterima</th><th>Keterangan</th><th></th>
@@ -148,7 +151,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </div>
     <div class="alert info mb-3">${ui.icon('info')}<div>Input honor di sini <b>tidak langsung</b> memotong BKU. Data masuk ke <b>Antrean Posting Honor Ekskul</b> untuk ditinjau, lalu diposting ke BKU sasaran.
       Saat posting, setiap <b>jenis ekstrakurikuler</b> (mis. Pramuka &amp; Paskibra) dibuat sebagai <b>transaksi BKU tersendiri</b> — tidak digabung.
-      <br><b>Periode Kinerja/Honor</b> (mis. Oktober) terpisah dari <b>Bulan Posting BKU</b> (mis. November) — laporan honor tetap mencantumkan periode aslinya.</div></div>
+      <br><b>Periode Kinerja/Honor</b> (mis. Oktober) tetap tercatat pada laporan honor, sedangkan <b>tanggal transaksi BKU</b> memakai tanggal aktual saat posting (hari ini) — tidak dipaksa ke akhir bulan.</div></div>
     <div class="card">
       <div class="card-head"><div><h3>Honor Pembina Ekstrakurikuler — ${esc(dbm.periodeLabel(periode))}</h3><div class="sub">${rows.length} pembina · total ${rupiah(total)}</div></div></div>
       ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr>
@@ -348,7 +351,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <div class="row3">
         <div class="field"><label>Periode Kinerja / Honor</label><input type="month" name="periode" value="${esc(r.periode)}" required ${r.status === 'posted' ? 'readonly' : ''}></div>
         <div class="field"><label>Bulan Posting ke BKU</label><input type="month" name="posting_periode" value="${esc(postingOf(r))}" ${r.status === 'posted' ? 'readonly' : ''}>
-          <div class="hint">Boleh berbeda dari periode honor.</div></div>
+          <div class="hint">Rencana bulan pembukuan. Tanggal transaksi mengikuti tanggal aktual saat posting.</div></div>
         <div class="field"><label>Jumlah Kehadiran</label><input type="text" inputmode="decimal" name="kehadiran" value="${esc(String(r.kehadiran).replace('.', ','))}" data-kehadiran required></div>
       </div>
       <div class="row2">
@@ -375,11 +378,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="sub">${g.rows.length} pembina · total ${rupiah(g.total)} · diposting sebagai 1 transaksi BKU
           ${gPost !== g.periode ? `· <b>dibukukan ke BKU ${esc(dbm.periodeLabel(gPost))}</b>` : ''}</div></div>
         <div class="toolbar">
-          <form method="post" action="${c.base}/ekskul/antrean/posting" class="flex" style="gap:6px;align-items:flex-end" data-confirm="Posting honor ${esc(g.jenis || 'ekskul')} periode ${esc(dbm.periodeLabel(g.periode))} sebesar ${rupiah(g.total)} ke BKU bulan ${esc(dbm.periodeLabel(gPost))} (transaksi terpisah per jenis)?">
+          <form method="post" action="${c.base}/ekskul/antrean/posting" class="flex" style="gap:6px;align-items:flex-end" data-confirm="Posting honor ${esc(g.jenis || 'ekskul')} periode ${esc(dbm.periodeLabel(g.periode))} sebesar ${rupiah(g.total)} ke BKU dengan tanggal transaksi hari ini (${esc(tglID(todayISO()))})?">
             <input type="hidden" name="periode" value="${esc(g.periode)}">
             <input type="hidden" name="jenis" value="${esc(g.jenis)}">
-            <div class="field" style="margin:0"><label>Bulan Posting BKU</label>
-              <input type="month" name="posting_periode" value="${esc(gPost)}" required title="Boleh berbeda dari periode honor">
+            <div class="field" style="margin:0"><label>Tanggal Transaksi BKU</label>
+              <input type="date" name="tanggal" value="${esc(todayISO())}" required title="Otomatis tanggal hari ini — bukan akhir bulan">
               <div class="hint" style="margin-top:2px">Periode honor tetap ${esc(dbm.periodeLabel(g.periode))}</div></div>
             <div class="field" style="margin:0"><label>BKU Tujuan</label><select name="bku_id" required style="min-width:200px">
               <option value="">— Pilih BKU —</option>${bkuList.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}</select></div>
@@ -443,24 +446,23 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!bku) return res.redirect(back + '?err=' + encodeURIComponent('BKU tujuan wajib dipilih.'));
     if (bku.status !== 'aktif') return res.redirect(back + '?err=' + encodeURIComponent('BKU tujuan sudah ditutup.'));
     /* ==================================================================
-       PERIODE HONOR vs BULAN POSTING BKU
-       Item honor menyimpan `periode` (kinerja). Saat diposting, pengguna
-       boleh memilih bulan pembukuan yang berbeda — mis. honor Oktober
-       diajukan pada BKU November karena BKU Oktober sudah ditutup.
-       Yang berubah hanya tanggal transaksi BKU; periode honor tetap.
+       PERIODE HONOR vs TANGGAL TRANSAKSI BKU
+       Item honor menyimpan `periode` (kinerja). Saat diposting, transaksi
+       BKU memakai TANGGAL AKTUAL entry data (default hari ini, WIB) —
+       tidak lagi dipaksa ke hari terakhir bulan honor/posting.
+       Periode honor tetap tercatat apa adanya pada uraian & laporan.
        ================================================================== */
-    let posting = String(req.body.posting_periode || '').trim();
-    if (!isYm(posting)) posting = rows.length ? postingOf(rows[0]) : '';
-    if (!isYm(posting)) return res.redirect(back + '?err=' + encodeURIComponent('Bulan posting ke BKU wajib dipilih (format YYYY-MM).'));
+    const tanggal = tanggalPosting(req.body.tanggal);
+    const posting = tanggal.slice(0, 7);
     const postingTa = dbm.tahunById ? dbm.tahunById(bku.tahun_ajaran_id) : null;
     if (postingTa) {
       const rng = dbm.taRange(postingTa);
-      if (posting < rng.from.slice(0, 7) || posting > rng.to.slice(0, 7)) {
-        return res.redirect(back + '?err=' + encodeURIComponent(`Bulan posting ${dbm.periodeLabel(posting)} di luar tahun pelajaran BKU ${bku.nama} (${postingTa.nama || ''}).`));
+      const from = rng.from.slice(0, 10), to = rng.to.slice(0, 10);
+      if (tanggal < from || tanggal > to) {
+        return res.redirect(back + '?err=' + encodeURIComponent(`Tanggal transaksi ${tglID(tanggal)} di luar tahun pelajaran BKU ${bku.nama} (${postingTa.nama || ''}).`));
       }
     }
-    const last = lastDayOf(posting);
-    const lock = dbm.periodeLockError(bku.id, last);
+    const lock = dbm.periodeLockError(bku.id, tanggal);
     if (lock) return res.redirect(back + '?err=' + encodeURIComponent(lock));
     const total = rows.reduce((s, r) => s + jumlahOf(r), 0);
     if (!(total > 0)) return res.redirect(back + '?err=' + encodeURIComponent('Total honor Rp 0 — periksa kehadiran & harga satuan.'));
@@ -475,7 +477,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const trxId = db.transaction(() => {
       const info = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
         VALUES (?,?,'pengeluaran','tunai',?,?,?,?,?,'posted',?,?)`)
-        .run(bku.id, last, noBukti, coa ? coa.id : null, total, uraian,
+        .run(bku.id, tanggal, noBukti, coa ? coa.id : null, total, uraian,
           jenisBatch || 'Pembina Ekskul', req.user.id, nowStamp());
       const id = Number(info.lastInsertRowid);
       const upd = db.prepare("UPDATE ekskul_honor SET status='posted',bku_id=?,transaksi_id=?,posting_periode=?,posted_at=?,posted_by=? WHERE id=?");
@@ -484,9 +486,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     })();
     dbm.logAudit(req.user, 'POSTING EKSKUL', 'ekskul',
       `Honor ekskul${jenisBatch ? ' ' + jenisBatch : ''} ${dbm.periodeLabel(periode)} ${rupiah(total)} → ${bku.nama} (${noBukti})`
+      + ` · tanggal transaksi ${tglID(tanggal)}`
       + (posting !== periode ? ` · periode honor ${dbm.periodeLabel(periode)}, dibukukan ${dbm.periodeLabel(posting)}` : ''));
     res.redirect(back + '?ok=' + encodeURIComponent(`Honor ${jenisBatch ? jenisBatch + ' ' : ''}${dbm.periodeLabel(periode)} ${rupiah(total)} diposting ke ${bku.nama} (${noBukti})`
-      + (posting !== periode ? ` — transaksi masuk BKU ${dbm.periodeLabel(posting)}, periode honor tetap ${dbm.periodeLabel(periode)}` : '')
+      + ` — tanggal transaksi ${tglID(tanggal)}`
+      + (posting !== periode ? ` (bulan BKU ${dbm.periodeLabel(posting)}, periode honor tetap ${dbm.periodeLabel(periode)})` : '')
       + ' — transaksi terpisah per jenis ekskul.'));
   });
 

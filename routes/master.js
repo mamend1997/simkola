@@ -997,6 +997,39 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
 
     const kodeUmum = dbm.nextBkuKode('umum');
     const kodeKegiatan = dbm.nextBkuKode('kegiatan');
+    /* ---- tautan publik BKU (tanpa login) ---- */
+    const pubLink = b => (b.public_token
+      ? c.absUrl('/' + dbm.portalSlugs().base + '/publik/bku/' + b.public_token) : '');
+    const publiForm = b => {
+      const link = pubLink(b);
+      return `<div class="alert info">${ui.icon('info')}<div>Tautan publik menampilkan <b>nama BKU, identitas sekolah, dan seluruh transaksi yang sudah dibukukan</b> (pemasukan, pengeluaran, saldo berjalan) tanpa perlu login.
+        Tautan memakai kode acak yang tidak dapat ditebak dan hanya hidup selama sakelar <b>Aktif</b> menyala.</div></div>
+        ${link ? `<div class="field"><label>Tautan Publik Aktif</label>
+          <input value="${esc(link)}" readonly onclick="this.select()">
+          <div class="toolbar" style="margin-top:8px">
+            <button type="button" class="btn btn-sm" data-copy="${esc(link)}">${ui.icon('copy')}Salin Tautan</button>
+            <a class="btn btn-sm" href="${esc(link)}" target="_blank" rel="noopener">${ui.icon('link')}Buka Halaman</a>
+          </div></div>`
+          : `<div class="alert warn">${ui.icon('alert')}<div>Belum ada tautan publik. Tekan <b>Generate Link Publik</b> untuk membuat kode acak.</div></div>`}
+        <form method="post" action="${c.base}/bku/publik" style="margin-top:6px">
+          <input type="hidden" name="id" value="${b.id}">
+          <input type="hidden" name="ta" value="${esc(b.tahun_ajaran_id || '')}">
+          <input type="hidden" name="aksi" value="${link ? 'regen' : 'generate'}">
+          <button class="btn btn-primary btn-sm" data-confirm="${link
+          ? 'Buat tautan BARU? Tautan lama langsung tidak berlaku lagi.'
+          : 'Buat tautan publik acak untuk BKU ini?'}">${ui.icon('refresh')}${link ? 'Generate Ulang Link' : 'Generate Link Publik'}</button>
+        </form>
+        <form method="post" action="${c.base}/bku/publik" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+          <input type="hidden" name="id" value="${b.id}">
+          <input type="hidden" name="ta" value="${esc(b.tahun_ajaran_id || '')}">
+          <input type="hidden" name="aksi" value="toggle">
+          <input type="hidden" name="aktif" value="${b.is_public ? '0' : '1'}">
+          <label class="check" style="display:block;margin-bottom:8px">
+            <input type="checkbox" ${b.is_public ? 'checked' : ''} disabled> Tautan publik <b>${b.is_public ? 'AKTIF' : 'NON-AKTIF'}</b>
+          </label>
+          <button class="btn btn-sm ${b.is_public ? 'btn-danger' : ''}">${ui.icon(b.is_public ? 'unlock' : 'eye')}${b.is_public ? 'Nonaktifkan Akses Publik' : 'Aktifkan Akses Publik'}</button>
+        </form>`;
+    };
     const bkuForm = (b, modalId) => `<form method="post" action="${c.base}/bku/save" id="f${modalId}">
       <input type="hidden" name="id" value="${b ? b.id : ''}">
       <div class="field"><label>Nama BKU</label><input name="nama" value="${esc(b ? b.nama : '')}" required placeholder="BKU Umum / BKU UKK"></div>
@@ -1024,7 +1057,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           ${c.can('bku', 'create') ? ui.openModalBtn('mAdd', 'Tambah BKU') : ''}
         </div>
       </div>
-      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num">Saldo Awal</th><th class="num">Saldo Akhir</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num">Saldo Awal</th><th class="num">Saldo Akhir</th><th>Status</th><th>Publik</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(b => {
       const saldo = dbm.bkuSaldo(b.id);
       return `<tr>
@@ -1034,8 +1067,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <td class="num">${rupiah(b.saldo_awal)}</td>
           <td class="num t-strong" style="color:${saldo === 0 ? 'var(--muted)' : 'var(--ink)'}">${rupiah(saldo)}</td>
           <td>${ui.bkuStatusBadge(b.status)}${b.status !== 'aktif' ? `<div class="t-sub">${esc(b.ditutup_at || '')}</div>` : ''}</td>
+          <td class="nowrap">${b.is_public ? ui.badge('Aktif', 'green') : ui.badge('Privat', 'gray')}</td>
           <td class="right nowrap">
             <a class="btn btn-sm btn-primary" href="${c.base}/bku/${b.id}" title="Rincian BKU">${ui.icon('eye')}Detail</a>
+            ${c.can('bku', 'edit') ? `<button class="btn btn-sm ${b.is_public ? 'btn-soft' : ''}" data-open="mPub${b.id}" title="Pengaturan tautan publik">${ui.icon('link')}Publik</button>` : ''}
             ${b.status === 'aktif'
           ? (c.can('bku', 'edit') ? `<button class="btn btn-sm" data-open="mTutup${b.id}">${ui.icon('lock')}Tutup BKU</button>` : '')
           : `<a class="btn btn-sm" href="${c.base}/bku/${b.id}/berita-acara" target="_blank">${ui.icon('printer')}Berita Acara</a>
@@ -1047,6 +1082,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             title: 'Edit BKU', body: bkuForm(b, 'mEdit' + b.id),
             footer: `<button class="btn" data-close="mEdit${b.id}">Batal</button><button class="btn btn-primary" form="f${'mEdit' + b.id}">Simpan</button>`
           })}
+          ${c.can('bku', 'edit') ? late('mPub' + b.id, {
+            title: 'Tautan Publik — ' + b.nama, body: publiForm(b),
+            footer: `<button class="btn" data-close="mPub${b.id}">Tutup</button>`
+          }) : ''}
           ${b.status === 'aktif' ? late('mTutup' + b.id, {
             title: 'Tutup BKU — ' + b.nama,
             body: `<div class="alert info">${ui.icon('info')}<div>Setelah ditutup, BKU <b>terkunci</b>: transaksi tidak dapat ditambah, diedit, atau dihapus. Super Admin/Bendahara masih dapat membuka kembali bila diperlukan.</div></div>
@@ -1071,7 +1110,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       <div class="alert info mt-2">${ui.icon('info')}<div><b>Buku Pembantu Bank, Buku Pembantu Pajak, Buku Pembantu Tunai, Rekap BHP, dan Rekap Barang Modal</b>
         tidak lagi diinput manual dan tidak memiliki saldo awal — isinya terbentuk otomatis dari transaksi.
         Lihat rekapitulasinya di <a href="${c.base}/laporan?r=pembantu"><b>Laporan → Buku Pembantu &amp; Rekap</b></a>.</div></div>
-      <p class="help mt-2">BKU berstatus <b>ditutup</b> terkunci dari input, edit, dan hapus transaksi. Gunakan tombol Berita Acara untuk mencetak dokumen penutupan kas ber-kop sekolah.</p>
+      <p class="help mt-2">BKU berstatus <b>ditutup</b> terkunci dari input, edit, dan hapus transaksi. Gunakan tombol Berita Acara untuk mencetak dokumen penutupan kas ber-kop sekolah.
+        Tombol <b>Publik</b> membuat tautan acak (tanpa login) yang menampilkan transaksi BKU secara transparan — dapat dinonaktifkan kapan saja.</p>
     </div>
     ${ui.modal('mAdd', {
       title: 'Tambah BKU', body: bkuForm(ed, 'mAdd'),
@@ -1097,6 +1137,31 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     }
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'bku', `${isEdit ? 'Edit' : 'Tambah'} BKU ${nama}`);
     res.redirect(req.BASE + '/bku?ta=' + tahun_ajaran_id + '&ok=' + encodeURIComponent('BKU disimpan.'));
+  });
+
+  /* ---------- domain publik BKU: generate / regenerate / toggle ---------- */
+  post('/bku/publik', (req, res) => {
+    if (!guard(req, res, 'bku', 'edit')) return;
+    const id = Number(req.body.id || 0);
+    const b = db.prepare('SELECT * FROM bku WHERE id=?').get(id);
+    const back = req.BASE + '/bku' + (req.body.ta ? '?ta=' + encodeURIComponent(req.body.ta) : '');
+    if (!b) return res.redirect(back + (back.includes('?') ? '&' : '?') + 'err=' + encodeURIComponent('BKU tidak ditemukan.'));
+    const aksi = String(req.body.aksi || 'toggle');
+    const sep = back.includes('?') ? '&' : '?';
+    if (aksi === 'generate' || aksi === 'regen') {
+      const r = dbm.publicTokenEnsure('bku', id, aksi === 'regen');
+      if (!r) return res.redirect(back + sep + 'err=' + encodeURIComponent('Gagal membuat tautan publik.'));
+      dbm.publicSetActive('bku', id, true);
+      dbm.logAudit(req.user, aksi === 'regen' ? 'GENERATE ULANG LINK PUBLIK' : 'GENERATE LINK PUBLIK', 'bku',
+        `Tautan publik BKU ${b.nama} ${aksi === 'regen' ? 'diperbarui' : 'dibuat'} (token …${r.token.slice(-6)}) & diaktifkan`);
+      return res.redirect(back + sep + 'ok=' + encodeURIComponent(`Tautan publik ${b.nama} ${aksi === 'regen' ? 'diperbarui' : 'dibuat'} dan diaktifkan. Tautan lama ${aksi === 'regen' ? 'tidak berlaku lagi' : 'siap dibagikan'}.`));
+    }
+    const aktif = String(req.body.aktif || '0') === '1';
+    if (aktif && !b.public_token) dbm.publicTokenEnsure('bku', id, true);
+    dbm.publicSetActive('bku', id, aktif);
+    dbm.logAudit(req.user, aktif ? 'AKTIFKAN LINK PUBLIK' : 'NONAKTIFKAN LINK PUBLIK', 'bku',
+      `Akses publik BKU ${b.nama} ${aktif ? 'diaktifkan' : 'dinonaktifkan'}`);
+    return res.redirect(back + sep + 'ok=' + encodeURIComponent(`Akses publik ${b.nama} ${aktif ? 'diaktifkan' : 'dinonaktifkan'}.`));
   });
 
   post('/bku/delete', (req, res) => {

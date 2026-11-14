@@ -136,6 +136,43 @@ function readBody(req) {
   });
 }
 
+/**
+ * Body MENTAH (byte asli) — wajib untuk verifikasi tanda tangan webhook
+ * (HMAC dihitung dari body yang dikirim gateway, bukan hasil JSON.parse).
+ */
+function readRawBody(req, limit = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new Error('Ukuran data terlalu besar.')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/** urai body mentah sesuai Content-Type (JSON atau form-urlencoded) */
+function bodyOfRaw(raw, contentType) {
+  const s = String(raw === undefined || raw === null ? '' : raw);
+  const type = String(contentType || '');
+  if (!s) return {};
+  if (type.includes('json') || /^\s*[{[]/.test(s)) {
+    try { return JSON.parse(s); } catch (e) { /* lanjut ke form */ }
+  }
+  const out = {};
+  try {
+    for (const [k, v] of new URLSearchParams(s)) {
+      if (out[k] === undefined) out[k] = v;
+      else if (Array.isArray(out[k])) out[k].push(v);
+      else out[k] = [out[k], v];
+    }
+  } catch (e) { /* bukan form */ }
+  return out;
+}
+
 /* ---------------- auth & permissions ---------------- */
 function can(user, module, action) {
   if (!user) return false;
@@ -211,12 +248,29 @@ async function uploadMedia(base64, filename, opts = {}) {
 }
 
 /* ---------------- shared page helpers ---------------- */
+/**
+ * Alamat absolut aplikasi dari permintaan (untuk URL yang harus ditempel
+ * di dashboard pihak ketiga, mis. webhook payment gateway).
+ * Urutan: APP_BASE_URL → host permintaan (+ X-Forwarded-*) → path saja.
+ */
+function absUrl(req, pathname = '') {
+  const env = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
+  const tail = String(pathname || '');
+  const base = String((req && req.BASE) || '').replace(/\/+$/, '');
+  if (env) return env + base + tail;
+  const h = String((req && req.headers && (req.headers['x-forwarded-host'] || req.headers.host)) || '')
+    .split(',')[0].trim();
+  const proto = String((req && req.headers && req.headers['x-forwarded-proto']) || 'https').split(',')[0].trim();
+  return (h ? `${proto}://${h}` : '') + base + tail;
+}
+
 function ctx(req) {
   const s = dbm.settingsAll();
   const ta = dbm.taOf(req) || null;
   return {
     req,
     base: req.BASE,
+    absUrl: (p = '') => absUrl(req, p),
     user: req.user,
     q: req.query,
     settings: s,
@@ -405,6 +459,8 @@ require('./routes/superadmin')({ get, post, dbm, lib, ui, saas, queue, uploadMed
 require('./routes/superadmin_db')({ get, post, dbm, lib, ui, saas });
 /* dokumen legalitas: halaman publik (ToS/SLA) + menu sidebar panel sekolah (/legal/tos, /legal/sla) */
 require('./routes/legal')({ get, dbm, lib, ui, saas, page, ctx, guard });
+/* domain publik: tautan acak BKU & Grup Iuran (tanpa login) */
+require('./routes/publik')({ get, dbm, lib, ui });
 
 /* ---------------- halaman status (suspend / fitur nonaktif) ---------------- */
 function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {
@@ -546,6 +602,10 @@ function portalSlugMap(force = false) {
     // "/nama-sekolah" saja → redirect ke portal tagihan siswa
     const baseKey = segs.base.toLowerCase();
     if (!map[baseKey]) map[baseKey] = { path: '/portal', tenantId: t.id, kind: 'siswa', key: baseKey, legacy: true, to: '/' + segs.base + '/' + segs.siswa };
+    /* halaman publik tambahan (transparansi BKU & Grup Iuran):
+       /<nama-sekolah>/publik/bku/<token> · /<nama-sekolah>/publik/iuran/<token> */
+    const pubKey = (segs.base + '/publik').toLowerCase();
+    if (!map[pubKey]) map[pubKey] = { path: '/publik', tenantId: t.id, kind: 'publik', key: pubKey, canonical: true };
   }
   portalMapCache = { at: Date.now(), map };
   return map;
@@ -596,16 +656,33 @@ function tenantPortalPath(tenant, kind) {
 }
 
 const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/login'];
+/**
+ * Rute yang DIKECUALIKAN dari proteksi CSRF: dipanggil server pihak ketiga
+ * (payment gateway) tanpa cookie sesi & tanpa halaman form, sehingga tidak
+ * mungkin membawa token CSRF. Aplikasi ini memakai cookie sesi SameSite=Lax,
+ * namun daftar ini tetap dipakai bila proteksi CSRF diaktifkan di reverse proxy.
+ */
+const CSRF_EXEMPT = new Set([
+  '/api/webhook/kasera', '/pay/webhook/kasera',
+  '/pay/callback', '/portal/pay/callback',
+  '/register/otp/kirim', '/register/otp/verifikasi', '/login'
+]);
+function isCsrfExempt(pathname) { return CSRF_EXEMPT.has(String(pathname || '')); }
+
 function isPublicPath(pathname) {
   if (['/login', '/register', '/daftar', '/logout'].includes(pathname)) return true;
   /* verifikasi OTP pendaftaran sekolah (tanpa sesi) */
   if (pathname === '/register/otp/kirim' || pathname === '/register/otp/verifikasi') return true;
-  /* callback payment gateway (diverifikasi lewat signature, tanpa sesi) */
-  if (pathname === '/pay/callback') return true;
+  /* callback & webhook payment gateway (diverifikasi lewat signature, tanpa sesi) */
+  if (pathname === '/pay/callback' || pathname === '/api/webhook/kasera' || pathname === '/pay/webhook/kasera') return true;
   // dokumen legalitas layanan dapat dibuka tanpa login
   if (['/syarat-ketentuan', '/sla'].includes(pathname)) return true;
   // halaman sukses pendaftaran (kredensial) — tanpa sesi, token sekali pakai
-  return pathname === '/daftar/sukses';
+  if (pathname === '/daftar/sukses') return true;
+  /* halaman publik bertoken (BKU & Grup Iuran) — keamanan dijaga oleh token acak,
+     dan tautan resmi selalu memakai awalan nama sekolah */
+  if (pathname.startsWith('/publik/')) return true;
+  return false;
 }
 
 /* ---------------- server ---------------- */
@@ -744,9 +821,10 @@ const server = http.createServer(async (req, res) => {
      Dipanggil server gateway tanpa sesi; keaslian diverifikasi signature/token. */
   if (pathname0 === '/pay/callback') {
     try {
-      const body = await readBody(req);
+      const raw = await readRawBody(req);
+      const body = bodyOfRaw(raw, req.headers['content-type']);
       const cfg = saas.gatewayCfg();
-      if (!saas.paygw.verifyCallback(cfg, body, req.headers || {})) {
+      if (!saas.paygw.verifyCallback(cfg, body, req.headers || {}, raw)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: false, error: 'Signature callback tidak valid.' }));
       }
@@ -770,13 +848,39 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  /* ---- WEBHOOK KASERA PAY (publik, tanpa sesi, diverifikasi tanda tangan) ----
+     POST /api/webhook/kasera
+       header : kasera-signature-v1 = HMAC-SHA256(body mentah, WEBHOOK SECRET)
+       event  : payment.paid → external_id → tagihan menjadi LUNAS
+     Rute ini DIKECUALIKAN dari CSRF (lihat CSRF_EXEMPT) karena dipanggil
+     server Kasera, bukan browser. Event dideduplikasi berdasarkan id event. */
+  if (pathname0 === '/api/webhook/kasera' || pathname0 === '/pay/webhook/kasera') {
+    const balas = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    if (req.method !== 'POST') return balas(405, { ok: false, error: 'Gunakan metode POST.' });
+    try {
+      const raw = await readRawBody(req);
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch (e) { body = {}; }
+      const tenantHint = Number(url.searchParams.get('t') || url.searchParams.get('tenant') || 0) || 0;
+      const hasil = await saas.kaseraHandleWebhook({ raw, body, headers: req.headers || {}, tenantHint });
+      return balas(hasil.code, hasil.out);
+    } catch (e) {
+      console.error('[kasera] gagal memproses webhook:', e);
+      return balas(500, { ok: false, error: 'Terjadi kesalahan saat memproses webhook: ' + e.message });
+    }
+  }
+
   /* ---- CALLBACK PEMBAYARAN IURAN PORTAL (QRIS per sekolah) ----
      order_id berbentuk IU<tenantId>-<acak>. Sekolah ditentukan dari query ?t=
      atau dari awalan order_id, lalu koneksi database sekolah tersebut dibuka. */
   if (pathname0 === '/portal/pay/callback') {
     const balas = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     try {
-      const body = await readBody(req);
+      const raw = await readRawBody(req);
+      const body = bodyOfRaw(raw, req.headers['content-type']);
       const parsedRaw = saas.paygw.parseCallback({ provider: 'generic' }, body);
       const oid = String(parsedRaw.order_id || body.order_id || '');
       const tQuery = Number(new URL(req.url, 'http://x').searchParams.get('t') || 0);
@@ -786,7 +890,7 @@ const server = http.createServer(async (req, res) => {
       const hasil = await dbm.runAsTenant(tenant, async () => {
         bayariuran.ensureTables(dbm);
         const conf = bayariuran.cfg(dbm, saas);
-        if (!saas.paygw.verifyCallback(conf, body, req.headers || {})) {
+        if (!saas.paygw.verifyCallback(conf, body, req.headers || {}, raw)) {
           return { code: 401, out: { ok: false, error: 'Signature callback tidak valid.' } };
         }
         const parsed = saas.paygw.parseCallback(conf, body);
