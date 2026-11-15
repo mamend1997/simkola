@@ -82,8 +82,8 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
     return Array.from(nav.querySelectorAll('a[data-nav-href]')).map(a => a.getAttribute('data-nav-href'));
   });
   const grupItems = urutan.filter(h => h === '/' || h.startsWith('/iuran') || h === '/spp');
-  ok('menu SPP sudah berpindah posisi (tidak lagi paling bawah)', urutan.indexOf('/spp') >= 0 &&
-    urutan.indexOf('/spp') < urutan.indexOf('/iuran/antrean'), urutan.slice(0, 14).join(','));
+  ok('menu SPP dapat diurutkan ke atas', urutan.indexOf('/spp') >= 0 &&
+    urutan.indexOf('/spp') < urutan.indexOf('/iuran/pengingat'), urutan.join(','));
 
   /* ---------- 3. beasiswa: state tidak reset saat filter kelas ---------- */
   const api = page.context().request;
@@ -93,6 +93,13 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
   await api.post(base + '/siswa/save', { form: { nama: 'Siswa Uji Dua', nisn: '9002', jenis_kelamin: 'P', status: 'aktif', kelas_nama: 'X Uji' } });
   await api.post(base + '/iuran/save', { form: { nama: 'SPP Uji', jenis: 'bulanan', mode_nominal: 'rata', nominal_rata: '90000', aktif: '1' } });
   await go('/beasiswa');
+  ok('rekap tampil sebelum data beasiswa', await page.evaluate(() =>
+    document.querySelector('.kpi-grid').getBoundingClientRect().top <
+    document.querySelector('[data-bea-list]').getBoundingClientRect().top));
+  ok('tombol Tambah Beasiswa berada pada daftar beasiswa',
+    await page.locator('[data-bea-list] [data-open="mBeasiswa"]').count() === 1);
+  await page.click('[data-bea-list] [data-open="mBeasiswa"]');
+  ok('form tambah dibuka dalam modal', await page.locator('#mBeasiswa.show').count() === 1);
   const beaForm = page.locator('#fBeasiswa');
   await beaForm.locator('input[name=nama]').fill('Beasiswa Uji UI');
   const grupBoxes = page.locator('input[data-bea-group]');
@@ -105,12 +112,13 @@ const ok = (n, c, e = '') => { results.push({ n, c: !!c }); if (!c) console.log(
     (await beaForm.locator('input[name=nama]').inputValue()) === 'Beasiswa Uji UI');
   const masihCentang = await grupBoxes.count() ? await grupBoxes.nth(0).isChecked() : false;
   ok('pilihan grup iuran TIDAK hilang setelah memilih kelas', masihCentang);
-  ok('urutan kartu: detail → siswa → rekap',
+  ok('urutan pratinjau modal: detail → siswa → rekap',
     (await page.locator('[data-bea-step="1"]').count()) === 1 &&
     (await page.evaluate(() => {
-      const a = document.querySelector('[data-bea-step="1"]').getBoundingClientRect().top;
-      const b = document.querySelector('[data-bea-step="2"]').getBoundingClientRect().top;
-      const c = document.querySelector('[data-bea-step="3"]').getBoundingClientRect().top;
+      const modal = document.querySelector('#mBeasiswa');
+      const a = modal.querySelector('[data-bea-step="1"]').getBoundingClientRect().top;
+      const b = modal.querySelector('[data-bea-step="2"]').getBoundingClientRect().top;
+      const c = modal.querySelector('[data-bea-step="3"]').getBoundingClientRect().top;
       return a < b && b < c;
     })));
   ok('tanpa overflow horizontal (beasiswa)', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));

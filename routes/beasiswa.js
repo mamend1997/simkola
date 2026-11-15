@@ -202,6 +202,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <a class="btn" href="${c.base}/beasiswa?ta=${esc(taId || '')}">${ui.icon('refresh')}Reset Form</a></div>` : ''}
     </div>`;
 
+    const beasiswaModal = canCreate || ed
+      ? ui.modal('mBeasiswa', {
+        title: ed ? 'Edit Beasiswa' : 'Tambah Beasiswa',
+        body: `${detailCard}${siswaCard}${rekapCard}`,
+        wide: true,
+        autoShow: !!ed,
+        autoKey: ed ? `edit-${ed.id}-${Date.now()}` : ''
+      })
+      : '';
+
     const content = `<div class="between mb-2">
       <div class="flex">
         <form method="get" action="${c.base}/beasiswa"><select name="ta" data-autosubmit>
@@ -219,12 +229,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Piutang SPP Setelah Beasiswa</div><div class="val" style="font-size:18px">${rupiah(nett)}</div><div class="meta">Sebelum beasiswa ${rupiah(st.bruto)}</div></div>
     </div>
 
-    ${canCreate || ed ? detailCard : `<div class="alert info mb-3">${ui.icon('info')}<div>Anda hanya dapat melihat data beasiswa (tanpa hak menambah/mengubah).</div></div>`}
-    ${canCreate || ed ? siswaCard : ''}
-    ${canCreate || ed ? rekapCard : ''}
+    ${!canCreate && !ed ? `<div class="alert info mb-3">${ui.icon('info')}<div>Anda hanya dapat melihat data beasiswa (tanpa hak menambah/mengubah).</div></div>` : ''}
 
-    <div class="card">
-      <div class="card-head"><div><h3>Data Beasiswa</h3><div class="sub">Nilai beasiswa mengurangi tunggakan iuran/SPP siswa penerima</div></div></div>
+    <div class="card" data-bea-list>
+      <div class="card-head"><div><h3>Data Beasiswa</h3><div class="sub">Nilai beasiswa mengurangi tunggakan iuran/SPP siswa penerima</div></div>
+        ${canCreate ? `<div class="toolbar"><button type="button" class="btn btn-primary" data-open="mBeasiswa">${ui.icon('plus')}Tambah Beasiswa</button></div>` : ''}</div>
       ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Nama Beasiswa</th><th>Grup Iuran</th><th>Bulan</th><th class="num">Potongan / Siswa</th><th class="num">Persen</th><th class="num">Penerima</th><th class="num">Total</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(b => {
           const n = Number(b.n_siswa || 0);
@@ -244,11 +253,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             ${c.can('beasiswa', 'delete') ? `<form method="post" action="${c.base}/beasiswa/delete" style="display:inline" data-confirm="Hapus beasiswa ${esc(b.nama)}?"><input type="hidden" name="id" value="${b.id}"><button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>` : ''}</td></tr>`;
         }).join('')}
       </tbody><tfoot><tr><td colspan="6">TOTAL BEASISWA AKTIF</td><td class="num">${rupiah(total)}</td><td colspan="2"></td></tr></tfoot></table></div>`
-        : ui.emptyState('Belum ada data beasiswa', 'Isi form beasiswa di atas, pilih grup &amp; siswa penerima, lalu simpan.')}
+        : ui.emptyState('Belum ada data beasiswa', canCreate ? 'Pilih Tambah Beasiswa untuk mengisi detail, menetapkan siswa, dan meninjau pratinjau.' : 'Belum ada beasiswa pada tahun pelajaran ini.')}
       <div class="alert info mt-2">${ui.icon('info')}<div><b>Cara kerja:</b> total potongan beasiswa aktif dikurangkan dari tunggakan iuran/SPP tahun ajaran terkait,
         sehingga angka Piutang SPP pada dashboard, Aset Riil, Rekonsiliasi Kas, dan Rekap SPP ikut menyesuaikan otomatis.</div></div>
     </div>
 
+    ${beasiswaModal}
     <script type="application/json" data-bea-nominal-map>${JSON.stringify(nominalMap).replace(/</g, '\\u003c')}</script>`;
 
     page(req, res, { title: 'Master Data Beasiswa', sub: 'Multi grup iuran & multi siswa penerima', active: 'beasiswa', content });
