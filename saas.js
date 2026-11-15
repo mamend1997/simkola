@@ -204,7 +204,7 @@ function settings() {
 }
 
 const DEFAULT_SETTINGS = {
-  saas_nama: 'SIMKEU',
+  saas_nama: 'SIMKOLA',
   saas_logo: '',
   saas_favicon: '',
   saas_tema: '#4F46E5',
@@ -221,7 +221,7 @@ const DEFAULT_SETTINGS = {
   daftar_otp_menit: '10',
   daftar_otp_jeda: '60',
   daftar_otp_demo: '1',
-  // nomor WhatsApp admin untuk paket berbayar (tombol di halaman pendaftaran)
+  // nomor WhatsApp admin untuk informasi layanan
   wa_admin_number: '',
   // pembayaran perpanjangan
   qris_image: '',
@@ -263,12 +263,21 @@ function initSettings() {
   } catch (e) { }
 }
 initSettings();
+S.transaction(() => {
+  const flag = S.prepare("SELECT v FROM saas_settings WHERE k='mig_brand_simkola_v1'").get();
+  if (flag) return;
+  const current = S.prepare("SELECT v FROM saas_settings WHERE k='saas_nama'").get();
+  if (current && ['SIMKEU', 'SIMKEU CLOUD'].includes(String(current.v || '').trim().toUpperCase())) {
+    S.prepare("UPDATE saas_settings SET v='SIMKOLA' WHERE k='saas_nama'").run();
+  }
+  S.prepare("INSERT INTO saas_settings (k,v) VALUES ('mig_brand_simkola_v1','1')").run();
+})();
 
 /* stempel waktu lama pada control plane (audit Super Admin, log backup, dsb.)
    digeser ke WIB sekali saja — tabel `sessions` dilewati (umurnya pendek). */
 try { dbm.migrateLegacyTimestamps(S, 'saas_settings'); } catch (e) { console.error('[tz-migrasi]', e.message); }
 
-function appName() { return String(get('saas_nama', 'SIMKEU Cloud') || 'SIMKEU Cloud').trim(); }
+function appName() { return String(get('saas_nama', 'SIMKOLA') || 'SIMKOLA').trim() || 'SIMKOLA'; }
 /**
  * Sub-judul aplikasi default (baris kecil di bawah nama aplikasi pada bilah samping).
  * Dipakai sekolah yang belum mengisi sub-judulnya sendiri di menu Tema & Branding.
@@ -816,7 +825,7 @@ function createTenant(input = {}) {
   const now = lib.nowStamp();
   // ---- default branding sistem (menu Branding Sistem Super Admin) ----
   // Sekolah baru otomatis memakai nama aplikasi & logo default sistem; admin sekolah tetap bisa mengubahnya.
-  const sysNama = String(get('saas_nama', '') || 'SIMKEU').trim() || 'SIMKEU';
+  const sysNama = String(get('saas_nama', '') || 'SIMKOLA').trim() || 'SIMKOLA';
   const sysLogo = String(get('saas_logo', '') || '').trim();
   const appNama = String(input.app_nama || '').trim() || sysNama;
   const logoAwal = String(input.logo || '').trim() || sysLogo;

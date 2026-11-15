@@ -91,7 +91,7 @@ function describe() {
     { key: 'KASERA_API_KEY', value: env('KASERA_API_KEY', '') ? mask(env('KASERA_API_KEY', '')) : '', fromEnv: !!env('KASERA_API_KEY', ''), secret: true, note: 'API key Kasera Pay (Authorization: Bearer)' },
     { key: 'KASERA_WEBHOOK_SECRET', value: env('KASERA_WEBHOOK_SECRET', '') ? mask(env('KASERA_WEBHOOK_SECRET', '')) : '', fromEnv: !!env('KASERA_WEBHOOK_SECRET', ''), secret: true, note: 'secret HMAC header kasera-signature-v1' },
     { key: 'KASERA_BASE_URL', value: env('KASERA_BASE_URL', ''), fromEnv: !!env('KASERA_BASE_URL', ''), secret: false, note: 'base URL API Kasera (bawaan https://pay.kasera.id)' },
-    { key: 'STORAGE_QUOTA_MB', value: env('STORAGE_QUOTA_MB', '1024'), fromEnv: process.env.STORAGE_QUOTA_MB !== undefined, secret: false, note: 'kuota penyimpanan (MB)' }
+    { key: 'STORAGE_QUOTA_MB', value: env('STORAGE_QUOTA_MB', '5120'), fromEnv: process.env.STORAGE_QUOTA_MB !== undefined, secret: false, note: 'indikator kuota database di dashboard (MB)' }
   ];
 }
 

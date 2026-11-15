@@ -5,7 +5,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, 
 
   function authShell({ base, content, sideTitle, sideDesc }) {
     // branding halaman login = branding layanan (bukan milik satu sekolah)
-    const appName = saas ? saas.appName() : 'SIMKEU Cloud';
+    const appName = saas ? saas.appName() : 'SIMKOLA';
     const appLogo = saas ? saas.appLogo() : '';
     const tema = saas ? saas.tema() : '#F97316';
     return `<!DOCTYPE html><html lang="id"><head>
@@ -110,6 +110,13 @@ ${ui.themeCss(tema)}
   });
 
   /* ---------------- PENDAFTARAN MANDIRI SEKOLAH BARU ---------------- */
+  function trialPackage() {
+    const packages = saas.packageRows();
+    const available = packages.filter(p => saas.packageSelfTrial(p) && saas.packageTrialDays(p) > 0);
+    const preferred = saas.defaultPackage();
+    return available.find(p => p.kode === preferred.kode) || available[0] || null;
+  }
+
   function registerForm(req, res, { err } = {}) {
     const base = req.BASE;
     const q = req.query;
@@ -122,39 +129,8 @@ ${ui.themeCss(tema)}
       : { ok: false };
     const otpVerified = !!otpCheck.ok;
     const otpToken = otpVerified ? otpTokenQ : '';
-    const defPkg = saas.defaultPackage();
-    const pkgs = saas.packageRows();
-    // paket terpilih: dari query (bila valid) → selain itu paket default bila bisa daftar mandiri
-    // → selain itu paket pertama yang boleh daftar mandiri (agar sekolah baru tetap bisa langsung daftar)
-    const qPkg = saas.packageByKode(v('paket'));
-    const selPkg = qPkg
-      || (saas.packageSelfTrial(defPkg) ? defPkg : (pkgs.filter(p => saas.packageSelfTrial(p))[0] || defPkg));
-    const rupiah = lib.rupiah;
-    const pkCards = pkgs.map(p => {
-      const selfTrial = saas.packageSelfTrial(p);
-      const feats = saas.packageFeatureLabels(p);
-      const trialHari = saas.packageTrialDays(p);
-      const wa = saas.waAdminLink(p);
-      return `<label class="pk-pick" data-pkg="${lib.esc(p.kode)}" data-self="${selfTrial ? 1 : 0}" data-wa="${lib.esc(wa || '')}">
-        <input type="radio" name="paket" value="${lib.esc(p.kode)}" ${p.kode === selPkg.kode ? 'checked' : ''}>
-        <div class="pk-card${p.kode === selPkg.kode ? ' on' : ''}">
-          <div class="between" style="gap:8px">
-            <div class="t-strong" style="font-size:15px">${lib.esc(p.nama)}</div>
-            ${selfTrial ? ui.badge('Daftar langsung', 'green') : ui.badge('Berbayar', 'amber')}
-          </div>
-          <div class="pk-price" style="margin-top:6px">${rupiah(p.harga_bulan)}<span class="t-sub" style="font-size:12px;font-weight:600"> / bulan</span></div>
-          <div class="small muted">${rupiah(p.harga_tahun)} / 12 bulan</div>
-          ${p.keterangan ? `<div class="small" style="margin-top:6px">${lib.esc(p.keterangan)}</div>` : ''}
-          <ul class="pk-feats">${feats.slice(0, 10).map(f => `<li>${lib.esc(f)}</li>`).join('')}${feats.length > 10 ? `<li>+ ${feats.length - 10} fitur lainnya</li>` : ''}</ul>
-          <div class="hint" style="margin-top:8px">${selfTrial
-        ? `Bisa langsung daftar & gratis ${trialHari} hari uji coba.`
-        : 'Aktivasi setelah pembayaran (hubungi admin via WhatsApp).'}</div>
-        </div>
-      </label>`;
-    }).join('');
-    const pkNoteDefault = selPkg && saas.packageSelfTrial(selPkg)
-      ? `Paket <b>${lib.esc(selPkg.nama)}</b>: langsung daftar dan dapat masa uji coba <b>${saas.packageTrialDays(selPkg)} hari</b> tanpa biaya.`
-      : `Paket <b>${lib.esc(selPkg ? selPkg.nama : defPkg.nama)}</b> berbayar — klik tombol WhatsApp untuk pembayaran &amp; aktivasi.`;
+    const trialPkg = trialPackage();
+    const trialHari = trialPkg ? saas.packageTrialDays(trialPkg) : 0;
     const cap = saas.captchaConfig();
     const capSite = cap.siteKey;
     let captchaHtml = '';
@@ -233,54 +209,15 @@ ${ui.themeCss(tema)}
           </select>
           <div class="hint">Preset tingkat kelas otomatis mengikuti jenjang ini.</div></div>
         <hr class="sep">
-        <div class="t-strong" style="margin-bottom:8px">Pilih Paket Langganan</div>
-        <div class="pk-grid">
-          ${pkCards}
-        </div>
-        <div class="alert info" id="pkNote">${ui.icon('info')}<div id="pkNoteBody">${pkNoteDefault}</div></div>
+        ${trialPkg
+        ? `<div class="alert info">${ui.icon('info')}<div>Mulai dengan uji coba gratis selama <b>${trialHari} hari</b>. Anda dapat memilih paket setelah masuk ke aplikasi.</div></div>`
+        : `<div class="alert warn">${ui.icon('alert')}<div>Pendaftaran uji coba sedang belum tersedia. Silakan hubungi pengelola layanan.</div></div>`}
         ${captchaHtml}
         <button class="btn btn-primary btn-block" type="submit" id="btnDaftar" data-otp-gate="${otpCfg.aktif && !otpVerified ? '1' : '0'}"
-          ${otpCfg.aktif && !otpVerified ? 'disabled' : ''}>Daftarkan Sekolah</button>
-        <a class="btn btn-success btn-block" id="btnWa" style="display:none;background:#25D366;border-color:#25D366;color:#fff"
-          target="_blank" rel="noopener" href="#">${ui.icon('send')}Langganan via WhatsApp Admin</a>
+          ${!trialPkg || (otpCfg.aktif && !otpVerified) ? 'disabled' : ''}>${trialPkg ? `Coba Gratis ${trialHari} Hari` : 'Uji Coba Belum Tersedia'}</button>
       </form>
       <p class="small muted" style="margin-top:16px;text-align:center">Sudah punya akun? <a href="${base}/login" style="color:var(--o-700);font-weight:700">Masuk</a></p>
       <script>
-      (function () {
-        var wraps = Array.prototype.slice.call(document.querySelectorAll('.pk-pick'));
-        var btnDaftar = document.getElementById('btnDaftar');
-        var btnWa = document.getElementById('btnWa');
-        var note = document.getElementById('pkNoteBody');
-        function sync() {
-          var sel = wraps.filter(function (w) { return w.querySelector('input').checked; })[0] || wraps[0];
-          if (!sel) return;
-          wraps.forEach(function (w) { w.querySelector('.pk-card').classList.toggle('on', w === sel); });
-          var self = sel.getAttribute('data-self') === '1';
-          var wa = sel.getAttribute('data-wa') || '';
-          if (btnDaftar) btnDaftar.style.display = self ? '' : 'none';
-          if (btnWa) {
-            btnWa.style.display = self ? 'none' : '';
-            if (wa) { btnWa.setAttribute('href', wa); btnWa.removeAttribute('aria-disabled'); }
-            else { btnWa.setAttribute('href', '#'); btnWa.setAttribute('aria-disabled', 'true'); }
-          }
-          if (note) {
-            var nm = sel.querySelector('.pk-card .t-strong').textContent.trim();
-            note.innerHTML = self
-              ? 'Paket <b>' + nm + '</b>: langsung daftar dan dapat masa uji coba tanpa biaya.'
-              : (wa ? 'Paket <b>' + nm + '</b> berbayar — klik tombol WhatsApp untuk pembayaran &amp; aktivasi.'
-                    : 'Paket <b>' + nm + '</b> berbayar. Nomor admin belum diatur — hubungi sekolah lain yang sudah aktif.');
-          }
-        }
-        wraps.forEach(function (w) {
-          w.querySelector('input').addEventListener('change', sync);
-          w.addEventListener('click', function (e) {
-            if (e.target && e.target.tagName === 'INPUT') return;
-            w.querySelector('input').checked = true;
-            sync();
-          });
-        });
-        sync();
-      })();
       ${otpCfg.aktif ? `
       (function () {
         var OTP_BASE = ${JSON.stringify(base)};
@@ -478,15 +415,10 @@ ${ui.themeCss(tema)}
       if (!otp.ok) return fail(otp.err || 'Nomor WhatsApp belum terverifikasi.');
     }
 
-    // ---- 3b) PAKET: hanya paket "daftar mandiri" yang boleh langsung mendaftar.
-    // Paket berbayar diarahkan ke WhatsApp admin (sesuai harga paket) tanpa membuat tenant.
-    const pkgSel = saas.packageByKode(String(b.paket || '').trim()) || saas.defaultPackage();
-    if (!saas.packageSelfTrial(pkgSel)) {
-      const wa = saas.waAdminLink(pkgSel, { sekolah: nama, admin: String(b.admin_nama || '').trim() });
-      saas.regLog(ip, email, 'wa');
-      if (wa) return res.redirect(wa);
-      return fail(`Paket ${pkgSel.nama} berbayar. Nomor WhatsApp admin belum diatur — hubungi pengelola layanan untuk aktivasi.`);
-    }
+    // Pendaftaran publik selalu memakai paket uji coba yang diizinkan, bukan nilai dari browser.
+    const pkgSel = trialPackage();
+    if (!pkgSel) return fail('Pendaftaran uji coba belum tersedia. Silakan hubungi pengelola layanan.');
+    const trialHari = saas.packageTrialDays(pkgSel);
 
     // ---- 4) batas per jam (setelah validasi dasar) ----
     const hit = saas.regHit(ip, email, 'sukses');
@@ -502,7 +434,7 @@ ${ui.themeCss(tema)}
         admin_nama: String(b.admin_nama || 'Administrator Sekolah').trim(),
         alamat: String(b.alamat || ''), kepala: String(b.kepala || ''),
         contact_telp: String(b.telp || ''), jenjang,
-        paket: b.paket, trial: true
+        paket: pkgSel.kode, days: trialHari, trial: true
       });
       /* ================================================================
          SETELAH DAFTAR: langsung masuk sebagai Admin Sekolah yang baru dibuat.

@@ -2036,10 +2036,10 @@ function dbSizeBytes() {
   }
   return total;
 }
-/** kuota penyimpanan paket (default 1 GB; Pro 10 GB) — bisa dioverride lewat env STORAGE_QUOTA_MB */
+/** kuota indikator penyimpanan database di dashboard (default 5 GB) — bisa dioverride lewat env STORAGE_QUOTA_MB */
 function storageQuotaBytes() {
-  const mb = Number(process.env.STORAGE_QUOTA_MB || 1024);
-  return (mb > 0 ? mb : 1024) * 1024 * 1024;
+  const mb = Number(process.env.STORAGE_QUOTA_MB || 5120);
+  return (mb > 0 ? mb : 5120) * 1024 * 1024;
 }
 function storageInfo() {
   const used = dbSizeBytes();

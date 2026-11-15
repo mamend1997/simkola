@@ -4,8 +4,8 @@ process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* =====================================================================
    TES RONDE 25
    1. Kontrol fitur per PAKET di menu Paket Langganan
-   2. Pendaftaran: kartu paket (judul + daftar fitur), Basic = daftar + trial 7 hari,
-      paket berbayar = arahkan ke WhatsApp admin (nomor diatur Super Admin)
+   2. Pendaftaran: tanpa pilihan paket, tombol uji coba mengikuti durasi trial,
+      pilihan paket dari klien diabaikan dan branding menjadi judul tab default
    3. Kartu Info Layanan di dashboard dibuat ringkas (svc-mini)
    4. Auto-backup dipindah ke menu Auto Backup + riwayat bisa dihapus
    ===================================================================== */
@@ -109,31 +109,32 @@ const ck = sc => String(sc || '').split(';')[0];
     JSON.stringify({ ekskul: stdMap.ekskul, audit: stdMap.audit }));
   ok('trial per paket tersimpan', Number(stdAfter.trial_hari) === 10);
 
-  /* ================= 2. PENDAFTARAN: KARTU PAKET & WHATSAPP ================= */
+  /* ================= 2. PENDAFTARAN: UJI COBA TANPA PILIHAN PAKET ================= */
   r = await req('GET', '/register');
-  ok('halaman pendaftaran memuat kartu paket', (r.text.match(/class="pk-pick"/g) || []).length >= 3);
-  ok('kartu paket memuat judul & daftar fitur', /pk-feats/.test(r.text) && /Data Pegawai|BKU|Transaksi Keuangan/.test(r.text));
-  ok('kartu Basic ditandai daftar langsung', /data-self="1"/.test(r.text));
-  ok('kartu berbayar punya tombol WhatsApp', /id="btnWa"/.test(r.text) && /Langganan via WhatsApp/.test(r.text));
-  ok('tidak ada lagi dropdown paket', !/name="paket"><option/.test(r.text));
+  ok('judul tab default memakai branding SIMKOLA', /<title>SIMKOLA<\/title>/.test(r.text));
+  ok('pilihan paket tidak ditampilkan', !/class="pk-pick|class="pk-grid|name="paket"/.test(r.text));
+  ok('hanya tombol coba gratis 7 hari', /id="btnDaftar"[^>]*>Coba Gratis 7 Hari<\/button>/.test(r.text)
+    && !/id="btnWa"/.test(r.text));
 
-  // atur nomor WA admin
-  r = await req('POST', '/super-admin/branding', { saas_nama: 'SIMKEU', trial_hari: '7', wa_admin_number: '0812-3456-7890', captcha_provider: 'off', reg_limit_per_hour: '50', reg_block_hours: '24' }, { cookie: cSa });
-  ok('nomor WhatsApp admin disimpan', r.status === 303 && String(sdb.prepare("SELECT v FROM saas_settings WHERE k='wa_admin_number'").get().v).includes('0812'));
-  ok('nomor dinormalkan ke format internasional', saas.waAdminNumber() === '6281234567890', saas.waAdminNumber());
+  r = await req('POST', '/super-admin/branding', { saas_nama: 'SIMKEU', trial_hari: '14', captcha_provider: 'off', reg_limit_per_hour: '50', reg_block_hours: '24' }, { cookie: cSa });
+  ok('simpan branding & trial 14 hari', r.status === 303 && /ok=/.test(r.loc));
   r = await req('GET', '/register');
-  ok('kartu berbayar memuat tautan wa.me', /wa\.me\/6281234567890/.test(r.text));
+  ok('judul tab mengikuti nama branding yang disimpan', /<title>SIMKEU<\/title>/.test(r.text));
+  ok('label tombol mengikuti masa trial 14 hari', /id="btnDaftar"[^>]*>Coba Gratis 14 Hari<\/button>/.test(r.text));
+  await req('POST', '/super-admin/branding', { trial_hari: '7' }, { cookie: cSa });
 
-  // pilih paket berbayar → harus ke WhatsApp, tenant TIDAK dibuat
+  // nilai paket berbayar yang dikirim manual tidak boleh mengubah paket uji coba
   const regBase = {
-    nama: 'SMA Berbayar Uji', admin_nama: 'Admin Bayar', admin_email: 'admin@sma-bayar.sch.id',
+    nama: 'SMA Pilihan Diabaikan Uji', admin_nama: 'Admin Uji', admin_email: 'admin@sma-bayar.sch.id',
     admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SMA/MA', telp: '081200002501'
   };
   const otpBerbayar = await otpDaftar(base, regBase.telp);
   r = await req('POST', '/register', Object.assign({}, regBase, { paket: 'standard', otp_token: otpBerbayar }));
-  ok('paket berbayar diarahkan ke WhatsApp admin', r.status === 303 && /wa\.me\/6281234567890/.test(r.loc), r.loc);
-  ok('pesan WhatsApp memuat nama paket & harga', decodeURIComponent(r.loc).includes('Standard') && decodeURIComponent(r.loc).includes('150.000'), decodeURIComponent(r.loc).slice(0, 160));
-  ok('tenant TIDAK dibuat untuk paket berbayar', !sdb.prepare("SELECT id FROM tenants WHERE nama='SMA Berbayar Uji'").get());
+  ok('paket dari klien diabaikan dan pendaftaran tetap memakai trial', r.status === 303 && /welcome=1/.test(r.loc), r.loc);
+  const tPilihanDiabaikan = sdb.prepare("SELECT * FROM tenants WHERE nama='SMA Pilihan Diabaikan Uji'").get();
+  ok('paket dan trial terpilih berasal dari konfigurasi server',
+    !!tPilihanDiabaikan && tPilihanDiabaikan.paket === 'basic' && tPilihanDiabaikan.expires_at === addDays(today, 7),
+    tPilihanDiabaikan && `${tPilihanDiabaikan.paket} ${tPilihanDiabaikan.expires_at}`);
 
   // pilih Basic → langsung daftar + trial 7 hari
   const telpTrial = '081200002502';
