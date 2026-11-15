@@ -109,7 +109,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       title: 'Import Data Pegawai (Excel / CSV)',
       wide: true,
       body: `<form method="post" action="${c.base}/pegawai/import" id="fImport">
-        <div class="alert info">${ui.icon('info')}<div><b>Format kolom:</b> <code>NAMA | JABATAN/TUGAS | TIPE | NO REKENING | PEMILIK REKENING</code><br>
+        <div class="alert info">${ui.icon('info')}<div><b>Format kolom:</b> <code>NAMA | JABATAN/TUGAS | TIPE | TANGGAL LAHIR | WHATSAPP | NO REKENING | PEMILIK REKENING</code><br>
           Kolom <b>TIPE</b> berisi <code>guru</code> atau <code>tu</code>. Baris judul akan dicari otomatis. Gunakan tombol <b>Template Excel</b> untuk contoh format.</div></div>
         <div class="field"><label>Berkas (.xlsx / .csv, maks 10 MB)</label>
           <input type="hidden" name="file_b64" id="file_b64">
@@ -135,7 +135,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       ['Rina Wulandari, M.Pd.', 'Wakasek Kurikulum', 'guru', '1987-09-03', '081234567891', '1234567891', 'Rina Wulandari'],
       ['Ahmad Subekti', 'Staf Tata Usaha', 'tu', '1990-01-20', '081234567892', '1234567892', 'Ahmad Subekti']
     ];
-    res.file(xlsxBuffer('Pegawai', rows, [30, 28, 10, 20, 26]), 'template-import-pegawai.xlsx',
+    res.file(xlsxBuffer('Pegawai', rows, [30, 28, 10, 16, 16, 22, 24]), 'template-import-pegawai.xlsx',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   });
 

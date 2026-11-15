@@ -449,6 +449,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       body: `<form method="post" action="${c.base}/piutang/import" id="fImport">
         <div class="alert info">${ui.icon('info')}<div><b>Format kolom:</b> <code>[TANGGAL] | [NAMA] | [MASUK] | [KELUAR] | [SALDO]</code><br>
           <b>KELUAR</b> = pinjaman yang diberikan ke pegawai (menambah piutang), <b>MASUK</b> = pembayaran/cicilan (mengurangi piutang).
+          Kolom <b>SALDO</b> hanya referensi dan tidak diimpor (saldo dihitung dari MASUK/KELUAR).
           Import bersifat <b>historis</b>: tidak membuat transaksi kas — catat pembayaran baru lewat tombol Cicilan agar kas ikut bertambah.</div></div>
         <div class="field"><label>Berkas (.xlsx / .csv, maks 10 MB)</label>
           <input type="hidden" name="file_b64" id="file_b64">

@@ -198,7 +198,9 @@ const prevPeriode = (p) => { const [y, m] = p.split('-').map(Number); return m =
   const isi = [
     ['Zulkifli', 'Guru', 'guru', 20, 0, 50000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 10000, ''],
     ['Ahmad Fauzi', 'Guru', 'guru', 22, 1, 50000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, ''],
-    ['Marno', 'TU', 'tu', 24, 0, 45000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, '']
+    ['Marno', 'TU', 'tu', 24, 0, 45000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, ''],
+    ['Contoh Nama Guru', 'Guru Mata Pelajaran', 'guru', 24, 0, 25000, 150000, 50000,
+      0, 0, 0, 4, 6, 20000, 15000, 10000, 24, 0, 'Baris contoh — silakan dihapus']
   ];
   const buf = require('../lib').xlsxBuffer('Leger', [head, ...isi], [26, 20, 8, 11, 10, 12, 13, 12, 10, 18, 12, 16, 14, 12, 11, 11, 14, 10, 20]);
   db.prepare('DELETE FROM payroll WHERE periode=?').run(periodeNow);
@@ -209,6 +211,7 @@ const prevPeriode = (p) => { const [y, m] = p.split('-').map(Number); return m =
   ok('import leger berhasil', r.status === 303 && /ok=/.test(r.loc), r.loc.slice(0, 140));
   const imported = db.prepare('SELECT nama, urutan, jam_sertifikasi, pot_sertifikasi FROM payroll WHERE periode=? ORDER BY urutan, id').all(periodeNow);
   ok('urutan import = urutan fisik Excel', imported.map(x => x.nama).join('|') === 'Zulkifli|Ahmad Fauzi|Marno', imported.map(x => x.nama).join('|'));
+  ok('baris contoh template payroll dilewati', !imported.some(x => x.nama === 'Contoh Nama Guru'));
   ok('urutan tersimpan menaik sesuai berkas', imported.map(x => Number(x.urutan)).join(',') === '1,2,3', imported.map(x => x.urutan).join(','));
   ok('kolom JAM SERTIFIKASI terbaca sebagai jam', imported.map(x => Number(x.jam_sertifikasi)).join(',') === '5,6,7', imported.map(x => x.jam_sertifikasi).join(','));
   ok('nominal sertifikasi = jam × tarif', imported.map(x => Number(x.pot_sertifikasi)).join(',') === '62500,75000,87500', imported.map(x => x.pot_sertifikasi).join(','));

@@ -223,6 +223,10 @@ const today = new Date().toISOString().slice(0, 10);
   r = await req('GET', `/piutang-lainnya/bayar/${anyBayar.id}/bukti`);
   ok('bukti pelunasan', r.status === 200 && r.text.includes('PELUNASAN'));
 
+  const contohCSV = `TANGGAL,NAMA,NOMINAL,KETERANGAN,MASUK\n${today},Contoh Nama,500000,Piutang dana talangan — baris contoh silakan dihapus,`;
+  await req('POST', '/piutang-lainnya/import', { kategori_id: kat.id, file_b64: Buffer.from(contohCSV).toString('base64'), file_name: 'template.csv' });
+  ok('baris contoh template piutang lainnya dilewati', db.prepare("SELECT COUNT(*) c FROM piutang_lainnya WHERE nama='Contoh Nama'").get().c === 0);
+
   const csv = 'TANGGAL,NAMA,NOMINAL,KETERANGAN,MASUK\n' + today + ',Dodi Import,300000,Import uji,\n' + today + ',Dodi Import,150000,Import uji,50000\n';
   r = await req('POST', '/piutang-lainnya/import', { kategori_id: kat.id, file_b64: Buffer.from(csv).toString('base64'), file_name: 'uji.csv' });
   ok('import CSV', r.status === 303 && decodeURIComponent(r.loc).includes('Import selesai'));

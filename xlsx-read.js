@@ -186,7 +186,7 @@ function readCsv(text) {
       const s = v.trim();
       if (s === '') return null;
       const n = Number(s.replace(/\./g, '').replace(',', '.')) ;
-      if (/^-?[\d.,]+$/.test(s) && !Number.isNaN(n)) return { v: n, n };
+      if (/^-?[\d.,]+$/.test(s) && !/^0\d+$/.test(s) && !Number.isNaN(n)) return { v: n, n };
       return { v: s, n: null };
     });
   });

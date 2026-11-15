@@ -229,7 +229,7 @@ function outstanding(dbm, siswaId) {
     if (Number(t.sisa || 0) <= 0) continue;
     if (t.grup_jenis === 'bulanan') {
       const pays = dbm.iuranPaysMap([t.id]).get(t.id) || [];
-      const months = dbm.iuranMonthDetail(t.grup_id, pays);
+      const months = dbm.iuranMonthDetail(t.grup_id, pays, t.tingkat || dbm.siswaTingkat(t.siswa_id, t.tahun_ajaran_id));
       const list = months.length ? months : [{ bulan: null, sisa: Number(t.sisa || 0) }];
       for (const m of list) {
         if (Number(m.sisa || 0) <= 0) continue;

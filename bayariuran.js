@@ -127,7 +127,7 @@ function itemsOf(dbm, siswaId, opts = {}) {
     const grouped = t.grup_jenis === 'bulanan';
     if (grouped) {
       const pays = dbm.iuranPaysMap([t.id]).get(t.id) || [];
-      const months = dbm.iuranMonthDetail(t.grup_id, pays);
+      const months = dbm.iuranMonthDetail(t.grup_id, pays, t.tingkat || dbm.siswaTingkat(t.siswa_id, t.tahun_ajaran_id));
       if (!months.length) continue;
       for (const m of months) {
         const key = t.id + ':' + m.bulan;

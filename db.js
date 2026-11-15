@@ -2191,7 +2191,8 @@ function sppSeries(taId) {
   const pays = iuranPaysMap(tags.map(t => t.id));
   const acc = new Map();
   for (const t of tags) {
-    for (const m of iuranMonthDetail(t.grup_id, pays.get(t.id) || [])) {
+    const tingkat = t.tingkat || siswaTingkat(t.siswa_id, t.tahun_ajaran_id);
+    for (const m of iuranMonthDetail(t.grup_id, pays.get(t.id) || [], tingkat)) {
       const cur = acc.get(m.bulan) || { tagihan: 0, dibayar: 0 };
       cur.tagihan += Number(m.tagihan || 0);
       cur.dibayar += Number(m.dibayar || 0);
@@ -3990,8 +3991,8 @@ function siswaTingkat(siswaId, taId) {
  * @param {Array<{jumlah:number,bulan:(number|null)}>} payments
  * @returns {Array<{bulan:number,tagihan:number,dibayar:number,sisa:number,status:string}>}
  */
-function iuranMonthDetail(grupId, payments) {
-  const nom = iuranNominalMap(grupId);
+function iuranMonthDetail(grupId, payments, tingkat) {
+  const nom = iuranNominalMap(grupId, tingkat);
   const months = BULAN_TA.filter(b => Number(nom[b] || 0) > 0)
     .map(b => ({ bulan: b, tagihan: Number(nom[b] || 0), dibayar: 0 }));
   if (!months.length) return [];

@@ -151,7 +151,8 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
         for (const t of tags) {
           const pays = payMap.get(t.id) || [];
           const isMonthly = t.grup_jenis === 'bulanan';
-          const months = isMonthly ? dbm.iuranMonthDetail(t.grup_id, pays) : [];
+          const tingkat = t.tingkat || dbm.siswaTingkat(t.siswa_id, t.tahun_ajaran_id);
+          const months = isMonthly ? dbm.iuranMonthDetail(t.grup_id, pays, tingkat) : [];
           if (months.length) {
             for (const m of months) {
               rows.push({

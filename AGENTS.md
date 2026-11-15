@@ -443,7 +443,7 @@ node dev-tests/ui-round17.js  # 23 cek Playwright: matriks 12 bulan, 2 tombol an
 
 ### 1. Portal publik tagihan siswa: rincian bulanan (Juli … Juni)
 - `routes/portal.js` `renderResults()` tidak lagi menampilkan grup bulanan sebagai satu baris. Setiap grup `jenis='bulanan'` **dijabarkan satu baris per bulan**: `SPP - Juli 2026`, `SPP - Agustus 2026`, … `SPP - Juni 2027` (label memakai `tanggal_mulai` tahun ajaran grup).
-- Sumber angka = helper bersama **`dbm.iuranMonthDetail(grupId, payments)`** (dipindah ke `db.js`; dulu duplikat di `routes/iuran.js`) + `dbm.iuranPaysMap(ids)`. `routes/iuran.js` `monthlyDetail()` kini hanya mendelegasikan ke helper itu → angka portal, detail siswa, dan matriks bulanan **selalu identik**.
+- Sumber angka = helper bersama **`dbm.iuranMonthDetail(grupId, payments, tingkat?)`** (dipindah ke `db.js`; dulu duplikat di `routes/iuran.js`) + `dbm.iuranPaysMap(ids)`. `tingkat` memilih nominal khusus tingkat dengan fallback ke tarif default; pemanggil tagihan harus meneruskan tingkat efektif pada TA tagihan.
 - Bulan tanpa nominal (tidak ditagihkan) tidak dirender; badge `Lunas` / `Sebagian` per bulan; baris `tr.month-line` + CSS `.portal-bill`.
 - Subtotal tahun pelajaran dihitung dari **baris tampilan** (bukan dari `iuran_tagihan` mentah) supaya tidak dobel-hitung.
 - Catatan orang tua: form tetap; riwayat 3 catatan terakhir siswa ditampilkan di atas form.

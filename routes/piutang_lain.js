@@ -628,6 +628,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         const cells = sheet.rows[i] || [];
         if (!cells.length) continue;
         const nama = X.cellText(ambil(cells, 'nama')).trim();
+        const keterangan = X.cellText(ambil(cells, 'keterangan')).trim();
+        if (/^contoh\b/i.test(nama) || /baris contoh/i.test(keterangan)) { dilewati++; continue; }
         const nominal = X.parseMoneyCell(ambil(cells, 'nominal'));
         if (!nama) { dilewati++; continue; }
         if (/^(NAMA|JUMLAH|TOTAL)\b/i.test(nama)) { dilewati++; continue; }

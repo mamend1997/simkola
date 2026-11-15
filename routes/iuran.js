@@ -113,7 +113,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!grup || grup.jenis !== 'bulanan') return [];
     const list = payments || db.prepare(`SELECT jumlah, potongan, bulan FROM iuran_bayar
       WHERE tagihan_id=? AND status<>'void' ORDER BY tanggal, id`).all(tagihan.id);
-    return dbm.iuranMonthDetail(grup.id, list)
+    const tingkat = tagihan.tingkat || dbm.siswaTingkat(tagihan.siswa_id, tagihan.tahun_ajaran_id);
+    return dbm.iuranMonthDetail(grup.id, list, tingkat)
       .map(m => ({ ...m, label: bulanLabel(m.bulan) }));
   }
   /** tagihan satu bulan tertentu (dipakai form bayar per bulan) */
@@ -2634,8 +2635,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     for (const g of groups) {
       if (g.jenis === 'bulanan') {
         const nom = dbm.iuranNominalMap(g.id);
+        const months = new Set(db.prepare('SELECT DISTINCT bulan FROM iuran_nominal WHERE grup_id=? AND nominal>0')
+          .all(g.id).map(r => Number(r.bulan)));
         for (const b of BULAN_TA) {
-          if (!(Number(nom[b] || 0) > 0)) continue;
+          if (!months.has(b)) continue;
           cols.push({ grup: g, bulan: b, label: `${g.nama}-${bulanLabel(b)}`, nominal: Number(nom[b] || 0) });
         }
       } else {
@@ -2652,6 +2655,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!p) return null;
     const exact = groups.find(g => norm(g.nama) === p);
     if (exact) return { grup: exact, bulan: null };
+    for (const g of groups) {
+      if (g.jenis !== 'bulanan') continue;
+      const base = norm(g.nama);
+      if (!p.startsWith(base)) continue;
+      const suffix = p.slice(base.length).replace(/^[\s\-–—/]+/, '').trim();
+      const mi = BULAN.findIndex(b => norm(b) === suffix);
+      if (mi >= 0) return { grup: g, bulan: mi + 1 };
+    }
     const parts = p.split(/\s*[-–—/]\s*/).filter(Boolean);
     if (parts.length > 1) {
       const lastTok = parts[parts.length - 1];
@@ -2736,6 +2747,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const errors = [];
     const items = [];
     const groupByName = {};
+    const siswaImportRows = dbm.siswaList({ taId, status: ['aktif', 'nonaktif'] });
     for (const g of groups) groupByName[String(g.nama).toUpperCase()] = g;
 
     for (let i = header.row + 1; i < header.sh.rows.length; i++) {
@@ -2748,8 +2760,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       const lineNo = i + 1;
       const raw = [nama, kelas].join(' | ');
       if (!nama) { errors.push({ row: lineNo, msg: 'Nama siswa kosong.', raw }); continue; }
-      const cand = db.prepare(`SELECT s.*, k.nama kelas_nama FROM siswa s LEFT JOIN kelas k ON k.id=s.kelas_id
-        WHERE lower(s.nama)=lower(?) AND s.status IN ('aktif','nonaktif')`).all(nama);
+      const cand = siswaImportRows
+        .filter(s => String(s.nama || '').toLowerCase() === nama.toLowerCase());
       if (!cand.length) { errors.push({ row: lineNo, msg: `Siswa "${nama}" tidak ditemukan pada database.`, raw }); continue; }
       const sis = cand.find(s => String(s.kelas_nama || '').toLowerCase() === kelas.toLowerCase()) || (cand.length === 1 ? cand[0] : null);
       if (!sis) { errors.push({ row: lineNo, msg: `Kelas "${kelas}" tidak cocok untuk siswa ${nama} (ada ${cand.length} siswa bernama sama).`, raw }); continue; }

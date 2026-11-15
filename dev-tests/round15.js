@@ -118,6 +118,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const bayarImport = db.prepare("SELECT * FROM iuran_bayar WHERE siswa_id=? AND keterangan LIKE 'Import%'").get(sBiasa.id);
   ok('import menyimpan bulan pembayaran', bayarImport && Number(bayarImport.bulan) === 7, bayarImport && bayarImport.bulan);
 
+  await req('POST', '/iuran/save', { nama: 'SPP Tingkat Uji', jenis: 'bulanan', mode_nominal: 'rata', nominal_rata: '0', aktif: '1' });
+  const gTingkat = db.prepare("SELECT * FROM iuran_grup WHERE nama='SPP Tingkat Uji'").get();
+  const tarifTingkat = { nominal_tingkat: 'X' };
+  for (const b of [7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6]) tarifTingkat['bulan_' + b] = b === 7 ? '125000' : '0';
+  await req('POST', `/iuran/grup/${gTingkat.id}/nominal`, tarifTingkat);
+  await req('POST', `/iuran/grup/${gTingkat.id}/tetapkan`, { kelas_id: kX.id, siswa_id: [sBiasa.id] });
+  r = await req('GET', `/iuran/import/template?ta=${ta.id}`, null, { binary: true });
+  const tierTemplate = X.readXlsx(r.buf)[0];
+  const tierHeader = tierTemplate.rows.find(row => (row || []).some(c => /SPP Tingkat Uji-Juli TANGGAL BAYAR/.test(X.cellText(c))));
+  ok('template bulanan menyertakan tarif khusus tingkat', !!tierHeader);
+  const csvTier = [
+    'NO;NAMA;KELAS;SPP Tingkat Uji-Juli TANGGAL BAYAR;SPP Tingkat Uji-Juli NOMINAL BAYAR',
+    `1;${sBiasa.nama};${kX.nama};02/07/${today.slice(0, 4)};125000`
+  ].join('\n');
+  r = await req('POST', '/iuran/import', {
+    ta: ta.id,
+    file_b64: 'data:text/csv;base64,' + Buffer.from(csvTier, 'utf8').toString('base64')
+  });
+  const bayarTingkat = db.prepare(`SELECT b.* FROM iuran_bayar b JOIN iuran_tagihan t ON t.id=b.tagihan_id
+    WHERE t.grup_id=? AND b.siswa_id=?`).get(gTingkat.id, sBiasa.id);
+  ok('import menerima pembayaran tarif khusus tingkat', r.status === 303 && bayarTingkat && Number(bayarTingkat.jumlah) === 125000,
+    bayarTingkat && bayarTingkat.jumlah);
+
   /* ================= 6. beasiswa: auto lunas & terkunci ================= */
   const nominalGrup = db.prepare('SELECT COALESCE(SUM(nominal),0) s FROM iuran_nominal WHERE grup_id=?').get(gSpp.id).s;
   const payload = JSON.stringify({

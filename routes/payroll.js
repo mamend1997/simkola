@@ -497,6 +497,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
       if (!cells.length) continue;
       const teks = cells.map(normLabel).join(' ');
       const nama = X.cellText(ambil(cells, 'nama')).trim();
+      const catatan = X.cellText(ambil(cells, 'catatan'));
+      if (/baris contoh/i.test(catatan)) continue;
       const adaAngka = header.map.honor_jam !== undefined ? X.parseMoneyCell(ambil(cells, 'honor_jam')) : 0;
       if (/JUMLAH|TOTAL|TANDA TANGAN/.test(teks) && !nama) continue;
       if (!nama && !adaAngka) continue;
@@ -519,6 +521,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         if (!cells.length) continue;
         const teks = cells.map(normLabel).join(' ');
         if (/JUMLAH|TOTAL|TANDA TANGAN/.test(teks) && !X.cellText(ambil(cells, 'nama')).trim()) continue;
+        if (/baris contoh/i.test(X.cellText(ambil(cells, 'catatan')))) { dilewati++; continue; }
         const nama = X.cellText(ambil(cells, 'nama')).trim();
         if (!nama) { dilewati++; continue; }
         if (/^(NAMA|JUMLAH|TOTAL)\b/i.test(nama)) { dilewati++; continue; }
