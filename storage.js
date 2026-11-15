@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 
-const ROOT = path.join(__dirname, 'storage');
+const ROOT = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'storage'));
 const MEDIA_BASE = String(process.env.APP_MEDIA_URL || 'http://127.0.0.1:4310').replace(/\/+$/, '');
 const JENIS = new Set(['nota', 'bukti', 'foto', 'panduan', 'tiket', 'logo', 'lain']);
 

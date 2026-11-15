@@ -1,0 +1,10 @@
+.git/
+.env
+.env.*
+!.env.example
+node_modules/
+data/
+storage/
+.tmp*
+*.sqlite*
+*.db*
