@@ -1,4 +1,6 @@
 node_modules/
+*.sqlite
+*.db
 *.sqlite-wal
 *.sqlite-shm
 # multi-tenant: control plane SaaS + database tiap sekolah
