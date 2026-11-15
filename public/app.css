@@ -1176,6 +1176,42 @@ html[data-mode="dark"] .welcome-card{background:#1E2A22;border-color:#2F6B45}
 html[data-mode="dark"] .cred-cell{background:#241F35;border-color:#3A3450}
 html[data-mode="dark"] .welcome-ico{background:#14432B;color:#4ADE80}
 
+/* ============ penyiapan awal & panduan sorot SIMKOLA ============ */
+.setup-card{border-color:var(--o-200);background:linear-gradient(145deg,#fff 0%,var(--o-50) 100%)}
+.setup-progress{display:flex;align-items:center;gap:12px;margin:0 0 14px}
+.setup-progress .prog{flex:1}
+.setup-progress>b{min-width:42px;text-align:right;color:var(--o-700);font-size:13px}
+.setup-list{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+.setup-row{display:flex;align-items:center;gap:11px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.setup-num{width:28px;height:28px;flex:0 0 28px;border-radius:50%;display:grid;place-items:center;background:var(--o-50);color:var(--o-700);font-weight:800;font-size:12px}
+.setup-num svg{width:16px;height:16px}
+.setup-row.is-done .setup-num{background:#DCFCE7;color:#15803D}
+.setup-copy{min-width:0;display:grid;gap:2px;flex:1}
+.setup-copy>b{font-size:13px}
+.setup-copy>span{font-size:11.5px;color:var(--muted);line-height:1.4}
+.setup-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.setup-welcome{text-align:center;max-width:540px;margin:auto}
+.setup-welcome-icon{width:54px;height:54px;margin:0 auto 12px;border-radius:17px;background:var(--o-50);color:var(--o-600);display:grid;place-items:center}
+.setup-welcome-icon svg{width:27px;height:27px}
+.setup-welcome p{font-size:15px;line-height:1.6;font-weight:650;margin:0 0 9px}
+.guide-highlight{position:relative!important;z-index:1002!important;outline:3px solid #FB923C!important;outline-offset:3px!important;box-shadow:0 0 0 9999px rgba(15,23,42,.58)!important;border-radius:8px!important;animation:guidePulse 1.4s ease-in-out infinite alternate}
+@keyframes guidePulse{from{outline-color:#FB923C}to{outline-color:#FDE047}}
+.guide-tip{position:fixed;z-index:1100;width:min(360px,calc(100vw - 24px));padding:16px;border:1px solid var(--o-200);border-radius:16px;background:#fff;color:var(--ink);box-shadow:0 20px 60px rgba(15,23,42,.28)}
+.guide-tip-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.guide-tip-kicker{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--o-700);margin-bottom:4px}
+.guide-tip h3{font-size:15px;margin:0}
+.guide-tip p{font-size:12.5px;line-height:1.55;margin:9px 0 14px}
+.guide-tip-actions{display:flex;justify-content:flex-end;gap:8px}
+html[data-mode="dark"] .setup-card{background:linear-gradient(145deg,#201B2E 0%,#2A2032 100%);border-color:#5A3D58}
+html[data-mode="dark"] .setup-row,html[data-mode="dark"] .guide-tip{background:#241F35;border-color:#514568;color:var(--ink)}
+html[data-mode="dark"] .setup-welcome-icon{background:#3A2946;color:#FDBA74}
+@media(max-width:620px){
+  .setup-row{align-items:flex-start;flex-wrap:wrap}
+  .setup-copy{flex:1 1 calc(100% - 44px)}
+  .setup-actions{width:100%;margin-left:39px;justify-content:flex-start}
+  .guide-tip{padding:13px}
+}
+
 /* halaman sukses pendaftaran (auth) */
 .cred-box{border:1px solid var(--line);border-radius:16px;overflow:hidden;margin:4px 0 6px}
 .cred-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:#fff;border-bottom:1px solid var(--line)}

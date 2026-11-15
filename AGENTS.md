@@ -1831,3 +1831,18 @@ node dev-tests/ui-round48.js  # 37 cek Playwright: buka/filter/pilih/ketik manua
 Regresi lulus: `regress` (23), `newfeat` (89), `round17` (59), `round42` (84), `round43` (92), `round34` (105),
 `round33` (81), `round26` (92), `round9` (109), `round46` (112), `round38` (36), `ui-round17` (24),
 `ui-round34` (55), `ui-round46` (46).
+
+---
+
+## Onboarding SIMKOLA — checklist penyiapan & panduan kontekstual
+
+- Dashboard menghitung progres dari master identitas, tahun ajaran aktif, kelas, siswa aktif, pegawai aktif,
+  BKU, kode rekening aktif, dan grup iuran. Langkah yang tidak diizinkan role/paket tidak ditampilkan.
+- Akun yang dibuat dalam 14 hari terakhir atau sekolah yang masih memiliki tahapan kosong melihat kartu
+  **Penyiapan Awal Sekolah**. Progres diturunkan dari data aktual saat dashboard dimuat; tidak menyimpan
+  status selesai yang dapat berbeda dari master data.
+- Modal sambutan tampil sekali per pengguna per browser (localStorage; ruang lingkup tenant), serta dapat
+  dibuka kembali dari kartu. Semua jalur tutup/skip dapat digunakan tanpa menyelesaikan checklist.
+- Tombol **Pandu Saya** membuka halaman tahap dengan parameter `panduan`; `public/app.js` menampilkan
+  penjelasan kontekstual dan menyorot aksi awal yang tersedia. Implementasi panduan bersifat lokal/berbasis
+  aturan, tidak mengirim data sekolah ke layanan model AI eksternal.

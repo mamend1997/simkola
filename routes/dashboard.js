@@ -281,6 +281,52 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       </div>`;
     })() : '';
 
+    /* ---------- checklist penyiapan awal sekolah ---------- */
+    const setupFeatureKeys = new Set(saas && saas.enabledKeys ? saas.enabledKeys(req.tenant) : []);
+    const studentCount = taId ? Number(db.prepare(`SELECT COUNT(DISTINCT s.id) c FROM siswa s
+      LEFT JOIN siswa_penempatan p ON p.siswa_id=s.id AND p.tahun_ajaran_id=?
+      WHERE s.status='aktif' AND (p.id IS NOT NULL OR s.tahun_ajaran_id=?)`).get(taId, taId).c) : 0;
+    const setupSteps = [
+      { id: 'identitas', module: 'identitas', title: 'Identitas sekolah', detail: 'Lengkapi nama dan alamat sekolah untuk kop laporan, kuitansi, dan portal.', href: '/sekolah', done: !!(String(c.settings.sekolah_nama || '').trim() && String(c.settings.sekolah_alamat || '').trim()) },
+      { id: 'tahun-ajaran', module: 'tahun_ajaran', title: 'Tahun ajaran', detail: 'Tentukan tahun ajaran aktif agar data kelas, siswa, dan iuran tercatat pada periode yang tepat.', href: '/tahun-ajaran', done: !!taId },
+      { id: 'kelas', module: 'kelas', title: 'Data kelas', detail: 'Buat kelas untuk tahun ajaran aktif sebelum menempatkan siswa.', href: '/kelas', done: !!(taId && db.prepare('SELECT COUNT(*) c FROM kelas WHERE tahun_ajaran_id=?').get(taId).c) },
+      { id: 'siswa', module: 'siswa', title: 'Data siswa', detail: 'Tambahkan atau impor siswa aktif agar penempatan kelas dan tagihan dapat dikelola.', href: '/siswa', done: studentCount > 0 },
+      { id: 'pegawai', module: 'pegawai', title: 'Data pegawai', detail: 'Masukkan pegawai untuk menyiapkan leger honor dan pengelolaan kepegawaian.', href: '/pegawai', done: !!db.prepare('SELECT COUNT(*) c FROM pegawai WHERE aktif=1').get().c },
+      { id: 'bku', module: 'bku', title: 'Buku Kas Umum (BKU)', detail: 'Pastikan tersedia minimal satu buku kas aktif pada tahun ajaran ini.', href: '/bku', done: !!(taId && dbm.allBku(taId).length) },
+      { id: 'coa', module: 'coa', title: 'Kode rekening', detail: 'Periksa kode rekening aktif untuk mengelompokkan transaksi pemasukan dan pengeluaran.', href: '/coa', done: !!db.prepare('SELECT COUNT(*) c FROM coa WHERE aktif=1').get().c },
+      { id: 'iuran', module: 'iuran', title: 'Grup iuran', detail: 'Buat grup iuran dan nominalnya bila sekolah mengelola tagihan siswa melalui SIMKOLA.', href: '/iuran', done: !!(taId && db.prepare('SELECT COUNT(*) c FROM iuran_grup WHERE tahun_ajaran_id=?').get(taId).c) }
+    ].filter(x => c.can(x.module, 'view') && setupFeatureKeys.has(x.module));
+    const setupDone = setupSteps.filter(x => x.done).length;
+    const setupTotal = setupSteps.length;
+    const setupPct = setupTotal ? Math.round(setupDone * 100 / setupTotal) : 100;
+    const accountRow = db.prepare('SELECT created_at FROM users WHERE id=?').get(req.user.id);
+    const accountIsNew = !!(accountRow && accountRow.created_at
+      && String(accountRow.created_at) >= dbm.dateOffsetISO(-14) + ' 00:00:00');
+    const setupPending = setupSteps.some(x => !x.done);
+    const showSetup = setupTotal > 0 && (setupPending || accountIsNew);
+    const setupCard = showSetup ? `<section class="card setup-card mb-3" id="setupAwal" data-setup-user="${esc(req.user.id)}">
+      <div class="card-head">
+        <div><h3>Penyiapan Awal Sekolah</h3>
+          <div class="sub">${setupDone} dari ${setupTotal} tahapan selesai · ${setupPct === 100 ? 'SIMKOLA siap digunakan.' : 'Selesaikan tahapan berikut agar sistem siap digunakan.'}</div>
+        </div>
+        ${setupPending || accountIsNew ? `<button type="button" class="btn btn-sm" data-setup-welcome>${ui.icon('play')}Buka Panduan</button>` : ui.badge('Siap digunakan', 'green')}
+      </div>
+      <div class="setup-progress" role="progressbar" aria-label="Progres penyiapan sekolah" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${setupPct}">
+        <div class="prog ${setupPct === 100 ? 'g' : ''}"><i style="width:${setupPct}%"></i></div>
+        <b>${setupPct}%</b>
+      </div>
+      <ol class="setup-list">
+        ${setupSteps.map((step, index) => `<li class="setup-row${step.done ? ' is-done' : ''}">
+          <span class="setup-num" aria-hidden="true">${step.done ? ui.icon('check') : index + 1}</span>
+          <div class="setup-copy"><b>${esc(step.title)}</b><span>${step.done ? 'Selesai' : esc(step.detail)}</span></div>
+          <div class="setup-actions">
+            ${step.done ? ui.badge('Selesai', 'green') : `<a class="btn btn-sm" href="${c.base}${step.href}">Buka</a>
+              <a class="btn btn-sm btn-primary" href="${c.base}${step.href}?panduan=${encodeURIComponent(step.id)}">${ui.icon('info')}Pandu Saya</a>`}
+          </div>
+        </li>`).join('')}
+      </ol>
+    </section>` : '';
+
     /* ---------- sambutan pendaftaran: kredensial login ditampilkan SEKALI ---------- */
     const welcome = (() => {
       try { return req.sessionRow ? saas.takeWelcome(req.sessionRow.token) : null; } catch (e) { return null; }
@@ -320,8 +366,20 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       </div>
     </div>` : '';
 
+    const setupWelcome = showSetup && (setupPending || accountIsNew) ? ui.modal('mWelcomeSetup', {
+      title: 'Selamat datang di SIMKOLA!',
+      body: `<div class="setup-welcome">
+        <div class="setup-welcome-icon">${ui.icon('school')}</div>
+        <p>${setupPending ? 'Selamat datang di SIMKOLA! Agar sistem dapat berjalan optimal, mari kita lakukan penyiapan data awal sekolah melalui tahapan berikut.' : 'Selamat datang di SIMKOLA! Penyiapan data awal sekolah sudah lengkap dan sistem siap digunakan.'}</p>
+        <div class="small muted">${setupDone} dari ${setupTotal} tahapan telah selesai. Progres tersimpan otomatis berdasarkan data sekolah.</div>
+      </div>`,
+      footer: `<button type="button" class="btn" data-onboarding-dismiss>Lewati Tutorial</button>
+        <button type="button" class="btn btn-primary" data-onboarding-start>${setupPending ? 'Mulai Penyiapan' : 'Lanjut ke Dashboard'}</button>`
+    }).replace('id="mWelcomeSetup"', `id="mWelcomeSetup" data-onboarding-welcome data-onboarding-user="${esc((req.tenant && req.tenant.id ? req.tenant.id : 'tenant') + ':' + req.user.id)}"`) : '';
+
     const content = `
     ${welcomeCard}
+    ${setupCard}
     <div class="card hero mb-3" style="padding:26px 28px">
       <div style="position:relative;z-index:1" class="between">
         <div>
@@ -503,6 +561,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       footer: `<button class="btn" type="button" data-close="mApprovalAlert" data-dismiss-auto>Nanti</button>
         <a class="btn btn-primary" href="${c.base}/approval">${ui.icon('check')}Tinjau &amp; Setujui</a>`
     }) : ''}
+    ${setupWelcome}
     <script>window.__FIN_DATA = ${JSON.stringify(finData).replace(/</g, '\\u003c')};</script>
     `;
     page(req, res, { title: 'Dashboard', sub: `Ringkasan eksekutif keuangan · ${ta ? 'TA ' + ta.nama : 'belum ada tahun ajaran'}`, active: 'dashboard', content });

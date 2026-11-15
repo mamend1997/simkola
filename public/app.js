@@ -363,6 +363,144 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') $$('.modal.show').forEach(close); });
   window.__openModal = open;
 
+  /* ===== sambutan penyiapan sekolah + panduan kontekstual dengan sorot aksi ===== */
+  (function setupGuide() {
+    const welcome = document.querySelector('[data-onboarding-welcome]');
+    const setup = document.getElementById('setupAwal');
+    const userId = welcome ? (welcome.dataset.onboardingUser || 'user') : (setup ? setup.dataset.setupUser : 'user');
+    const dismissedKey = 'simkeu:setup-welcome-dismissed:' + userId;
+    const dismissed = () => {
+      try { localStorage.setItem(dismissedKey, '1'); } catch (e) { }
+    };
+    const dismissWelcome = () => {
+      if (!welcome) return;
+      dismissed();
+      close(welcome);
+    };
+    if (welcome) {
+      welcome.querySelectorAll('[data-onboarding-dismiss]').forEach(btn => btn.addEventListener('click', dismissWelcome));
+      const closeBtn = welcome.querySelector('.xbtn');
+      if (closeBtn) closeBtn.addEventListener('click', dismissWelcome);
+      welcome.addEventListener('click', e => { if (e.target === welcome) dismissWelcome(); });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && welcome.classList.contains('show')) dismissWelcome();
+      }, true);
+      welcome.querySelectorAll('[data-onboarding-start]').forEach(btn => btn.addEventListener('click', () => {
+        dismissWelcome();
+        if (setup) setup.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }));
+      const reopen = document.querySelector('[data-setup-welcome]');
+      if (reopen) reopen.addEventListener('click', () => open(welcome.id));
+      let opened = false;
+      const tryOpen = () => {
+        if (opened) return;
+        try { if (localStorage.getItem(dismissedKey) === '1') return; } catch (e) { }
+        if (document.querySelector('.modal.show')) { setTimeout(tryOpen, 350); return; }
+        opened = true;
+        open(welcome.id);
+      };
+      tryOpen();
+    }
+
+    const guides = {
+      identitas: { n: 1, title: 'Lengkapi identitas sekolah', text: 'Isi nama dan alamat sekolah. Identitas ini digunakan pada laporan, kuitansi, dan halaman portal publik.' },
+      'tahun-ajaran': { n: 2, title: 'Atur tahun ajaran', text: 'Pilih tahun ajaran yang sedang berjalan. Data kelas, siswa, dan iuran akan mengikuti tahun ajaran yang dipilih.' },
+      kelas: { n: 3, title: 'Siapkan data kelas', text: 'Tambahkan kelas untuk tahun ajaran aktif. Setelah itu, siswa dapat ditempatkan pada kelas yang sesuai.' },
+      siswa: { n: 4, title: 'Masukkan data siswa', text: 'Tambahkan siswa satu per satu atau gunakan fitur impor. Pastikan penempatan tahun ajaran dan kelasnya benar.' },
+      pegawai: { n: 5, title: 'Masukkan data pegawai', text: 'Lengkapi master pegawai untuk menggunakan payroll, honor, serta fitur terkait kepegawaian.' },
+      bku: { n: 6, title: 'Siapkan buku kas', text: 'Periksa atau tambahkan BKU aktif pada tahun ajaran ini sebelum mencatat transaksi.' },
+      coa: { n: 7, title: 'Periksa kode rekening', text: 'Kode rekening membantu mengelompokkan transaksi dan menyusun laporan keuangan.' },
+      iuran: { n: 8, title: 'Buat grup iuran', text: 'Tambahkan grup dan nominal iuran bila sekolah akan mengelola tagihan siswa di SIMKOLA.' }
+    };
+    const params = new URLSearchParams(location.search);
+    const guideId = params.get('panduan');
+    const guide = guides[guideId];
+    if (!guide) return;
+    params.delete('panduan');
+    const query = params.toString();
+    history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash);
+
+    const targetSelectors = [
+      '[data-guide-target]',
+      'main .card-head a.btn-primary',
+      'main .card-head button.btn-primary',
+      'main a.btn-primary',
+      'main button.btn-primary',
+      'main form button[type="submit"]',
+      'main form input[type="submit"]'
+    ];
+    let target = null;
+    for (const selector of targetSelectors) {
+      target = Array.from(document.querySelectorAll(selector)).find(el =>
+        !el.disabled && el.getClientRects().length && !el.closest('.modal:not(.show)'));
+      if (target) break;
+    }
+
+    const shade = document.createElement('div');
+    shade.className = 'guide-tip';
+    shade.setAttribute('role', 'dialog');
+    shade.setAttribute('aria-label', guide.title);
+    const head = document.createElement('div');
+    head.className = 'guide-tip-head';
+    const titleWrap = document.createElement('div');
+    const kicker = document.createElement('div');
+    kicker.className = 'guide-tip-kicker';
+    kicker.textContent = 'Asisten Panduan SIMKOLA · Langkah ' + guide.n;
+    const title = document.createElement('h3');
+    title.textContent = guide.title;
+    titleWrap.append(kicker, title);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'xbtn';
+    x.setAttribute('aria-label', 'Lewati tutorial');
+    x.textContent = '×';
+    head.append(titleWrap, x);
+    const description = document.createElement('p');
+    description.textContent = guide.text + (target ? ' Elemen yang disorot adalah aksi awal yang dapat Anda gunakan.' : ' Cari tombol tambah atau simpan pada halaman ini untuk melanjutkan.');
+    const actions = document.createElement('div');
+    actions.className = 'guide-tip-actions';
+    const skip = document.createElement('button');
+    skip.type = 'button';
+    skip.className = 'btn btn-sm';
+    skip.textContent = 'Lewati Tutorial';
+    actions.appendChild(skip);
+    shade.append(head, description, actions);
+    document.body.appendChild(shade);
+    if (target) {
+      target.classList.add('guide-highlight');
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    const place = () => {
+      const rect = target ? target.getBoundingClientRect() : null;
+      const width = shade.offsetWidth;
+      const height = shade.offsetHeight;
+      let left = rect ? rect.left : 12;
+      let top = rect ? rect.bottom + 14 : 90;
+      left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
+      if (top + height > window.innerHeight - 12) top = rect ? rect.top - height - 14 : 90;
+      top = Math.max(12, Math.min(top, window.innerHeight - height - 12));
+      shade.style.left = left + 'px';
+      shade.style.top = top + 'px';
+    };
+    const finish = () => {
+      if (target) target.classList.remove('guide-highlight');
+      shade.remove();
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      document.removeEventListener('keydown', onKey, true);
+      if (target) target.removeEventListener('click', finish, true);
+    };
+    const onKey = e => { if (e.key === 'Escape') finish(); };
+    skip.addEventListener('click', finish);
+    x.addEventListener('click', finish);
+    if (target) target.addEventListener('click', finish, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    place();
+  })();
+
   /* confirm */
   $$('form[data-confirm]').forEach(f => f.addEventListener('submit', e => { if (!confirm(f.dataset.confirm)) e.preventDefault(); }));
 
