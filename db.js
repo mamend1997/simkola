@@ -322,6 +322,12 @@ CREATE TABLE IF NOT EXISTS rekon_saldo (
   id INTEGER PRIMARY KEY AUTOINCREMENT, bku_id INTEGER NOT NULL, tanggal TEXT,
   saldo_koran REAL NOT NULL DEFAULT 0, catatan TEXT, created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS rekon_saldo_global (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, tahun_ajaran_id INTEGER, tanggal TEXT,
+  saldo_koran REAL NOT NULL DEFAULT 0, catatan TEXT, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rekon_saldo_global_ta_date
+  ON rekon_saldo_global(tahun_ajaran_id, tanggal, id);
 CREATE TABLE IF NOT EXISTS koreksi (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   transaksi_id INTEGER, bku_id INTEGER,
@@ -4542,6 +4548,7 @@ function resetTaData(taId, user, opts = {}) {
       grab('piutang_lain', 'SELECT * FROM piutang_lain WHERE tahun_ajaran_id=?', [id]);
       grab('piutang_lainnya', 'SELECT * FROM piutang_lainnya WHERE tahun_ajaran_id=?', [id]);
       grab('beasiswa', 'SELECT * FROM beasiswa WHERE tahun_ajaran_id=?', [id]);
+      grab('rekon_saldo_global', 'SELECT * FROM rekon_saldo_global WHERE tahun_ajaran_id=?', [id]);
       const dir = path.dirname(DB_PATH);
       const stamp = nowStamp().replace(/[-: ]/g, '').slice(0, 14);
       backupFile = path.join(dir, `reset-ta-${id}-${stamp}.json`);
@@ -4561,6 +4568,7 @@ function resetTaData(taId, user, opts = {}) {
     del('koreksi', `DELETE FROM koreksi WHERE bku_id IN (${qB})`, argB);
     del('bku_import', `DELETE FROM bku_import WHERE bku_id IN (${qB})`, argB);
     del('rekon_saldo', `DELETE FROM rekon_saldo WHERE bku_id IN (${qB})`, argB);
+    del('rekon_saldo_global', 'DELETE FROM rekon_saldo_global WHERE tahun_ajaran_id=?', [id]);
     del('payroll', 'DELETE FROM payroll WHERE substr(periode,1,7) BETWEEN ? AND ?', [pFrom, pTo]);
     del('payroll_post', 'DELETE FROM payroll_post WHERE substr(periode,1,7) BETWEEN ? AND ?', [pFrom, pTo]);
     del('payroll_draft', 'DELETE FROM payroll_draft WHERE substr(periode,1,7) BETWEEN ? AND ?', [pFrom, pTo]);

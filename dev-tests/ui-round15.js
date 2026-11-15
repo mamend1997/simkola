@@ -62,6 +62,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.goto(base + '/transaksi', { waitUntil: 'load' });
   const totalRows = await page.locator('#rekapTrx tbody tr').count();
   ok('tabel transaksi terisi', totalRows >= 3, String(totalRows));
+  const filterAboveHistory = await page.locator('form.filter-eq').evaluate(form => {
+    const table = form.closest('.card')?.querySelector('#rekapTrx');
+    return !!table && !!(form.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  ok('filter transaksi berada tepat di atas riwayat dalam kartu yang sama', filterAboveHistory);
   await page.fill('input[name=q]', 'Kertas');
   await sleep(400);
   const vis = await page.locator('#rekapTrx tbody tr:visible').count();

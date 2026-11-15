@@ -224,18 +224,24 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   const rej = one('SELECT * FROM iuran_checkout WHERE id=?', coReject.id);
   ok('pembayaran ditolak beserta alasan', rej.status === 'ditolak' && /tidak terbaca/.test(rej.alasan || ''), rej.status);
 
-  /* ================= 7b. REKONSILIASI: satu tabel untuk SEMUA BKU ================= */
+  /* ================= 7b. REKONSILIASI: satu input saldo gabungan ================= */
   r = await req('GET', '/rekon');
   ok('rekon: kartu input saldo koran memuat SEMUA BKU', /Input Saldo Rekening Koran — Semua BKU/.test(r.text));
   ok('rekon: tidak ada lagi dropdown BKU khusus saldo koran', !/name="bku_id" required>\s*<option/.test(r.text.split('Input Saldo Rekening Koran')[1] || ''));
-  ok('rekon: setiap BKU punya kolom saldo koran', (r.text.match(/name="saldo_\d+"/g) || []).length >= 3, String((r.text.match(/name="saldo_\d+"/g) || []).length));
-  const bkuAll = all("SELECT id FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY urutan", ta.id);
-  const saldoForm = {};
-  bkuAll.slice(0, 3).forEach((b, i) => { saldoForm['saldo_' + b.id] = String(100000 * (i + 1)); });
-  r = await req('POST', '/rekon/saldo-masal', { tanggal: '2026-01-31', catatan: 'Uji semua BKU', ...saldoForm });
-  ok('rekon: simpan saldo koran banyak BKU sekaligus', r.status === 303 && /ok=/.test(r.loc), r.status + ' ' + r.loc);
-  const nKoran = one("SELECT COUNT(*) c FROM rekon_saldo WHERE catatan='Uji semua BKU'").c;
-  ok('rekon: semua baris tersimpan', nKoran === 3, 'tersimpan=' + nKoran);
+  ok('rekon: hanya ada satu input saldo koran gabungan', /name="saldo_koran"/.test(r.text) && !/name="saldo_\d+"/.test(r.text));
+  const bkuLegacy = all("SELECT id FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY urutan LIMIT 3", ta.id);
+  bkuLegacy.forEach((b, i) => sql(
+    'INSERT INTO rekon_saldo (bku_id,tanggal,saldo_koran,catatan,created_at) VALUES (?,?,?,?,?)',
+    b.id, '2026-01-30', 100000 * (i + 1), 'Saldo lama per BKU', '2026-01-30 12:00:00'
+  ));
+  r = await req('GET', '/rekon');
+  ok('rekon: saldo lama per BKU menjadi nilai awal total gabungan', /name="saldo_koran"[^>]*value="600\.000"/.test(r.text));
+  r = await req('POST', '/rekon/saldo-masal', { tanggal: '2026-01-31', catatan: 'Uji saldo gabungan', saldo_koran: '600000' });
+  ok('rekon: simpan satu saldo koran gabungan', r.status === 303 && /ok=/.test(r.loc), r.status + ' ' + r.loc);
+  const saldoGlobal = one("SELECT * FROM rekon_saldo_global WHERE catatan='Uji saldo gabungan'");
+  ok('rekon: satu baris tersimpan untuk seluruh BKU', !!saldoGlobal && Number(saldoGlobal.saldo_koran) === 600000 && saldoGlobal.tahun_ajaran_id === ta.id);
+  const rAgain = await req('GET', '/rekon');
+  ok('rekon: input menampilkan kembali saldo gabungan tersimpan', /name="saldo_koran"[^>]*value="600\.000"/.test(rAgain.text));
 
   /* ================= 7c. TUTUP BKU MASAL: Opsi A & Opsi B ================= */
   r = await req('GET', '/tutup-bulanan?periode=2025-12&semua=1');

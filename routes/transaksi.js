@@ -254,23 +254,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       </div></div></div>` : ''}
     <div class="between mb-2">
       <div class="toolbar">
-        <form method="get" action="${c.base}/transaksi" class="flex flex-wrap filter-eq" style="gap:8px">
-          <input name="q" value="${esc(kw)}" placeholder="Cari uraian / no. bukti / nama">
-          <select name="bku"><option value="">Semua BKU</option>${bkuAll.map(b => `<option value="${b.id}" ${String(fBku) === String(b.id) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}</select>
-          <select name="status"><option value="">Semua Status</option>
-            <option value="posted" ${fStatus === 'posted' ? 'selected' : ''}>Terposting</option>
-            <option value="pending" ${fStatus === 'pending' ? 'selected' : ''}>Menunggu Approval</option>
-            <option value="rejected" ${fStatus === 'rejected' ? 'selected' : ''}>Ditolak</option></select>
-          <select name="sort" title="Urutan transaksi">
-            <option value="desc" ${sort === 'desc' ? 'selected' : ''}>Terbaru ke Terlama</option>
-            <option value="asc" ${sort === 'asc' ? 'selected' : ''}>Terlama ke Terbaru</option>
-          </select>
-          <input type="date" name="from" value="${esc(from)}" title="Dari tanggal">
-          <input type="date" name="to" value="${esc(to)}" title="Sampai tanggal">
-          <button class="btn">${ui.icon('search')}Filter</button>
-        </form>
-      </div>
-      <div class="toolbar">
         ${c.can('transaksi', 'create') ? `<button class="btn btn-blue btn-lg" data-open="mTrxIn" ${bukuss.length ? '' : 'disabled'}>${ui.icon('plus')}Pemasukan</button>
         <button class="btn btn-orange btn-lg" data-open="mTrxOut" ${bukuss.length ? '' : 'disabled'}>${ui.icon('plus')}Pengeluaran</button>
         <button class="btn" data-open="mPindah" ${bukuss.length > 1 ? '' : 'disabled'}>${ui.icon('refresh')}Pindah Saldo</button>` : ''}
@@ -289,6 +272,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     <div class="card">
       <div class="card-head"><div><h3>Rekap Transaksi Real-time</h3><div class="sub">Satu halaman berurutan di dalam kotak bergulir · edit inline lewat ikon pensil. Data terbaru tampil paling atas.</div></div>
         <div class="toolbar"><span class="small muted">${rows.length} transaksi ditampilkan (satu halaman)</span></div></div>
+      <form method="get" action="${c.base}/transaksi" class="flex flex-wrap filter-eq mb-2" style="gap:8px">
+        <input name="q" value="${esc(kw)}" placeholder="Cari uraian / no. bukti / nama">
+        <select name="bku"><option value="">Semua BKU</option>${bkuAll.map(b => `<option value="${b.id}" ${String(fBku) === String(b.id) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}</select>
+        <select name="status"><option value="">Semua Status</option>
+          <option value="posted" ${fStatus === 'posted' ? 'selected' : ''}>Terposting</option>
+          <option value="pending" ${fStatus === 'pending' ? 'selected' : ''}>Menunggu Approval</option>
+          <option value="rejected" ${fStatus === 'rejected' ? 'selected' : ''}>Ditolak</option></select>
+        <select name="sort" title="Urutan transaksi">
+          <option value="desc" ${sort === 'desc' ? 'selected' : ''}>Terbaru ke Terlama</option>
+          <option value="asc" ${sort === 'asc' ? 'selected' : ''}>Terlama ke Terbaru</option>
+        </select>
+        <input type="date" name="from" value="${esc(from)}" title="Dari tanggal">
+        <input type="date" name="to" value="${esc(to)}" title="Sampai tanggal">
+        <button class="btn">${ui.icon('search')}Filter</button>
+      </form>
       ${inlineTrx ? inlineFormHtml(inlineTrx) : ''}
       ${rows.length ? `<form id="fTrxMass" method="post" action="${c.base}/transaksi/hapus-masal">
         <input type="hidden" name="back" value="${esc(backPath)}">

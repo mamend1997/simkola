@@ -550,6 +550,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl, up
         FROM bku_periode p LEFT JOIN bku b ON b.id=p.bku_id WHERE b.id IS NULL`
     },
     {
+      key: 'rekon_saldo_global_yatim', tabel: 'rekon_saldo_global', label: 'Saldo koran gabungan tanpa tahun pelajaran',
+      why: 'Riwayat saldo rekening koran gabungan tidak lagi terkait dengan tahun pelajaran yang tersedia.',
+      sql: `SELECT r.id, r.tanggal, r.saldo_koran nominal, COALESCE(r.catatan,'') uraian, ''
+        FROM rekon_saldo_global r LEFT JOIN tahun_ajaran ta ON ta.id=r.tahun_ajaran_id
+        WHERE r.tahun_ajaran_id IS NOT NULL AND ta.id IS NULL`
+    },
+    {
       key: 'beasiswa_ta_ghost', tabel: 'beasiswa', label: 'Beasiswa menempel TA yang sudah dihapus',
       why: 'Potongan beasiswa tetap mengurangi tunggakan global walau TAnya tidak ada.',
       sql: `SELECT b.id, b.created_at tanggal, b.nominal, (b.nama || ' — TA ' || b.tahun_ajaran_id) uraian, ''
