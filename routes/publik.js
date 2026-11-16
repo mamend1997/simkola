@@ -259,8 +259,11 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     const path = `${req.BASE}/${slugBase}/publik/kelas/${encodeURIComponent(kelas.public_token)}`;
     const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
     const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
-    const domain = saas.normalizeDomain(req.tenant && req.tenant.custom_domain);
-    const customOrigin = domain && String(req.tenant.custom_domain_status || '').toUpperCase() === 'VERIFIED'
+    const tenant = req.tenant || {};
+    const portalSettings = settings();
+    const domain = saas.normalizeDomain(tenant.custom_domain || portalSettings.custom_domain);
+    const domainStatus = String(tenant.custom_domain_status || portalSettings.custom_domain_status || '').toUpperCase();
+    const customOrigin = domain && domainStatus === 'VERIFIED'
       ? `https://${domain}` : '';
     const origin = customOrigin || String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (host ? `${proto}://${host}` : '');
     const svg = await QRCode.toString(origin + path, { type: 'svg', width: 220, margin: 2, errorCorrectionLevel: 'Q' });
@@ -424,7 +427,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <th style="width:42px">No</th><th>Nama Siswa</th><th>NISN</th><th class="num">Total Tagihan</th>
         <th class="num">Sudah Dibayar</th><th class="num">Potongan</th><th class="num">Sisa Tagihan</th></tr></thead><tbody>
         ${visible.map((s, i) => `<tr><td class="num">${i + 1}</td>
-          <td><a class="t-strong kelas-public-siswa" href="${esc(selectedHref(s))}">${esc(s.nama)}<span class="kelas-public-eye">${ui.icon('eye')}</span></a></td><td class="mono t-sub">${esc(s.nisn || '-')}</td>
+          <td><a class="t-strong" href="${esc(selectedHref(s))}">${esc(s.nama)}</a></td><td class="mono t-sub">${esc(s.nisn || '-')}</td>
           <td class="num">${rupiah(s.nominal)}</td><td class="num" style="color:var(--green)">${rupiah(s.dibayar)}</td>
           <td class="num">${rupiah(s.potongan)}</td><td class="num" style="color:${s.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(s.sisa)}</td></tr>`).join('')}
       </tbody><tfoot><tr><td colspan="3">GRAND TOTAL${q ? ' (HASIL FILTER)' : ''}</td><td class="num">${rupiah(grand.tagihan)}</td>

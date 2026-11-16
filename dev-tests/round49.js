@@ -127,7 +127,9 @@ async function req(method, url, body, noCookie = false) {
     && r.text.includes('Grand Total Belum Dibayar') && r.text.includes('Total Tagihan Tersisa'));
   ok('grand total sesuai pembayaran lintas TA', r.text.includes('Rp 300.000') && r.text.includes('Rp 400.000'));
   ok('nama siswa menjadi tautan ke rincian', r.text.includes(`siswa=${siswaIds[0]}`));
-  ok('ikon pratinjau nama siswa memakai kelas ukuran khusus', r.text.includes('kelas-public-eye'));
+  ok('nama siswa menjadi tautan tanpa ikon mata',
+    !r.text.includes('kelas-public-eye') &&
+    new RegExp(`<a class="t-strong" href="[^"]*siswa=${siswaIds[0]}">Siswa R49 Alfa</a>`).test(r.text));
   r = await req('GET', `${publicUrl}?q=Beta`, null, true);
   ok('filter nama hanya menampilkan siswa cocok dan totalnya menyesuaikan', r.status === 200
     && r.text.includes('Siswa R49 Beta') && !r.text.includes('Siswa R49 Alfa')

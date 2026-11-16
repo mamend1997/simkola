@@ -523,8 +523,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const kelasTaList = dbm.allTahun();
     const kelasTaId = Number(req.query.get('ta_kelas') || c.taId || (kelasTaList[0] || {}).id || 0);
     const kelasPortal = dbm.kelasList(kelasTaId || null, {});
-    const customDomain = saas.normalizeDomain(t.custom_domain);
-    const customOrigin = customDomain && String(t.custom_domain_status || '').toUpperCase() === 'VERIFIED'
+    const customDomain = saas.normalizeDomain(t.custom_domain || s.custom_domain);
+    const customDomainStatus = String(t.custom_domain_status || s.custom_domain_status || '').toUpperCase();
+    const customOrigin = customDomain && customDomainStatus === 'VERIFIED'
       ? `https://${customDomain}` : '';
     const publicAbsUrl = path => customOrigin
       ? customOrigin + (c.base || '') + path

@@ -1857,8 +1857,8 @@ Regresi lulus: `regress` (23), `newfeat` (89), `round17` (59), `round42` (84), `
   tidak dikirim ke layanan pihak ketiga.
 - `/<nama-sekolah>/publik/kelas/<token>` menampilkan rekap seluruh siswa roster kelas, filter nama/NISN,
   grand total lintas tahun ajaran, serta tautan ke rincian siswa. Rincian mengelompokkan semua tagihan
-  historis per tahun dalam scroll box dan menyertakan riwayat pembayaran. Ikon pratinjau mata berukuran
-  16px; setelah rincian siswa dibuka, tabel rekap seluruh roster disembunyikan.
+  historis per tahun dalam scroll box dan menyertakan riwayat pembayaran. Nama siswa menjadi tautan tanpa
+  ikon mata; setelah rincian siswa dibuka, tabel rekap seluruh roster disembunyikan.
 - Tautan kelas & QR memakai `https://<custom_domain>/<nama-sekolah>/publik/kelas/<token>` bila domain
   tenant berstatus `VERIFIED`; sebelum itu keduanya memakai host aplikasi, dengan keterangan status di UI.
 - Tautan kelas adalah bearer link tanpa login; nonaktifkan/regenerate untuk mencabut akses.
