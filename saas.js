@@ -16,6 +16,7 @@
  */
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const lib = require('./lib');
 const dbm = require('./db');
 const paygw = require('./paygw');
@@ -48,7 +49,10 @@ CREATE TABLE IF NOT EXISTS saas_users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nama TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
   password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'super_admin',
-  aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT, last_login TEXT
+  aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT, last_login TEXT,
+  mfa_secret TEXT, mfa_pending_secret TEXT,
+  mfa_recovery TEXT NOT NULL DEFAULT '[]',
+  mfa_enabled INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -117,6 +121,13 @@ CREATE TABLE IF NOT EXISTS reg_attempts (
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reg_attempts_ip ON reg_attempts(ip, created_at);
+CREATE TABLE IF NOT EXISTS auth_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  identity_hash TEXT NOT NULL,
+  result TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_attempts_identity ON auth_attempts(identity_hash, result, created_at);
 CREATE TABLE IF NOT EXISTS kasera_event (
   event_id TEXT PRIMARY KEY,
   tipe TEXT, status TEXT, order_id TEXT, jumlah REAL,
@@ -133,6 +144,10 @@ S.exec(SCHEMA);
   const cols = t => { try { return S.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
   const add = (t, name, ddl) => { if (!cols(t).includes(name)) { try { S.exec(`ALTER TABLE ${t} ADD COLUMN ${name} ${ddl}`); } catch (e) { } } };
   add('saas_payments', 'paket_tujuan', 'TEXT');
+  add('saas_users', 'mfa_secret', 'TEXT');
+  add('saas_users', 'mfa_pending_secret', 'TEXT');
+  add('saas_users', 'mfa_recovery', "TEXT NOT NULL DEFAULT '[]'");
+  add('saas_users', 'mfa_enabled', 'INTEGER NOT NULL DEFAULT 0');
   /* ---- pembayaran hybrid: kolom gateway QRIS dinamis ---- */
   add('saas_payments', 'channel', "TEXT DEFAULT 'manual'");
   add('saas_payments', 'provider', 'TEXT');
@@ -1351,14 +1366,146 @@ function runDailyJobs() {
 
 /* ---------------- sesi login (control plane) ---------------- */
 const SESSION_DAYS = 14;
-function createSession({ userId, tenantId, kind, alertPending, welcome }) {
+function createSession({ userId, tenantId, kind, alertPending, welcome, expiresMinutes }) {
   const token = lib.token(24);
   /* kedaluwarsa memakai jam WIB yang sama dengan nowStamp() saat pemeriksaan */
-  const exp = lib.plusDaysStamp(SESSION_DAYS);
+  const exp = expiresMinutes ? lib.plusMinutesStamp(Number(expiresMinutes)) : lib.plusDaysStamp(SESSION_DAYS);
   S.prepare('INSERT INTO sessions (token,user_id,tenant_id,kind,expires_at,alert_pending,ta_id,created_at,welcome) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(token, userId || null, tenantId || null, kind || 'tenant', exp, alertPending || 0, null, lib.nowStamp(),
       welcome ? String(welcome) : null);
   return token;
+}
+
+const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function base32Encode(buf) {
+  let bits = 0, value = 0, out = '';
+  for (const byte of buf) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+function base32Decode(raw) {
+  const input = String(raw || '').toUpperCase().replace(/=+$/g, '').replace(/\s/g, '');
+  let bits = 0, value = 0;
+  const out = [];
+  for (const ch of input) {
+    const n = BASE32.indexOf(ch);
+    if (n < 0) throw new Error('Secret authenticator tidak valid.');
+    value = (value << 5) | n;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+function totpCode(secret, at = Date.now()) {
+  const counter = BigInt(Math.floor(Number(at) / 30000));
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(counter);
+  const hmac = crypto.createHmac('sha1', base32Decode(secret)).update(msg).digest();
+  const offset = hmac[hmac.length - 1] & 15;
+  const binary = ((hmac[offset] & 127) << 24) | ((hmac[offset + 1] & 255) << 16)
+    | ((hmac[offset + 2] & 255) << 8) | (hmac[offset + 3] & 255);
+  return String(binary % 1000000).padStart(6, '0');
+}
+function totpVerify(secret, code, at = Date.now()) {
+  const submitted = String(code || '').replace(/\D/g, '');
+  if (submitted.length !== 6) return false;
+  const expected = Buffer.from(submitted);
+  for (const delta of [-30000, 0, 30000]) {
+    const actual = Buffer.from(totpCode(secret, Number(at) + delta));
+    if (actual.length === expected.length && crypto.timingSafeEqual(actual, expected)) return true;
+  }
+  return false;
+}
+function recoveryDigest(code) {
+  return crypto.createHash('sha256').update(String(code || '').toLowerCase().replace(/[^a-f0-9]/g, '')).digest('hex');
+}
+function newRecoveryCodes() {
+  return Array.from({ length: 10 }, () => {
+    const raw = crypto.randomBytes(8).toString('hex');
+    return raw.match(/.{1,4}/g).join('-');
+  });
+}
+function recoveryHashes(codes) { return codes.map(recoveryDigest); }
+
+function authIdentityHash(identity) {
+  return crypto.createHash('sha256').update(String(identity || '').trim().toLowerCase()).digest('hex');
+}
+function authIsLimited(identity, { limit = 5, windowMinutes = 15 } = {}) {
+  const hash = authIdentityHash(identity);
+  const cutoff = lib.plusMinutesStamp(-Math.abs(Number(windowMinutes) || 15));
+  const row = S.prepare("SELECT COUNT(*) AS n FROM auth_attempts WHERE identity_hash=? AND result='failed' AND created_at>=?")
+    .get(hash, cutoff);
+  return Number(row && row.n || 0) >= Math.max(1, Number(limit) || 5);
+}
+function authRecord(identity, success) {
+  const hash = authIdentityHash(identity);
+  const now = lib.nowStamp();
+  const tx = S.transaction(() => {
+    if (success) S.prepare("DELETE FROM auth_attempts WHERE identity_hash=?").run(hash);
+    else S.prepare("INSERT INTO auth_attempts (identity_hash,result,created_at) VALUES (?,'failed',?)").run(hash, now);
+    S.prepare('DELETE FROM auth_attempts WHERE created_at<?').run(lib.plusDaysStamp(-2));
+  });
+  tx();
+}
+
+function mfaEnabled(userId) {
+  const row = S.prepare('SELECT mfa_enabled FROM saas_users WHERE id=?').get(Number(userId));
+  return !!(row && Number(row.mfa_enabled));
+}
+function mfaStart(userId) {
+  const secret = base32Encode(crypto.randomBytes(20));
+  const info = S.prepare('UPDATE saas_users SET mfa_pending_secret=? WHERE id=?').run(secret, Number(userId));
+  if (!info.changes) throw new Error('Akun Super Admin tidak ditemukan.');
+  return secret;
+}
+function mfaPendingSecret(userId) {
+  const row = S.prepare('SELECT mfa_pending_secret FROM saas_users WHERE id=?').get(Number(userId));
+  return String(row && row.mfa_pending_secret || '');
+}
+function mfaEnable(userId, code) {
+  return S.transaction(() => {
+    const secret = mfaPendingSecret(userId);
+    if (!secret || !totpVerify(secret, code)) throw new Error('Kode authenticator tidak valid atau kedaluwarsa.');
+    const recovery = newRecoveryCodes();
+    const info = S.prepare('UPDATE saas_users SET mfa_secret=?,mfa_pending_secret=NULL,mfa_recovery=?,mfa_enabled=1 WHERE id=? AND mfa_enabled=0')
+      .run(secret, JSON.stringify(recoveryHashes(recovery)), Number(userId));
+    if (!info.changes) throw new Error('MFA sudah aktif; masuk kembali untuk melanjutkan.');
+    return recovery;
+  }).immediate();
+}
+function mfaVerify(userId, code) {
+  return S.transaction(() => {
+    const row = S.prepare('SELECT mfa_secret,mfa_recovery,mfa_enabled FROM saas_users WHERE id=?').get(Number(userId));
+    if (!row || !Number(row.mfa_enabled)) return false;
+    if (totpVerify(row.mfa_secret, code)) return true;
+    const digest = recoveryDigest(code);
+    let codes = [];
+    try { codes = JSON.parse(row.mfa_recovery || '[]'); } catch (e) { codes = []; }
+    const match = codes.findIndex(x => {
+      const a = Buffer.from(String(x || ''));
+      const b = Buffer.from(digest);
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    });
+    if (match < 0) return false;
+    codes.splice(match, 1);
+    const info = S.prepare('UPDATE saas_users SET mfa_recovery=? WHERE id=?')
+      .run(JSON.stringify(codes), Number(userId));
+    return info.changes === 1;
+  }).immediate();
+}
+function mfaRecoveryCount(userId) {
+  const row = S.prepare('SELECT mfa_recovery FROM saas_users WHERE id=?').get(Number(userId));
+  try { return JSON.parse(row && row.mfa_recovery || '[]').length; } catch (e) { return 0; }
 }
 /**
  * Kredensial awal pendaftaran (kode sekolah / username / password) disimpan pada
@@ -1484,6 +1631,7 @@ module.exports = {
   kaseraWebhookUrl, kaseraHandleWebhook, kaseraEvents, kaseraSecretList, tenantIdFromOrder,
   approvePayment, rejectPayment, runDailyJobs, stats, invoiceNo,
   createSession, getSession, destroySession, updateSession, takeWelcome,
+  authIsLimited, authRecord, mfaEnabled, mfaStart, mfaPendingSecret, mfaEnable, mfaVerify, mfaRecoveryCount,
   ensureAdmin, findAdmin, adminById, setAdminPassword,
   ensureBootstrap
 };

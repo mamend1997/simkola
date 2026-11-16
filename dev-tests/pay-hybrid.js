@@ -133,18 +133,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       body: JSON.stringify({ order_id: order2, paid: true })
     });
     const cbJson = await cb.json();
-    ok('callback publik tanpa sesi diterima (provider simulasi)', cb.status === 200 && cbJson.paid === true, JSON.stringify(cbJson));
+    ok('callback sandbox tanpa signature ditolak', cb.status === 401 && cbJson.ok === false, JSON.stringify(cbJson));
     const cb2 = await fetch(base + '/pay/callback', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order_id: order2, paid: true })
     });
     const cbJson2 = await cb2.json();
-    ok('callback ulang idempoten', cb2.status === 200 && cbJson2.sudah === true, JSON.stringify(cbJson2));
+    ok('callback sandbox berulang tetap ditolak', cb2.status === 401 && cbJson2.ok === false, JSON.stringify(cbJson2));
     const cb3 = await fetch(base + '/pay/callback', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order_id: 'SK-0-TIDAKADA', paid: true })
     });
-    ok('callback order tak dikenal → 404', cb3.status === 404);
+    ok('callback sandbox tidak dapat menguji order tanpa autentikasi', cb3.status === 401);
 
     /* ---------------- 5. SAKELAR MENYEMBUNYIKAN PILIHAN ---------------- */
     cookie = '';

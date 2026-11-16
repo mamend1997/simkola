@@ -12,6 +12,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
   const TABLES = bd.TABLES;
   const csvOf = rows => bd.csvOf(rows);
   const dumpAll = () => bd.dumpAll(db);
+  function readBackupData(rawValue) {
+    const raw = String(rawValue || '');
+    const b64 = raw.includes(',') ? raw.split(',').pop() : raw;
+    const buf = Buffer.from(b64, 'base64');
+    if (!buf.length) throw new Error('Berkas kosong.');
+    if (buf[0] === 0x50 && buf[1] === 0x4b) {
+      const files = X.unzipEntries(buf);
+      bd.verifyZipManifest(files);
+      let entry = files['database.json'] || files['data/database.json'];
+      if (!entry) {
+        const key = Object.keys(files).find(n => /(^|\/)database\.json$/i.test(n));
+        if (key) entry = files[key];
+      }
+      if (!entry) throw new Error('database.json tidak ditemukan di dalam ZIP.');
+      return JSON.parse(entry.toString('utf8'));
+    }
+    return JSON.parse(buf.toString('utf8'));
+  }
 
   /* ------------------------------------------------------------------
      EXPORT DATABASE (.sql) — dump SQL portabel, bisa diimpor ke
@@ -24,40 +42,41 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     return "'" + String(v).replace(/'/g, "''") + "'";
   }
   function sqlDump() {
-    const out = [];
-    out.push('-- ================================================================');
-    out.push('-- SIMKEU Sekolah — Export Database');
-    out.push('-- Dibuat: ' + nowStamp());
-    out.push('-- Berkas ini berisi struktur + seluruh isi tabel (portabel).');
-    out.push('-- Impor: sqlite3 keuangan.sqlite < database.sql');
-    out.push('-- ================================================================');
-    out.push('PRAGMA foreign_keys=OFF;');
-    out.push('BEGIN TRANSACTION;');
-    const objs = db.prepare(`SELECT type,name,sql FROM sqlite_master
-      WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
-      ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`).all();
-    for (const o of objs) {
-      if (o.type === 'table') out.push(`DROP TABLE IF EXISTS "${o.name}";`);
-      if (o.type === 'index') out.push(`DROP INDEX IF EXISTS "${o.name}";`);
-    }
-    const tables = objs.filter(o => o.type === 'table');
-    for (const o of tables) out.push(o.sql.trim() + ';');
-    for (const o of objs) if (o.type !== 'table') out.push(o.sql.trim() + ';');
-    let total = 0;
-    for (const o of tables) {
-      let rows = [];
-      try { rows = db.prepare(`SELECT * FROM "${o.name}"`).all(); } catch (e) { continue; }
-      if (!rows.length) continue;
-      const cols = Object.keys(rows[0]);
-      const colSql = cols.map(c => `"${c}"`).join(',');
-      for (const r of rows) {
-        out.push(`INSERT INTO "${o.name}" (${colSql}) VALUES (${cols.map(c => sqlValue(r[c])).join(',')});`);
-        total++;
+    return db.transaction(() => {
+      const out = [];
+      out.push('-- ================================================================');
+      out.push('-- SIMKEU Sekolah — Export Database');
+      out.push('-- Dibuat: ' + nowStamp());
+      out.push('-- Berkas ini berisi struktur + seluruh isi tabel (portabel).');
+      out.push('-- Impor: sqlite3 keuangan.sqlite < database.sql');
+      out.push('-- ================================================================');
+      out.push('PRAGMA foreign_keys=OFF;');
+      out.push('BEGIN TRANSACTION;');
+      const objs = db.prepare(`SELECT type,name,sql FROM sqlite_master
+        WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+        ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`).all();
+      for (const o of objs) {
+        if (o.type === 'table') out.push(`DROP TABLE IF EXISTS "${o.name}";`);
+        if (o.type === 'index') out.push(`DROP INDEX IF EXISTS "${o.name}";`);
       }
-    }
-    out.push('COMMIT;');
-    out.push(`-- total ${total} baris dari ${tables.length} tabel`);
-    return { sql: out.join('\n') + '\n', rows: total, tables: tables.length };
+      const tables = objs.filter(o => o.type === 'table');
+      for (const o of tables) out.push(o.sql.trim() + ';');
+      for (const o of objs) if (o.type !== 'table') out.push(o.sql.trim() + ';');
+      let total = 0;
+      for (const o of tables) {
+        const rows = db.prepare(`SELECT * FROM "${o.name}"`).all();
+        if (!rows.length) continue;
+        const cols = Object.keys(rows[0]);
+        const colSql = cols.map(c => `"${c}"`).join(',');
+        for (const r of rows) {
+          out.push(`INSERT INTO "${o.name}" (${colSql}) VALUES (${cols.map(c => sqlValue(r[c])).join(',')});`);
+          total++;
+        }
+      }
+      out.push('COMMIT;');
+      out.push(`-- total ${total} baris dari ${tables.length} tabel`);
+      return { sql: out.join('\n') + '\n', rows: total, tables: tables.length };
+    })();
   }
 
   /* ------------------------------------------------------------------
@@ -567,7 +586,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
               <input type="file" accept=".zip,.json,application/zip,application/json" data-b64="file_b64" data-max="30">
               <div class="hint" id="file_b64-info">Berkas <b>.json</b> hasil tombol Backup Data Sekolah (atau backup lama).</div></div>
             <label class="check mb-2"><input type="checkbox" name="konfirmasi" value="1" required> Saya memahami seluruh data akan digantikan</label>
-            <button class="btn btn-danger btn-block" ${c.can('backup', 'restore') ? '' : 'disabled'}>${ui.icon('upload')}Restore Data Sekolah</button>
+            <div class="flex" style="gap:8px;flex-wrap:wrap">
+              <button class="btn btn-sm" type="submit" formaction="${c.base}/backup/validate" formmethod="post" formnovalidate ${c.can('backup', 'restore') ? '' : 'disabled'}>${ui.icon('check')}Validasi Backup</button>
+              <button class="btn btn-danger" ${c.can('backup', 'restore') ? '' : 'disabled'}>${ui.icon('upload')}Restore Data Sekolah</button>
+            </div>
           </form>
         </div>
         <div class="card mb-3">
@@ -609,43 +631,28 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
     if (!guard(req, res, 'backup', 'restore')) return;
     if (!req.body.konfirmasi) return res.redirect(req.BASE + '/backup?err=' + encodeURIComponent('Centang konfirmasi terlebih dahulu.'));
     let data;
-    try {
-      const raw = String(req.body.file_b64 || '');
-      const b64 = raw.includes(',') ? raw.split(',').pop() : raw;
-      const buf = Buffer.from(b64, 'base64');
-      if (!buf.length) throw new Error('Berkas kosong.');
-      if (buf[0] === 0x50 && buf[1] === 0x4b) {
-        // berkas ZIP hasil "Backup Database Keseluruhan"
-        const files = X.unzipEntries(buf);
-        let entry = files['database.json'] || files['data/database.json'];
-        if (!entry) {
-          const key = Object.keys(files).find(n => /(^|\/)database\.json$/i.test(n));
-          if (key) entry = files[key];
-        }
-        if (!entry) throw new Error('database.json tidak ditemukan di dalam ZIP.');
-        data = JSON.parse(entry.toString('utf8'));
-      } else {
-        data = JSON.parse(buf.toString('utf8'));
-      }
-    } catch (e) {
+    try { data = readBackupData(req.body.file_b64); }
+    catch (e) {
       return res.redirect(req.BASE + '/backup?err=' + encodeURIComponent('Berkas backup tidak valid atau gagal dibaca: ' + e.message));
     }
-    if (!data || data.app !== 'simkeu-sekolah' || !data.tables) {
-      return res.redirect(req.BASE + '/backup?err=' + encodeURIComponent('Format berkas bukan backup SIMKEU Sekolah.'));
-    }
+    let validation;
+    try { validation = bd.validateDump(db, data); }
+    catch (e) { return res.redirect(req.BASE + '/backup?err=' + encodeURIComponent('Backup tidak lolos validasi: ' + e.message)); }
     // safety snapshot before overwrite
     try {
-      const snap = { app: 'simkeu-sekolah', version: 1, created_at: nowStamp(), tables: {} };
-      for (const t of TABLES) snap.tables[t] = db.prepare(`SELECT * FROM ${t}`).all();
+      const snap = dumpAll();
       const dir = require('path').dirname(dbm.DB_PATH || require('path').join(__dirname, '..', 'data', 'keuangan.sqlite'));
       const fsp = require('fs');
+      fsp.mkdirSync(dir, { recursive: true });
       fsp.writeFileSync(require('path').join(dir, `pre-restore-${Date.now()}.json`), JSON.stringify(snap));
       // simpan maksimal 3 snapshot pra-restore, hapus yang paling lama
       const snaps = fsp.readdirSync(dir).filter(x => x.startsWith('pre-restore-')).sort();
       while (snaps.length > 3) {
         try { fsp.unlinkSync(require('path').join(dir, snaps.shift())); } catch (e) { }
       }
-    } catch (e) { }
+    } catch (e) {
+      return res.redirect(req.BASE + '/backup?err=' + encodeURIComponent('Snapshot sebelum restore gagal dibuat; data tidak diubah. ' + e.message));
+    }
 
     let restored = 0;
     db.transaction(() => {
@@ -673,8 +680,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
        `mig_tz_wib_v1` → stempel waktunya digeser +7 jam seperti saat bootstrap.
        Backup baru sudah membawa penanda tersebut sehingga tidak digeser dua kali. */
     try { dbm.migrateLegacyTimestamps(dbm.currentTenantConn() || db, 'settings'); } catch (e) { }
-    dbm.logAudit(null, 'RESTORE', 'backup', `Restore data dari berkas backup (${restored} baris)`);
+    dbm.logAudit(null, 'RESTORE', 'backup', `Restore data dari berkas backup (${restored} baris, ${validation.tables} tabel tervalidasi)`);
     res.set('Set-Cookie', 'simkeu_sid=; Path=/; Max-Age=0');
     res.redirect(req.BASE + '/login?ok=' + encodeURIComponent('Restore berhasil. Silakan masuk kembali.'));
+  });
+
+  post('/backup/validate', (req, res) => {
+    if (!guard(req, res, 'backup', 'restore')) return;
+    try {
+      const data = readBackupData(req.body.file_b64);
+      const report = bd.validateDump(db, data);
+      res.redirect(req.BASE + '/backup?ok=' + encodeURIComponent(`Backup valid: ${report.tables} tabel dan ${report.rows} baris siap dipulihkan. Tidak ada data yang diubah.`));
+    } catch (e) {
+      res.redirect(req.BASE + '/backup?err=' + encodeURIComponent('Validasi backup gagal: ' + e.message));
+    }
   });
 };

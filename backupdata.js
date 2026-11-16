@@ -6,6 +6,7 @@
  * identik dengan backup yang bisa diunduh/direstore manual.
  */
 const lib = require('./lib');
+const crypto = require('crypto');
 
 const TABLES = ['settings', 'users', 'permissions', 'tahun_ajaran', 'bku', 'bku_periode', 'coa', 'anggaran',
   'transaksi', 'piutang', 'piutang_bayar', 'spp', 'aset', 'pinjaman_mutasi', 'rekon_saldo', 'rekon_saldo_global', 'koreksi',
@@ -16,11 +17,53 @@ const TABLES = ['settings', 'users', 'permissions', 'tahun_ajaran', 'bku', 'bku_
   'wa_template', 'wa_reminder_log', 'iuran_checkout', 'notif'];
 
 function dumpAll(db) {
-  const dump = { app: 'simkeu-sekolah', version: 2, created_at: lib.nowStamp(), tables: {} };
-  for (const t of TABLES) {
-    try { dump.tables[t] = db.prepare(`SELECT * FROM ${t}`).all(); } catch (e) { dump.tables[t] = []; }
+  const readSnapshot = db.transaction(() => {
+    const dump = { app: 'simkeu-sekolah', version: 2, created_at: lib.nowStamp(), tables: {} };
+    for (const t of TABLES) dump.tables[t] = db.prepare(`SELECT * FROM "${t}"`).all();
+    return dump;
+  });
+  return readSnapshot();
+}
+
+function validateDump(db, dump) {
+  if (!dump || dump.app !== 'simkeu-sekolah' || !dump.tables || typeof dump.tables !== 'object' || Array.isArray(dump.tables)) {
+    throw new Error('Format berkas bukan backup SIMKEU Sekolah.');
   }
-  return dump;
+  const allowed = new Set(TABLES);
+  const required = ['settings', 'users', 'permissions', 'tahun_ajaran'];
+  for (const table of required) {
+    if (!Array.isArray(dump.tables[table])) throw new Error(`Tabel wajib "${table}" tidak ada atau formatnya rusak.`);
+  }
+  for (const [table, rows] of Object.entries(dump.tables)) {
+    if (!allowed.has(table)) throw new Error(`Tabel "${table}" tidak dikenal pada backup sekolah.`);
+    if (!Array.isArray(rows)) throw new Error(`Data tabel "${table}" bukan daftar baris yang valid.`);
+    const columns = new Set(db.pragma(`table_info("${table}")`).map(c => c.name));
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || typeof row !== 'object' || Array.isArray(row) || !Object.keys(row).length) {
+        throw new Error(`Baris ${i + 1} pada tabel "${table}" tidak valid.`);
+      }
+      for (const column of Object.keys(row)) {
+        if (!columns.has(column)) throw new Error(`Kolom "${table}.${column}" tidak tersedia pada versi aplikasi ini.`);
+      }
+    }
+  }
+  return {
+    tables: Object.keys(dump.tables).length,
+    rows: Object.values(dump.tables).reduce((sum, rows) => sum + rows.length, 0)
+  };
+}
+
+function verifyZipManifest(files) {
+  if (!files || !files['manifest.json']) return true;
+  const payload = files['database.json'];
+  if (!payload) throw new Error('database.json tidak ditemukan untuk pemeriksaan checksum.');
+  let manifest;
+  try { manifest = JSON.parse(files['manifest.json'].toString('utf8')); }
+  catch (e) { throw new Error('Manifest backup tidak valid.'); }
+  const actual = crypto.createHash('sha256').update(payload).digest('hex');
+  if (manifest.database_sha256 !== actual) throw new Error('Checksum database.json tidak cocok; berkas ZIP mungkin rusak.');
+  return true;
 }
 
 function csvOf(rows) {
@@ -37,8 +80,17 @@ function csvOf(rows) {
 /** ZIP backup database: database.json + data/<tabel>.csv + README.txt (+ berkas tambahan) */
 function buildDatabaseZip(db, opts = {}) {
   const dump = dumpAll(db);
+  const database = Buffer.from(JSON.stringify(dump, null, 1), 'utf8');
+  const manifest = {
+    app: 'simkeu-sekolah',
+    version: 1,
+    created_at: dump.created_at,
+    database_sha256: crypto.createHash('sha256').update(database).digest('hex'),
+    table_counts: Object.fromEntries(TABLES.map(t => [t, dump.tables[t].length]))
+  };
   const files = [
-    { name: 'database.json', data: JSON.stringify(dump, null, 1) },
+    { name: 'database.json', data: database },
+    { name: 'manifest.json', data: JSON.stringify(manifest, null, 1) },
     {
       name: 'README.txt', data: [
         'BACKUP DATABASE SIMKEU SEKOLAH',
@@ -90,6 +142,6 @@ function fullBackupName(d = new Date()) {
 const BACKUP_NAME_RE = /^Backup_(SIMKEU_[A-Z0-9]+|FULL_SIMKEU)_\d{2}[A-Za-z]{3}\d{4}_\d{4}\.zip$/;
 
 module.exports = {
-  TABLES, dumpAll, csvOf, buildDatabaseZip,
+  TABLES, dumpAll, validateDump, verifyZipManifest, csvOf, buildDatabaseZip,
   backupFileName, tenantBackupName, fullBackupName, BACKUP_NAME_RE, BULAN_EN
 };

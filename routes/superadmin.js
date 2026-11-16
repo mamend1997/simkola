@@ -15,14 +15,17 @@
  * ==================================================================
  */
 const fs = require('fs');
+const path = require('path');
 const bd = require('../backupdata');
 const bt = require('../backup_tg');
 const tg = require('../telegram');
 const X = require('../xlsx-read');
 const srcpack = require('../sourcepack');
 const envCfg = require('../env');
+const QRCode = require('qrcode');
 
 const COOKIE = 'simkeu_saas';
+const MFA_COOKIE = 'simkeu_mfa';
 
 module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPortalMap }) => {
   const { esc, rupiah, tglID, nowStamp } = lib;
@@ -49,10 +52,27 @@ module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPo
     const u = saas.adminById(s.user_id);
     return u && u.aktif ? u : null;
   }
+  function mfaSetup(req) {
+    const token = parseCookie(req, MFA_COOKIE);
+    const session = saas.getSession(token);
+    if (!session || session.kind !== 'saas_mfa_setup') return null;
+    const user = saas.adminById(session.user_id);
+    return user && user.aktif ? { token, session, user } : null;
+  }
+  function secureCookie(req) {
+    return String(req.headers['x-forwarded-proto'] || (req.socket && req.socket.encrypted ? 'https' : ''))
+      .split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : '';
+  }
   function requireAdmin(req, res) {
     const u = me(req);
     if (!u) {
       res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Silakan masuk sebagai Super Admin Pusat.'));
+      return null;
+    }
+    if (!saas.mfaEnabled(u.id)) {
+      saas.destroySession(parseCookie(req, COOKIE));
+      res.set('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`);
+      res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Aktifkan MFA sebelum melanjutkan.'));
       return null;
     }
     return u;
@@ -65,6 +85,8 @@ module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPo
   /* ---------------- layout ---------------- */
   const MENU = [
     { href: '/super-admin', label: 'Dashboard', icon: 'dashboard' },
+    { href: '/super-admin/keamanan', label: 'Keamanan Akun', icon: 'shield' },
+    { href: '/super-admin/health', label: 'Kesehatan Sistem', icon: 'dashboard' },
     { href: '/super-admin/sekolah', label: 'Daftar Sekolah', icon: 'school' },
     { href: '/super-admin/portal-publik', label: 'Manajemen Custom Slug & Portal Publik', icon: 'link' },
     { href: '/super-admin/pembayaran', label: 'Pembayaran', icon: 'card' },
@@ -176,6 +198,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   <form method="post" action="${base}/super-admin/login">
     <div class="field"><label>Email</label><input type="email" name="email" required autocomplete="username" placeholder="super@simkeu.id"></div>
     <div class="field"><label>Password</label><input type="password" name="password" required autocomplete="current-password" placeholder="••••••••"></div>
+    <div class="field"><label>Kode authenticator / pemulihan (jika MFA sudah aktif)</label><input type="text" name="mfa_code" inputmode="numeric" autocomplete="one-time-code" placeholder="Kosongkan saat penyiapan pertama"></div>
     <button class="btn btn-primary btn-block">Masuk</button>
   </form>
   <p class="small muted" style="margin-top:16px;text-align:center"><a href="${base}/login">← Portal sekolah</a></p>
@@ -190,29 +213,149 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   post('/super-admin/login', (req, res) => {
     const email = String(req.body.email || '').trim();
     const pass = String(req.body.password || '');
+    const identity = 'superadmin:' + email.toLowerCase();
+    if (saas.authIsLimited(identity)) {
+      return loginPage(req, res, { err: 'Terlalu banyak percobaan masuk. Silakan coba kembali dalam 15 menit.' });
+    }
     const u = saas.findAdmin(email);
     if (!u || !lib.verifyPassword(pass, u.password)) {
+      saas.authRecord(identity, false);
       return res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Email atau password salah.'));
     }
-    if (!u.aktif) return res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Akun super admin dinonaktifkan.'));
+    if (!u.aktif) {
+      saas.authRecord(identity, false);
+      return res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Akun super admin dinonaktifkan.'));
+    }
+    if (saas.mfaEnabled(u.id)) {
+      if (!saas.mfaVerify(u.id, req.body.mfa_code)) {
+        saas.authRecord(identity, false);
+        return loginPage(req, res, { err: 'Kode authenticator atau pemulihan tidak valid.' });
+      }
+      saas.authRecord(identity, true);
+    } else {
+      saas.authRecord(identity, true);
+      saas.mfaStart(u.id);
+      const setupToken = saas.createSession({ userId: u.id, kind: 'saas_mfa_setup', expiresMinutes: 10 });
+      res.set('Set-Cookie', `${MFA_COOKIE}=${setupToken}; Path=/super-admin; HttpOnly; SameSite=Lax; Max-Age=600${secureCookie(req)}`);
+      return res.redirect(req.BASE + '/super-admin/mfa-setup');
+    }
     const token = saas.createSession({ userId: u.id, kind: 'saas' });
     S.prepare('UPDATE saas_users SET last_login=? WHERE id=?').run(nowStamp(), u.id);
     saas.logSaas(u, 'LOGIN', 'auth', 'Super Admin Pusat masuk');
-    res.set('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}`);
+    res.set('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}${secureCookie(req)}`);
     res.redirect(req.BASE + '/super-admin');
   });
 
   post('/super-admin/logout', (req, res) => {
     saas.destroySession(parseCookie(req, COOKIE));
-    res.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
+    res.set('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`);
     res.redirect(req.BASE + '/super-admin/login?ok=' + encodeURIComponent('Anda telah keluar.'));
+  });
+
+  get('/super-admin/mfa-setup', async (req, res) => {
+    const state = mfaSetup(req);
+    if (!state) return res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Sesi penyiapan keamanan berakhir. Silakan masuk kembali.'));
+    const secret = saas.mfaPendingSecret(state.user.id);
+    if (!secret) return res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Penyiapan MFA perlu diulang.'));
+    const issuer = saas.appName();
+    const uri = `otpauth://totp/${encodeURIComponent(issuer + ':' + state.user.email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+    const qr = await QRCode.toDataURL(uri, { width: 220, margin: 1 });
+    const err = req.query.get('err');
+    res.html(`<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Aktifkan MFA · ${esc(issuer)}</title><link rel="stylesheet" href="${req.BASE}/assets/app.css?v=${ui.ASSET_V}"></head>
+      <body style="display:grid;place-items:center;min-height:100vh;padding:20px"><main class="card" style="max-width:520px;width:100%;padding:28px">
+      <h2>Aktifkan verifikasi dua langkah</h2><p class="muted">Akun Super Admin wajib memakai aplikasi authenticator seperti Google Authenticator, Microsoft Authenticator, atau 1Password.</p>
+      ${err ? `<div class="alert err">${esc(err)}</div>` : ''}
+      <ol><li>Tambahkan akun dengan memindai QR ini.</li><li>Masukkan kode 6 digit yang sedang tampil untuk mengaktifkan MFA.</li><li>Simpan kode pemulihan yang muncul setelah aktivasi.</li></ol>
+      <div style="text-align:center"><img src="${qr}" alt="QR authenticator" width="220" height="220"></div>
+      <p class="small">Jika tidak dapat memindai QR, masukkan secret ini secara manual:</p><p class="mono" style="word-break:break-all">${esc(secret)}</p>
+      <form method="post" action="${req.BASE}/super-admin/mfa-setup"><div class="field"><label>Kode authenticator</label>
+      <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required></div>
+      <button class="btn btn-primary btn-block">Aktifkan MFA</button></form></main></body></html>`);
+  });
+
+  post('/super-admin/mfa-setup', (req, res) => {
+    const state = mfaSetup(req);
+    if (!state) return res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Sesi penyiapan keamanan berakhir.'));
+    const identity = 'superadmin:' + String(state.user.email || '').trim().toLowerCase();
+    if (saas.authIsLimited(identity)) {
+      return res.redirect(req.BASE + '/super-admin/mfa-setup?err=' + encodeURIComponent('Terlalu banyak kode yang salah. Silakan coba kembali setelah 15 menit.'));
+    }
+    try {
+      const codes = saas.mfaEnable(state.user.id, req.body.code);
+      saas.authRecord(identity, true);
+      saas.destroySession(state.token);
+      const token = saas.createSession({ userId: state.user.id, kind: 'saas' });
+      S.prepare('UPDATE saas_users SET last_login=? WHERE id=?').run(nowStamp(), state.user.id);
+      saas.logSaas(state.user, 'AKTIFKAN MFA', 'auth', 'Super Admin Pusat mengaktifkan verifikasi dua langkah');
+      res.set('Set-Cookie', [
+        `${MFA_COOKIE}=; Path=/super-admin; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`,
+        `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}${secureCookie(req)}`
+      ]);
+      res.html(`<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Kode Pemulihan · ${esc(saas.appName())}</title><link rel="stylesheet" href="${req.BASE}/assets/app.css?v=${ui.ASSET_V}"></head>
+        <body style="display:grid;place-items:center;min-height:100vh;padding:20px"><main class="card" style="max-width:520px;width:100%;padding:28px">
+        <div class="alert ok"><b>MFA berhasil diaktifkan.</b></div><h2>Simpan kode pemulihan</h2>
+        <p class="muted">Setiap kode hanya dapat digunakan sekali. Kode ini tidak akan ditampilkan lagi; simpan di tempat aman dan jangan bagikan.</p>
+        <div class="mono" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">${codes.map(x => `<code style="padding:8px;background:#f6f3ef;border-radius:6px">${esc(x)}</code>`).join('')}</div>
+        <p style="margin-top:20px"><a class="btn btn-primary btn-block" href="${req.BASE}/super-admin">Saya sudah menyimpan kode</a></p></main></body></html>`);
+    } catch (e) {
+        saas.authRecord(identity, false);
+      res.redirect(req.BASE + '/super-admin/mfa-setup?err=' + encodeURIComponent(e.message));
+    }
+  });
+
+  get('/super-admin/keamanan', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const count = saas.mfaRecoveryCount(u.id);
+    const content = `<div class="card"><div class="card-head"><div><h3>Verifikasi Dua Langkah</h3><div class="sub">MFA wajib untuk akun Super Admin Pusat</div></div>${ui.badge('Aktif', 'green')}</div>
+      <p>Akun ini dilindungi password dan aplikasi authenticator. Kode pemulihan tersisa: <b>${count}</b>.</p>
+      <div class="alert warn">${ui.icon('alert')}<div>Simpan kode pemulihan di tempat aman. Jika authenticator dan seluruh kode pemulihan hilang, akses akun memerlukan pemulihan oleh operator server.</div></div>
+      <p class="small muted">Untuk mengganti perangkat authenticator, gunakan salah satu kode pemulihan saat masuk, lalu hubungi operator untuk mengatur ulang MFA.</p></div>`;
+    res.html(shell(req, { title: 'Keamanan Akun', sub: 'Perlindungan akun Super Admin Pusat', active: '/super-admin/keamanan', content, user: u }));
+  });
+
+  get('/super-admin/health', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    let controlOk = false;
+    try { controlOk = S.pragma('quick_check').every(r => r.quick_check === 'ok'); } catch (e) { }
+    const tenants = saas.allTenants();
+    const tenantResults = tenants.map(t => {
+      try {
+        dbm.openTenantConn(t.id, t.db_file).prepare('SELECT 1').get();
+        return { name: t.nama, code: t.school_code, ok: true, error: '' };
+      } catch (e) { return { name: t.nama, code: t.school_code, ok: false, error: e.message }; }
+    });
+    const queueStats = queue ? queue.stats() : { pending: 0, running: 0, done: 0, failed: 0 };
+    const backups = saas.backupLogRows('saas', 10);
+    const latestSuccess = backups.find(x => x.status === 'sukses');
+    const latestFailure = backups.find(x => x.status !== 'sukses');
+    const tenantRows = tenantResults.map(t => `<tr><td>${esc(t.name)}</td><td class="mono">${esc(t.code)}</td>
+      <td>${t.ok ? ui.badge('Terhubung', 'green') : ui.badge('Gagal', 'red')}</td><td class="small">${esc(t.error)}</td></tr>`).join('');
+    const jobRows = queue ? queue.recent(10).map(j => `<tr><td>${j.id}</td><td>${esc(j.jenis)}</td>
+      <td>${ui.badge(j.status, j.status === 'done' ? 'green' : j.status === 'failed' ? 'red' : 'amber')}</td>
+      <td class="small">${esc(j.last_error || j.created_at || '')}</td></tr>`).join('') : '';
+    const content = `<div class="grid-4 mb-3">
+      <div class="card"><div class="mt">Control Plane</div><div class="nm">${controlOk ? ui.badge('Sehat', 'green') : ui.badge('Periksa', 'red')}</div></div>
+      <div class="card"><div class="mt">Database Sekolah</div><div class="nm">${tenantResults.filter(t => t.ok).length} / ${tenants.length} terhubung</div></div>
+      <div class="card"><div class="mt">Antrean</div><div class="nm">${queueStats.pending} tertunda · ${queueStats.failed} gagal</div></div>
+      <div class="card"><div class="mt">Backup SaaS Terakhir</div><div class="nm">${latestSuccess ? esc(lib.stampID(latestSuccess.created_at)) : 'Belum ada'}</div></div>
+    </div>
+    ${latestFailure ? `<div class="alert warn">${ui.icon('alert')}<div>Backup terakhir gagal (${esc(lib.stampID(latestFailure.created_at))}): ${esc(latestFailure.pesan || 'tanpa rincian')}</div></div>` : ''}
+    <div class="card mb-3"><div class="card-head"><div><h3>Koneksi Database Sekolah</h3><div class="sub">Pemeriksaan koneksi ringan, tanpa membaca data keuangan</div></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Sekolah</th><th>Kode</th><th>Status</th><th>Catatan</th></tr></thead>
+      <tbody>${tenantRows || '<tr><td colspan="4" class="muted center">Belum ada sekolah.</td></tr>'}</tbody></table></div></div>
+    <div class="card"><div class="card-head"><div><h3>Antrean Pekerjaan Terbaru</h3><div class="sub">${queueStats.running} berjalan · ${queueStats.done} selesai</div></div></div>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>Jenis</th><th>Status</th><th>Pesan / Waktu</th></tr></thead>
+      <tbody>${jobRows || '<tr><td colspan="4" class="muted center">Belum ada pekerjaan.</td></tr>'}</tbody></table></div></div>`;
+    res.html(shell(req, { title: 'Kesehatan Sistem', sub: 'Database, antrean pekerjaan, dan status backup', active: '/super-admin/health', content, user: u }));
   });
 
   /** keluar dari mode "login as tenant" (kembali ke portal super admin) */
   get('/super-admin/kembali', (req, res) => {
     const sid = parseCookie(req, 'simkeu_sid');
     if (sid) saas.destroySession(sid);
-    res.set('Set-Cookie', 'simkeu_sid=; Path=/; Max-Age=0');
+    res.set('Set-Cookie', `simkeu_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`);
     res.redirect(req.BASE + '/super-admin');
   });
 
@@ -650,7 +793,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       const token = saas.createSession({ userId: target.id, tenantId: t.id, kind: 'tenant' });
       S.prepare('UPDATE sessions SET imp_by=? WHERE token=?').run(u.id, token);
       saas.logSaas(u, 'LOGIN AS TENANT', 'tenant', `Masuk sebagai ${t.nama} untuk bantuan teknis`, t.id);
-      res.set('Set-Cookie', `simkeu_sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 8}`);
+      res.set('Set-Cookie', `simkeu_sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 8}${secureCookie(req)}`);
       res.redirect(req.BASE + '/');
     } catch (e) {
       res.redirect(req.BASE + flash('/super-admin/sekolah/' + t.id, 'err', e.message));
@@ -1784,6 +1927,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
             </select>
             <div class="hint">Diabaikan bila berkas yang diunggah berupa ZIP.</div></div>
           <label class="check"><input type="checkbox" name="konfirmasi" value="1" required> Saya memahami data akan ditimpa dan telah membuat backup terbaru</label>
+          <div class="form-actions"><button class="btn" type="submit" formaction="${req.BASE}/super-admin/backup/validate" formmethod="post" formnovalidate>${ui.icon('check')}Validasi Berkas Saja</button></div>
         </form>`,
       footer: `<button class="btn" data-close="mRestoreDb">Batal</button><button class="btn btn-danger" form="fRestoreDb">${ui.icon('upload')}Mulai Restore</button>`
     })}
@@ -2086,6 +2230,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
 
   /** pulihkan seluruh data satu sekolah dari objek dump SIMKEU */
   function restoreTenantDump(conn, data) {
+    bd.validateDump(conn, data);
     const tables = bd.TABLES;
     let n = 0;
     conn.transaction(() => {
@@ -2106,6 +2251,76 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     })();
     return n;
   }
+
+  function savePreRestoreSnapshot() {
+    const dir = path.dirname(dbm.SAAS_DB_PATH || path.join(__dirname, '..', 'data', 'saas.db'));
+    const name = `pre-restore-full-${Date.now()}.zip`;
+    const file = path.join(dir, name);
+    fs.mkdirSync(dir, { recursive: true });
+    const zip = bt.buildSaasZip(dbm, saas);
+    fs.writeFileSync(file, zip.buffer, { flag: 'wx' });
+    const old = fs.readdirSync(dir)
+      .filter(x => /^pre-restore-full-\d+\.zip$/.test(x))
+      .sort();
+    while (old.length > 3) {
+      const stale = old.shift();
+      fs.unlinkSync(path.join(dir, stale));
+    }
+    return name;
+  }
+
+  post('/super-admin/backup/validate', (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    try {
+      const raw = String(req.body.file_b64 || '');
+      const buf = Buffer.from(raw.includes(',') ? raw.split(',').pop() : raw, 'base64');
+      if (!buf.length) throw new Error('Berkas kosong atau belum dipilih.');
+      let totalRows = 0, tenantCount = 0;
+      if (buf[0] === 0x50 && buf[1] === 0x4b) {
+        const entries = X.unzipEntries(buf);
+        const cParts = Object.keys(entries).filter(n => /(^|\/)control-plane\.json$/i.test(n));
+        const tParts = Object.keys(entries).filter(n => /^sekolah\/[^/]+\/database\.json$/i.test(n));
+        if (!cParts.length && !tParts.length) throw new Error('Berkas ZIP bukan backup sistem SIMKEU.');
+        for (const key of tParts) {
+          const code = key.split('/')[1].split('-')[0].toUpperCase();
+          const tenant = saas.tenantByCode(code);
+          if (!tenant) continue;
+          const data = JSON.parse(entries[key].toString('utf8'));
+          const conn = dbm.openTenantConn(tenant.id, tenant.db_file);
+          const report = bd.validateDump(conn, data);
+          totalRows += report.rows;
+          tenantCount++;
+        }
+        if (cParts.length) {
+          const control = JSON.parse(entries[cParts[0]].toString('utf8'));
+          if (!control || control.app !== 'simkeu-saas' || !control.tables || typeof control.tables !== 'object') {
+            throw new Error('Data control plane pada ZIP tidak valid.');
+          }
+          const skip = new Set(['sessions', 'saas_jobs', 'tenants', 'saas_audit', 'saas_backup_log']);
+          const existing = new Set(dbm.tableNamesOf(saas.db));
+          for (const [table, rows] of Object.entries(control.tables)) {
+            if (skip.has(table) || !existing.has(table)) continue;
+            if (!Array.isArray(rows)) throw new Error(`Tabel control plane "${table}" bukan daftar baris yang valid.`);
+            const cols = new Set(saas.db.pragma(`table_info("${table}")`).map(c => c.name));
+            for (const row of rows) {
+              if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error(`Baris control plane "${table}" tidak valid.`);
+              for (const col of Object.keys(row)) if (!cols.has(col)) throw new Error(`Kolom control plane "${table}.${col}" tidak tersedia.`);
+              totalRows++;
+            }
+          }
+        }
+        if (!tenantCount && !cParts.length) throw new Error('Tidak ada database sekolah pada ZIP yang cocok dengan tenant terdaftar.');
+        return res.redirect(req.BASE + flash('/super-admin/backup', 'ok', `Validasi ZIP berhasil: ${tenantCount} database sekolah dan ${totalRows} baris; tidak ada data yang diubah.`));
+      }
+      const data = JSON.parse(buf.toString('utf8'));
+      const target = saas.tenantById(Number(req.body.tenant_id || 0));
+      if (!target) throw new Error('Pilih sekolah tujuan untuk validasi berkas JSON.');
+      const report = bd.validateDump(dbm.openTenantConn(target.id, target.db_file), data);
+      res.redirect(req.BASE + flash('/super-admin/backup', 'ok', `Validasi JSON berhasil: ${target.school_code}, ${report.tables} tabel dan ${report.rows} baris; tidak ada data yang diubah.`));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/backup', 'err', 'Validasi backup gagal: ' + e.message));
+    }
+  });
 
   post('/super-admin/backup/restore', (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
@@ -2130,7 +2345,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (!cParts.length && !tParts.length) {
         return res.redirect(req.BASE + flash(back, 'err', 'Berkas ZIP bukan backup sistem SIMKEU (control-plane.json / sekolah/*/database.json tidak ditemukan).'));
       }
-      let sekolahOk = 0, sekolahSkip = [], rows = 0;
+      const restorePlan = [], sekolahSkip = [];
       for (const key of tParts) {
         const code = key.split('/')[1].split('-')[0].toUpperCase();
         const t = saas.tenantByCode(code);
@@ -2138,34 +2353,73 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         try {
           const data = JSON.parse(entries[key].toString('utf8'));
           const conn = dbm.openTenantConn(t.id, t.db_file);
-          rows += restoreTenantDump(conn, data);
-          sekolahOk++;
-        } catch (e) { sekolahSkip.push(code + ' (' + e.message + ')'); }
+          const validation = bd.validateDump(conn, data);
+          restorePlan.push({ tenant: t, data, rows: validation.rows });
+        } catch (e) {
+          return res.redirect(req.BASE + flash(back, 'err', `Validasi database ${code} gagal; tidak ada database yang dipulihkan: ${e.message}`));
+        }
       }
       // control plane: pulihkan pengaturan & data pendukung, JANGAN timpa daftar sekolah
-      let cpTables = 0;
+      let control = null;
+      const cpSkip = new Set(['sessions', 'saas_jobs', 'tenants', 'saas_audit', 'saas_backup_log']);
       if (cParts.length) {
         try {
-          const control = JSON.parse(entries[cParts[0]].toString('utf8'));
-          const skip = new Set(['sessions', 'saas_jobs', 'tenants', 'saas_audit', 'saas_backup_log']);
+          control = JSON.parse(entries[cParts[0]].toString('utf8'));
+          if (!control || control.app !== 'simkeu-saas' || !control.tables || typeof control.tables !== 'object') {
+            throw new Error('Struktur control plane tidak valid.');
+          }
           const existing = new Set(dbm.tableNamesOf(saas.db));
-          for (const [t, list] of Object.entries(control.tables || {})) {
-            if (skip.has(t) || !existing.has(t) || !Array.isArray(list)) continue;
-            saas.db.prepare('DELETE FROM "' + t + '"').run();
+          for (const [table, list] of Object.entries(control.tables)) {
+            if (cpSkip.has(table) || !existing.has(table)) continue;
+            if (!Array.isArray(list)) throw new Error(`Tabel "${table}" bukan daftar baris yang valid.`);
+            const cols = new Set(saas.db.pragma(`table_info("${table}")`).map(c => c.name));
+            for (const row of list) {
+              if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error(`Baris tabel "${table}" tidak valid.`);
+              for (const col of Object.keys(row)) if (!cols.has(col)) throw new Error(`Kolom "${table}.${col}" tidak tersedia.`);
+            }
+          }
+        } catch (e) {
+          return res.redirect(req.BASE + flash(back, 'err', `Validasi control plane gagal; tidak ada database yang dipulihkan: ${e.message}`));
+        }
+      }
+      if (!restorePlan.length && !control) {
+        return res.redirect(req.BASE + flash(back, 'err', 'Tidak ada database backup yang cocok dengan sekolah terdaftar.'));
+      }
+      let snapshotName;
+      try { snapshotName = savePreRestoreSnapshot(); }
+      catch (e) {
+        return res.redirect(req.BASE + flash(back, 'err', 'Snapshot sebelum restore gagal dibuat; data tidak diubah. ' + e.message));
+      }
+      let sekolahOk = 0, rows = 0, cpTables = 0;
+      for (const item of restorePlan) {
+        try {
+          rows += restoreTenantDump(dbm.openTenantConn(item.tenant.id, item.tenant.db_file), item.data);
+          sekolahOk++;
+        } catch (e) {
+          return res.redirect(req.BASE + flash(back, 'err', `Restore berhenti setelah ${sekolahOk} sekolah; ${item.tenant.school_code} gagal: ${e.message}. Data sebelumnya mungkin sudah dipulihkan sebagian.`));
+        }
+      }
+      if (control) {
+        const existing = new Set(dbm.tableNamesOf(saas.db));
+        saas.db.transaction(() => {
+          for (const [table, list] of Object.entries(control.tables)) {
+            if (cpSkip.has(table) || !existing.has(table)) continue;
+            saas.db.prepare('DELETE FROM "' + table + '"').run();
             if (!list.length) continue;
             const cols = Object.keys(list[0]).filter(k => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k));
-            const stmt = saas.db.prepare('INSERT INTO "' + t + '" (' + cols.map(c => '"' + c + '"').join(',') + ') VALUES (' + cols.map(() => '?').join(',') + ')');
-            for (const row of list) stmt.run(cols.map(c => row[c] === undefined ? null : row[c]));
+            const stmt = saas.db.prepare('INSERT INTO "' + table + '" (' + cols.map(c => '"' + c + '"').join(',') + ') VALUES (' + cols.map(() => '?').join(',') + ')');
+            for (const row of list) { stmt.run(cols.map(c => row[c] === undefined ? null : row[c])); rows++; }
             cpTables++;
           }
-        } catch (e) { /* control plane opsional */ }
+        })();
       }
       try { saas.db.prepare('DELETE FROM sessions').run(); } catch (e) { }
       saas.logSaas(u, 'RESTORE DATABASE', 'saas',
         `Restore ZIP: ${sekolahOk} sekolah (${rows} baris), ${cpTables} tabel sistem` + (sekolahSkip.length ? `, dilewati: ${sekolahSkip.join(', ')}` : ''));
-      res.set('Set-Cookie', 'simkeu_saas=; Path=/; Max-Age=0');
+      res.set('Set-Cookie', `simkeu_saas=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`);
       const msg = `Restore ZIP selesai: ${sekolahOk} sekolah dipulihkan (${rows} baris), ${cpTables} tabel sistem.` +
-        (sekolahSkip.length ? ' Dilewati: ' + sekolahSkip.join(', ') + '.' : '') + ' Silakan masuk kembali.';
+        (sekolahSkip.length ? ' Dilewati: ' + sekolahSkip.join(', ') + '.' : '') +
+        ` Snapshot sebelum restore: ${snapshotName}. Silakan masuk kembali.`;
       return res.redirect(req.BASE + '/super-admin/login?ok=' + encodeURIComponent(msg));
     }
     // ---- berkas JSON: satu sekolah ----
@@ -2181,10 +2435,12 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     if (!target) return res.redirect(req.BASE + flash(back, 'err', 'Pilih sekolah tujuan untuk restore berkas JSON.'));
     try {
       const conn = dbm.openTenantConn(target.id, target.db_file);
+      bd.validateDump(conn, data);
+      const snapshotName = savePreRestoreSnapshot();
       const rows = restoreTenantDump(conn, data);
       try { saas.db.prepare('DELETE FROM sessions WHERE tenant_id=?').run(target.id); } catch (e) { }
       saas.logSaas(u, 'RESTORE DATABASE', 'tenant', `Restore JSON ke ${target.school_code} · ${target.nama} (${rows} baris)`, target.id);
-      res.redirect(req.BASE + flash(back, 'ok', `Restore JSON ke ${target.school_code} — ${target.nama} selesai (${rows} baris).`));
+      res.redirect(req.BASE + flash(back, 'ok', `Restore JSON ke ${target.school_code} — ${target.nama} selesai (${rows} baris). Snapshot sebelum restore: ${snapshotName}.`));
     } catch (e) {
       res.redirect(req.BASE + flash(back, 'err', 'Restore gagal: ' + e.message));
     }

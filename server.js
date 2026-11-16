@@ -657,17 +657,33 @@ function tenantPortalPath(tenant, kind) {
 
 const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/login'];
 /**
- * Rute yang DIKECUALIKAN dari proteksi CSRF: dipanggil server pihak ketiga
- * (payment gateway) tanpa cookie sesi & tanpa halaman form, sehingga tidak
- * mungkin membawa token CSRF. Aplikasi ini memakai cookie sesi SameSite=Lax,
- * namun daftar ini tetap dipakai bila proteksi CSRF diaktifkan di reverse proxy.
+ * Hanya callback gateway bertanda tangan yang dikecualikan dari pemeriksaan
+ * Origin/Fetch Metadata. Form browser lain tetap harus berasal dari aplikasi.
  */
 const CSRF_EXEMPT = new Set([
   '/api/webhook/kasera', '/pay/webhook/kasera',
-  '/pay/callback', '/portal/pay/callback',
-  '/register/otp/kirim', '/register/otp/verifikasi', '/login'
+  '/pay/callback', '/portal/pay/callback'
 ]);
 function isCsrfExempt(pathname) { return CSRF_EXEMPT.has(String(pathname || '')); }
+function hasOriginMetadata(req) {
+  return !!(req.headers.origin || req.headers.referer || req.headers['sec-fetch-site']);
+}
+function csrfRequestAllowed(req) {
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (fetchSite === 'cross-site' || fetchSite === 'none') return false;
+  const source = String(req.headers.origin || req.headers.referer || '').trim();
+  if (!source) return true;
+  try {
+    const from = new URL(source);
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const proto = String(req.headers['x-forwarded-proto'] || (req.socket && req.socket.encrypted ? 'https' : 'http'))
+      .split(',')[0].trim().toLowerCase();
+    return from.host.toLowerCase() === host.toLowerCase()
+      && from.protocol.replace(':', '').toLowerCase() === proto;
+  } catch (e) {
+    return false;
+  }
+}
 
 function isPublicPath(pathname) {
   if (['/login', '/register', '/daftar', '/logout'].includes(pathname)) return true;
@@ -784,6 +800,18 @@ const server = http.createServer(async (req, res) => {
   try { url = new URL(req.url, 'http://localhost'); } catch (e) { return makeRes(res).html('Bad request', 400); }
   const pathname0 = decodeURIComponent(url.pathname);
   req.query = url.searchParams;
+
+  if (pathname0 === '/healthz' && req.method === 'GET') {
+    try {
+      saas.db.prepare('SELECT 1').get();
+      dbm.mainDb.prepare('SELECT 1').get();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+      res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ ok: false }));
+    }
+  }
 
   // ---- static assets (tidak bergantung tenant) ----
   // Minifikasi + kompresi (gzip/brotli) + Cache-Control immutable bila URL memakai ?v=<versi>
@@ -970,10 +998,19 @@ const server = http.createServer(async (req, res) => {
   /* ================= PORTAL SUPER ADMIN PUSAT (dedicated route) ================= */
   if (isSuperPath) {
     try {
-      req.saasSession = session && session.row.kind === 'saas' ? session.row : null;
+      const cookies = parseCookies(req.headers.cookie);
+      const saasRow = saas.getSession(cookies.simkeu_saas);
+      const setupRow = saas.getSession(cookies.simkeu_mfa);
+      req.saasSession = saasRow && saasRow.kind === 'saas' ? saasRow : null;
+      req.mfaSession = setupRow && setupRow.kind === 'saas_mfa_setup' ? setupRow : null;
       req.saasUser = req.saasSession ? saas.adminById(req.saasSession.user_id) : null;
       req.body = {};
       if (['POST', 'PUT', 'PATCH'].includes(req.method)) req.body = await readBody(req);
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
+        && (req.saasSession || req.mfaSession || hasOriginMetadata(req))
+        && !isCsrfExempt(pathname0) && !csrfRequestAllowed(req)) {
+        return R.html(renderError(403, 'Permintaan ditolak', 'Asal permintaan tidak sesuai dengan alamat aplikasi. Muat ulang halaman lalu coba kembali.'), 403);
+      }
       return await dbm.runWithMeta({ ip: clientIp(req), tenantId: null }, () => runRoute(pathname0));
     } catch (err) { return handleError(err, pathname0); }
   }
@@ -999,6 +1036,10 @@ const server = http.createServer(async (req, res) => {
   try {
     req.body = {};
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) req.body = await readBody(req);
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
+      && !session && hasOriginMetadata(req) && !isCsrfExempt(pathname0) && !csrfRequestAllowed(req)) {
+      return R.html(renderError(403, 'Permintaan ditolak', 'Asal permintaan tidak sesuai dengan alamat aplikasi.'), 403);
+    }
 
     /* ---------- belum login: halaman publik + portal orang tua (slug per sekolah) ---------- */
     if (!session) {
@@ -1185,6 +1226,10 @@ const server = http.createServer(async (req, res) => {
             return R.redirect(base + '/login?err=' + encodeURIComponent('Akun tidak terikat pada sekolah ini.'));
           }
           req.user = u;
+          if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
+            && !isCsrfExempt(pathname) && !csrfRequestAllowed(req)) {
+            return R.html(renderError(403, 'Permintaan ditolak', 'Asal permintaan tidak sesuai dengan alamat aplikasi. Muat ulang halaman lalu coba kembali.'), 403);
+          }
 
           // ---- pemblokiran otomatis (masa aktif habis / ditangguhkan) ----
           if (saas.isBlocked(tenant) && !ALWAYS_ALLOWED.some(p => pathname === p || pathname.startsWith(p + '/'))) {

@@ -16,13 +16,16 @@
 const lib = require('./lib');
 
 const MAX_ATTEMPTS = 3;
+const DONE_RETENTION_DAYS = 30;
 const handlers = new Map();
 let running = false;
 let timer = null;
 let dbRef = null;
+let cleanupDay = '';
 
 function init(saasDb) {
   dbRef = saasDb;
+  cleanupDay = '';
   saasDb.exec(`
     CREATE TABLE IF NOT EXISTS saas_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,8 +69,18 @@ function recent(limit = 20) {
 }
 function clearDone(days = 7) {
   if (!dbRef) return 0;
+  const keepDays = Math.max(0, Math.floor(Number(days) || 0));
+  const cutoff = lib.plusDaysStamp(-keepDays);
   return dbRef.prepare("DELETE FROM saas_jobs WHERE status='done' AND created_at < ?")
-    .run(lib.todayISO()) && 0;
+    .run(cutoff).changes;
+}
+function cleanupOldDone() {
+  const today = lib.todayISO();
+  if (cleanupDay === today) return 0;
+  const removed = clearDone(DONE_RETENTION_DAYS);
+  cleanupDay = today;
+  if (removed) console.log(`[queue] membersihkan ${removed} pekerjaan selesai berusia lebih dari ${DONE_RETENTION_DAYS} hari`);
+  return removed;
 }
 
 /** ambil satu job siap-jalan (FIFO) */
@@ -119,7 +132,7 @@ function start(intervalMs = 30000) {
   timer = setInterval(async () => {
     if (running) return;
     running = true;
-    try { await drain(20); } catch (e) { console.error('[queue]', e.message); }
+    try { cleanupOldDone(); await drain(20); } catch (e) { console.error('[queue]', e.message); }
     finally { running = false; }
   }, intervalMs);
   if (timer.unref) timer.unref();
@@ -128,4 +141,7 @@ function start(intervalMs = 30000) {
 function stop() { if (timer) { clearInterval(timer); timer = null; } }
 function isRunning() { return running; }
 
-module.exports = { init, register, push, stats, recent, clearDone, take, runOnce, drain, start, stop, isRunning, MAX_ATTEMPTS };
+module.exports = {
+  init, register, push, stats, recent, clearDone, cleanupOldDone,
+  take, runOnce, drain, start, stop, isRunning, MAX_ATTEMPTS, DONE_RETENTION_DAYS
+};

@@ -2,6 +2,8 @@
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, setSession, COOKIE, roleLabel, permissionMatrix, renderError, uploadMedia, saas }) => {
   const { db } = dbm;
+  const secureCookie = req => String(req.headers['x-forwarded-proto'] || (req.socket && req.socket.encrypted ? 'https' : ''))
+    .split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : '';
 
   function authShell({ base, content, sideTitle, sideDesc }) {
     // branding halaman login = branding layanan (bukan milik satu sekolah)
@@ -88,14 +90,26 @@ ${ui.themeCss(tema)}
     const ident = String(req.body.email || '').trim();
     const password = String(req.body.password || '');
     const fail = msg => res.redirect(base + '/login?err=' + encodeURIComponent(msg) + (kode ? '&kode=' + encodeURIComponent(kode) : ''));
+    const identity = 'school:' + ident.toLowerCase();
+    if (saas.authIsLimited(identity)) return fail('Terlalu banyak percobaan masuk. Silakan coba kembali dalam 15 menit.');
     // Kompatibilitas: tautan/ bookmark lama tanpa kode sekolah tetap dilayani
     // oleh sekolah pertama (SK01). Bila kode diisi, isolasi tetap ketat per sekolah.
     const tenant = kode ? saas.tenantByCode(kode) : saas.tenantById(1);
-    if (!tenant) return fail(kode ? ('Kode sekolah "' + kode + '" tidak ditemukan. Periksa kembali kode dari admin sekolah Anda.') : 'Kode sekolah wajib diisi (4 karakter).');
+    if (!tenant) {
+      saas.authRecord(identity, false);
+      return fail(kode ? ('Kode sekolah "' + kode + '" tidak ditemukan. Periksa kembali kode dari admin sekolah Anda.') : 'Kode sekolah wajib diisi (4 karakter).');
+    }
     const conn = dbm.openTenantConn(tenant.id, tenant.db_file);
     const u = conn.prepare("SELECT * FROM users WHERE lower(email)=lower(?) OR lower(COALESCE(username,''))=lower(?) ORDER BY id LIMIT 1").get(ident, ident);
-    if (!u || !lib.verifyPassword(password, u.password)) return fail('Username atau password salah' + (kode ? ' untuk sekolah ' + kode : '') + '.');
-    if (!u.aktif) return fail('Akun Anda dinonaktifkan. Hubungi admin sekolah.');
+    if (!u || !lib.verifyPassword(password, u.password)) {
+      saas.authRecord(identity, false);
+      return fail('Username atau password salah' + (kode ? ' untuk sekolah ' + kode : '') + '.');
+    }
+    if (!u.aktif) {
+      saas.authRecord(identity, false);
+      return fail('Akun Anda dinonaktifkan. Hubungi admin sekolah.');
+    }
+    saas.authRecord(identity, true);
     // hitung draf pengeluaran baru di database sekolah tersebut
     const alert = dbm.runAsTenant(tenant, () => {
       const pendingRow = db.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending'").get();
@@ -105,7 +119,7 @@ ${ui.themeCss(tema)}
     dbm.runAsTenant(tenant, () => {
       dbm.logAudit(u, 'LOGIN', 'auth', `${u.nama} masuk ke aplikasi (${tenant.nama})`);
     });
-    res.set('Set-Cookie', `${COOKIE}=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}`);
+    res.set('Set-Cookie', `${COOKIE}=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}${secureCookie(req)}`);
     res.redirect(base + '/');
   });
 
@@ -467,7 +481,7 @@ ${ui.themeCss(tema)}
           + (token ? ' langsung masuk ke dashboard' : ' diarahkan ke halaman kredensial')));
       } catch (e) { }
       if (token) {
-        res.set('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}`);
+        res.set('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}${secureCookie(req)}`);
         return res.redirect(base + '/?welcome=1');
       }
       // ---- fallback: halaman sukses berisi kredensial (token sekali pakai) ----
@@ -545,7 +559,7 @@ ${ui.themeCss(tema)}
     const c = String(req.headers.cookie || '');
     const m = c.match(/simkeu_sid=([^;]+)/);
     if (m) saas.destroySession(decodeURIComponent(m[1]));
-    res.set('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
+    res.set('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`);
     res.redirect(req.BASE + '/login?ok=' + encodeURIComponent('Anda telah keluar dari aplikasi.'));
   });
 

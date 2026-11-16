@@ -205,8 +205,12 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   ok('order gateway memiliki order_id', !!coG && /^IU\d+-/.test(coG.order_id), coG && coG.order_id);
   ok('QRIS string tersimpan (sandbox)', !!coG.qr_string, coG && coG.qr_string);
   r = await pub('POST', '/portal/pay/callback?t=1', { order_id: coG.order_id, status: 'PAID', paid: true, amount: 150000 });
-  ok('callback gateway 200', r.status === 200, r.status + ' ' + r.text);
-  ok('callback menandai lunas', one('SELECT status FROM iuran_checkout WHERE id=?', coG.id).status === 'lunas');
+  ok('callback sandbox tanpa signature ditolak', r.status === 401, r.status + ' ' + r.text);
+  ok('checkout tetap menunggu setelah callback sandbox palsu',
+    one('SELECT status FROM iuran_checkout WHERE id=?', coG.id).status === 'menunggu');
+  r = await req('POST', '/iuran/verifikasi', { id: coG.id, aksi: 'setuju' });
+  ok('admin dapat menyetujui pembayaran sandbox secara manual', r.status === 303 && /ok=/.test(r.loc), r.status + ' ' + r.loc);
+  ok('verifikasi manual menandai lunas', one('SELECT status FROM iuran_checkout WHERE id=?', coG.id).status === 'lunas');
   const rowsG = all("SELECT * FROM iuran_bayar WHERE siswa_id=? AND status='pending'", sid);
   ok('gateway → antrean bertambah menjadi 2 baris', rowsG.length === 2, 'baris=' + rowsG.length);
   const notifG = one("SELECT * FROM notif WHERE untuk='super_admin' AND jenis='bayar-lunas' ORDER BY id DESC LIMIT 1");

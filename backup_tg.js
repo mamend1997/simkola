@@ -96,13 +96,16 @@ function buildTenantZip(dbm, tenant) {
 /** ZIP seluruh SaaS: control plane + database semua sekolah */
 function buildSaasZip(dbm, saas) {
   const files = [];
-  const control = { app: 'simkeu-saas', scope: 'full', version: 2, created_at: lib.nowStamp(), tables: {} };
-  for (const name of dbm.tableNamesOf(saas.db)) {
-    if (name === 'sessions' || name === 'saas_jobs') continue;
-    try { control.tables[name] = saas.db.prepare('SELECT * FROM "' + name + '"').all(); } catch (e) { control.tables[name] = []; }
-  }
+  const control = saas.db.transaction(() => {
+    const snapshot = { app: 'simkeu-saas', scope: 'full', version: 2, created_at: lib.nowStamp(), tables: {} };
+    for (const name of dbm.tableNamesOf(saas.db)) {
+      if (name === 'sessions' || name === 'saas_jobs') continue;
+      snapshot.tables[name] = saas.db.prepare('SELECT * FROM "' + name + '"').all();
+    }
+    return snapshot;
+  })();
   files.push({ name: 'saas/control-plane.json', data: JSON.stringify(control, null, 1) });
-  let totalRows = 0, totalTenants = 0, errors = [];
+  let totalRows = 0, totalTenants = 0;
   for (const t of saas.allTenants()) {
     try {
       const conn = dbm.openTenantConn(t.id, t.db_file);
@@ -114,8 +117,7 @@ function buildSaasZip(dbm, saas) {
         data: JSON.stringify(dump, null, 1)
       });
     } catch (e) {
-      errors.push(`${t.school_code}: ${e.message}`);
-      files.push({ name: `sekolah/${t.school_code}/ERROR.txt`, data: 'Gagal membaca database: ' + e.message });
+      throw new Error(`Backup sekolah ${t.school_code} gagal; berkas tidak dibuat. ${e.message}`);
     }
   }
   files.push({
@@ -129,7 +131,7 @@ function buildSaasZip(dbm, saas) {
       `Sekolah: ${totalTenants} · total baris data: ${totalRows}`
     ].join('\r\n')
   });
-  return { buffer: lib.zip(files), rows: totalRows, tenants: totalTenants, control, errors };
+  return { buffer: lib.zip(files), rows: totalRows, tenants: totalTenants, control };
 }
 
 /* ---------------- kirim ke Telegram ---------------- */

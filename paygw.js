@@ -495,27 +495,34 @@ function verifyCallback(cfg, body = {}, headers = {}, raw = null) {
   const provider = cfg.provider || 'sandbox';
   const key = clean(cfg.key);
   const merchant = clean(cfg.merchant);
-  if (provider === 'sandbox') return true;
+  const equal = (a, b) => {
+    const actual = Buffer.from(String(a || ''));
+    const expected = Buffer.from(String(b || ''));
+    return actual.length > 0 && actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  };
+  if (provider === 'sandbox') return false;
   try {
     if (provider === 'midtrans') {
+      if (!key) return false;
       const sig = String(body.signature_key || '');
       if (!sig) return false;
-      return crypto.createHash('sha512').update(`${body.order_id}${body.status_code}${body.gross_amount}${key}`).digest('hex') === sig;
+      return equal(sig, crypto.createHash('sha512').update(`${body.order_id}${body.status_code}${body.gross_amount}${key}`).digest('hex'));
     }
     if (provider === 'duitku') {
+      if (!key || !merchant) return false;
       const sig = String(body.signature || '');
       if (!sig) return false;
-      return crypto.createHash('md5').update(`${merchant}${body.amount}${body.merchantOrderId}${key}`).digest('hex') === sig;
+      return equal(sig, crypto.createHash('md5').update(`${merchant}${body.amount}${body.merchantOrderId}${key}`).digest('hex'));
     }
     if (provider === 'xendit') {
       const token = String(headers['x-callback-token'] || body.callback_token || '');
       const expect = clean(cfg.callback) || clean(cfg.key2);
-      if (!expect) return true;
-      return token === expect;
+      if (!expect) return false;
+      return equal(token, expect);
     }
     if (provider === 'kasera') {
       const secrets = kaseraSecrets(cfg);
-      if (!secrets.length) return true;   // belum diatur → perilaku lama (dijaga kompatibel)
+      if (!secrets.length) return false;
       /* body mentah lebih akurat; JSON.stringify hanya cadangan pemanggil lama */
       const bahan = raw !== null && raw !== undefined
         ? raw

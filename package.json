@@ -4,7 +4,9 @@
   "description": "Sistem Informasi Manajemen Keuangan Sekolah (BKU, RAPBS, Piutang, SPP, Laporan)",
   "main": "server.js",
   "scripts": {
-    "start": "node railway-start.js"
+    "start": "node railway-start.js",
+    "test": "node dev-tests/hardening.js",
+    "test:hardening": "node dev-tests/hardening.js"
   },
   "engines": { "node": "22.x" },
   "dependencies": {
