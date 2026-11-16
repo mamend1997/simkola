@@ -264,19 +264,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       const pkg = (saas.packageByKode && saas.packageByKode(ten.paket)) || null;
       const pkgNama = pkg ? pkg.nama : (saas.PAKET[ten.paket] || ten.paket);
       const harga = pkg ? Number(pkg.harga_bulan) || 0 : saas.priceOf(30);
-      const masa = Number(ten.is_lifetime_free) ? 'Lifetime' : esc(tglID(ten.expires_at || '-'));
-      const sisa = tenStatus.key === 'lifetime' ? 'bebas tagihan'
-        : (tenStatus.daysLeft === null ? esc(tenStatus.label)
-          : (tenStatus.daysLeft < 0 ? `lewat ${Math.abs(tenStatus.daysLeft)} hari` : `sisa ${tenStatus.daysLeft} hari`));
+      const isLifetime = Number(ten.is_lifetime_free) === 1;
+      const masa = isLifetime ? 'Lifetime' : esc(tglID(ten.expires_at || '-'));
+      const billingFacts = isLifetime ? '' : `<div class="svc-fact"><span>Biaya</span><b>${rupiah(harga)}/bln</b></div>
+        <div class="svc-fact"><span>Status</span><b>${tenStatus.daysLeft === null ? esc(tenStatus.label)
+          : (tenStatus.daysLeft < 0 ? `lewat ${Math.abs(tenStatus.daysLeft)} hari` : `sisa ${tenStatus.daysLeft} hari`)}</b></div>`;
       return `<div class="card svc-mini mb-3" id="infoLayanan">
         <div class="svc-ico">${ui.icon('layers')}</div>
         <div class="svc-fact"><span>Paket</span><b>${esc(pkgNama)}</b></div>
         <div class="svc-fact"><span>Masa aktif</span><b>${masa}</b></div>
-        <div class="svc-fact"><span>Biaya</span><b>${rupiah(harga)}/bln</b></div>
-        <div class="svc-fact"><span>Status</span><b>${esc(sisa)}</b></div>
+        ${billingFacts}
         <div class="svc-actions">
           <a class="btn btn-sm" href="${c.base}/info-layanan">Detail</a>
-          ${Number(ten.is_lifetime_free) ? '' : `<a class="btn btn-sm btn-primary" href="${c.base}/perpanjang">Perpanjang</a>`}
+          ${isLifetime ? '' : `<a class="btn btn-sm btn-primary" href="${c.base}/perpanjang">Perpanjang</a>`}
         </div>
       </div>`;
     })() : '';
