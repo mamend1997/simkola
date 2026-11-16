@@ -8,7 +8,8 @@ process.env.TZ = process.env.TZ || 'Asia/Jakarta';
    2) Antrean Posting: kolom Keterangan (Masuk BKU / Non-BKU) sesuai pilihan
       saat pembayaran diinput + DUA tombol aksi per baris & masal.
    3) Tanpa batas 30 data + filter periode (bulan & rentang tanggal) pada
-      Antrean Posting & Riwayat Non-BKU; tombol "Kembalikan ke Antrean".
+      Antrean Posting & riwayat, filter nama/rentang tanggal pada Riwayat BKU
+      dan Non-BKU; tombol "Kembalikan ke Antrean".
    Jalankan: node dev-tests/round48.js
    ===================================================================== */
 const { spawn } = require('child_process');
@@ -165,12 +166,27 @@ const countOf = (html, needle) => html.split(needle).length - 1;
       bku.id, 'pending', 'KW-PD-KEG', '2026-09-15 10:00:00');
     pendingIds.push(Number(b.lastInsertRowid));
   }
+  for (const [i, tgl] of [[1, '2026-07-12'], [2, '2026-09-12']]) {
+    const sid = siswaIds[i - 1];
+    const tag = one('SELECT * FROM iuran_tagihan WHERE siswa_id=? AND grup_id=?', sid, grupId);
+    insBayar.run(tag.id, sid, tgl, 200000, 0, 200000, 'tunai', 'Posted uji',
+      bku.id, 'posted', 'KW-BKU-0' + i, tgl + ' 11:00:00');
+  }
 
   r = await req('GET', '/iuran/antrean');
   ok('halaman antrean 200', r.status === 200, 'status=' + r.status);
   const tblQueue = cut(r.text, '<table id="tblAntreanQueue"', '</table>');
   const tblPending = cut(r.text, '<table id="tblAntreanPending"', '</table>');
+  const tblPosted = cut(r.text, '<table id="tblAntreanPosted"', '</table>');
   const tblNon = cut(r.text, '<table id="tblAntreanNonBku"', '</table>');
+  ok('Riwayat BKU ditempatkan sebelum riwayat Non-BKU',
+    r.text.indexOf('Riwayat Penerimaan BKU') < r.text.indexOf('Riwayat Penerimaan Non-BKU'));
+  ok('Riwayat BKU menampilkan baris terposting & kwitansi', countOf(tblPosted, 'data-check-item="ids"') === 2
+    && tblPosted.includes('KW-BKU-01') && tblPosted.includes('Kwitansi'));
+  ok('Riwayat BKU punya aksi hapus terpilih', /Hapus Terpilih/.test(cut(r.text, 'Riwayat Penerimaan BKU', 'Riwayat Penerimaan Non-BKU')));
+  ok('kedua riwayat punya filter nama & rentang tanggal',
+    countOf(r.text, 'name="riwayat_q"') === 2 && countOf(r.text, 'name="riwayat_dari"') === 2
+    && countOf(r.text, 'name="riwayat_sampai"') === 2);
   ok('tabel antrean punya kolom Keterangan', tblQueue.includes('<th>Keterangan</th>'));
   ok('tabel rincian punya kolom Keterangan', tblPending.includes('<th>Keterangan</th>'));
   ok('tabel riwayat Non-BKU punya kolom Keterangan', tblNon.includes('<th>Keterangan</th>'));
@@ -214,20 +230,34 @@ const countOf = (html, needle) => html.split(needle).length - 1;
 
   r = await req('GET', '/iuran/antrean?bulan=2026-07');
   let tblNonB = cut(r.text, '<table id="tblAntreanNonBku"', '</table>');
+  let tblPostedB = cut(r.text, '<table id="tblAntreanPosted"', '</table>');
   ok('filter bulan Juli → hanya 34 baris Juli', countOf(tblNonB, 'data-check-item="ids"') === 34,
     'baris=' + countOf(tblNonB, 'data-check-item="ids"'));
+  ok('filter periode umum juga membatasi Riwayat BKU', countOf(tblPostedB, 'data-check-item="ids"') === 1);
   ok('filter bulan Juli → baris September tidak tampil', !tblNonB.includes('KW-NB-40'));
   ok('filter bulan Juli → antrean pending kosong', /Antrean kosong/.test(r.text));
   ok('filter aktif ditandai di halaman', /Filter aktif/.test(r.text));
 
   r = await req('GET', '/iuran/antrean?dari=2026-09-01&sampai=2026-09-30');
   tblNonB = cut(r.text, '<table id="tblAntreanNonBku"', '</table>');
+  tblPostedB = cut(r.text, '<table id="tblAntreanPosted"', '</table>');
   let tblQ = cut(r.text, '<table id="tblAntreanQueue"', '</table>');
   ok('rentang September → 6 baris Non-BKU', countOf(tblNonB, 'data-check-item="ids"') === 6,
     'baris=' + countOf(tblNonB, 'data-check-item="ids"'));
   ok('rentang September → 2 kelompok antrean', countOf(tblQ, 'Tinjau / Edit') === 2,
     String(countOf(tblQ, 'Tinjau / Edit')));
   ok('rentang September → baris Juli tidak tampil', !tblNonB.includes('KW-NB-01'));
+  ok('rentang umum September → Riwayat BKU September tampil', tblPostedB.includes('KW-BKU-02') && !tblPostedB.includes('KW-BKU-01'));
+
+  r = await req('GET', '/iuran/antrean?riwayat_q=Siswa+Uji+01&riwayat_dari=2026-07-01&riwayat_sampai=2026-07-31');
+  tblNonB = cut(r.text, '<table id="tblAntreanNonBku"', '</table>');
+  tblPostedB = cut(r.text, '<table id="tblAntreanPosted"', '</table>');
+  ok('filter riwayat nama + tanggal membatasi Riwayat Non-BKU', countOf(tblNonB, 'data-check-item="ids"') === 1);
+  ok('filter riwayat nama + tanggal membatasi Riwayat BKU', countOf(tblPostedB, 'data-check-item="ids"') === 1);
+  ok('filter riwayat tanggal terisi kembali di kedua panel',
+    countOf(r.text, 'name="riwayat_dari" value="2026-07-01"') === 3
+    && countOf(r.text, 'name="riwayat_sampai" value="2026-07-31"') === 3,
+    countOf(r.text, 'name="riwayat_dari" value="2026-07-01"') + '/' + countOf(r.text, 'name="riwayat_sampai" value="2026-07-31"'));
 
   r = await req('GET', '/iuran/antrean?dari=2026-09-30&sampai=2026-09-01');
   tblNonB = cut(r.text, '<table id="tblAntreanNonBku"', '</table>');

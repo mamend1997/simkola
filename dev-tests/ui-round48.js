@@ -5,7 +5,7 @@ process.env.TZ = process.env.TZ || 'Asia/Jakarta';
    1) Combobox nama penerima: klik → daftar pegawai, ketik → tersaring,
       pilih → nilai terisi, ketik manual tetap boleh, navigasi keyboard.
    2) Antrean Posting: kolom Keterangan, dua tombol aksi per baris,
-      tombol masal, filter bulan/tanggal berfungsi lewat UI.
+      filter bulan/tanggal dan filter riwayat nama/tanggal berfungsi lewat UI.
    3) Mobile 390px tanpa overflow & tanpa error JS.
    Jalankan: node dev-tests/ui-round48.js
    ===================================================================== */
@@ -82,6 +82,11 @@ const errors = [];
       Number(t.lastInsertRowid), sid, tgl, 300000, 300000, 'tunai', 'Uji UI',
       i <= 4 ? null : bku.id, i <= 4 ? 'manual' : 'pending', 'UI-KW-' + i, tgl + ' 09:00:00');
   }
+  const postedSiswa = one('SELECT id FROM siswa WHERE nisn=?', '98000001');
+  const postedTag = one('SELECT id FROM iuran_tagihan WHERE siswa_id=? AND grup_id=?', postedSiswa.id, grupId);
+  run(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,keterangan,bku_id,status,kwitansi_no,print_count,created_at)
+       VALUES (?,?,?,200000,0,200000,'tunai','Uji UI BKU',?,'posted','UI-KW-BKU',0,?)`,
+    postedTag.id, postedSiswa.id, '2026-07-20', bku.id, '2026-07-20 11:00:00');
 
   const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -166,8 +171,14 @@ const errors = [];
      ================================================================== */
   console.log('\n[2] Halaman Antrean Posting');
   await page.goto(base + '/iuran/antrean', { waitUntil: 'domcontentloaded' });
-  const heads = await page.locator('#tblAntreanQueue thead th, #tblAntreanPending thead th, #tblAntreanNonBku thead th').allInnerTexts();
-  ok('ketiga tabel punya kolom Keterangan', heads.filter(t => /KETERANGAN/i.test(t)).length === 3, heads.join('|'));
+  const heads = await page.locator('#tblAntreanQueue thead th, #tblAntreanPending thead th, #tblAntreanPosted thead th, #tblAntreanNonBku thead th').allInnerTexts();
+  ok('keempat tabel punya kolom Keterangan', heads.filter(t => /KETERANGAN/i.test(t)).length === 4, heads.join('|'));
+  const sectionTitles = await page.locator('h3').allInnerTexts();
+  ok('Riwayat BKU tampil sebelum Non-BKU',
+    sectionTitles.indexOf('Riwayat Penerimaan BKU') < sectionTitles.indexOf('Riwayat Penerimaan Non-BKU'));
+  ok('Riwayat BKU punya pilihan baris dan tombol kwitansi',
+    (await page.locator('#tblAntreanPosted tbody input[data-check-item="ids"]').count()) === 1
+    && (await page.locator('#tblAntreanPosted a:has-text("Kwitansi")').count()) === 1);
   ok('antrean menampilkan badge Masuk BKU',
     (await page.locator('#tblAntreanQueue .badge').allInnerTexts()).some(t => /Masuk BKU/i.test(t)));
   ok('riwayat Non-BKU menampilkan badge Non-BKU',
@@ -183,6 +194,10 @@ const errors = [];
     && (await rowNon.locator('button:has-text("Kembalikan ke Antrean")').count()) === 1);
   ok('riwayat Non-BKU menampilkan 4 baris (tanpa batas 30)', (await page.locator('#tblAntreanNonBku tbody tr').count()) === 4,
     String(await page.locator('#tblAntreanNonBku tbody tr').count()));
+  ok('filter nama dan tanggal riwayat tersedia pada kedua panel',
+    (await page.locator('form.period-bar input[name="riwayat_q"]').count()) === 2
+    && (await page.locator('form.period-bar input[name="riwayat_dari"]').count()) === 2
+    && (await page.locator('form.period-bar input[name="riwayat_sampai"]').count()) === 2);
 
   // modal Tinjau / Edit antrean
   await page.locator('#tblAntreanQueue button:has-text("Tinjau / Edit")').first().click();
@@ -205,6 +220,18 @@ const errors = [];
     String(await page.locator('#tblAntreanNonBku tbody tr').count()));
   ok('filter aktif ditandai & tombol Reset muncul',
     /Filter aktif/.test(await page.locator('.period-bar').innerText()) && (await page.locator('.period-bar a:has-text("Reset")').count()) === 1);
+
+  const histFilter = page.locator('form.period-bar').nth(1);
+  await histFilter.locator('input[name="riwayat_q"]').fill('Siswa UI 1');
+  await histFilter.locator('input[name="riwayat_dari"]').fill('2026-07-01');
+  await histFilter.locator('input[name="riwayat_sampai"]').fill('2026-07-31');
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    histFilter.locator('button:has-text("Cari Riwayat")').click()
+  ]);
+  ok('filter riwayat nama/tanggal berlaku pada BKU dan Non-BKU',
+    (await page.locator('#tblAntreanPosted tbody tr').count()) === 1
+    && (await page.locator('#tblAntreanNonBku tbody tr').count()) === 1);
 
   await page.goto(base + '/iuran/antrean?dari=2026-09-01&sampai=2026-09-30', { waitUntil: 'domcontentloaded' });
   ok('filter rentang tanggal menyisakan 4 penerimaan September', (await page.locator('#tblAntreanPending tbody tr').count()) === 4,

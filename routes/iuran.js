@@ -2169,6 +2169,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const qBulan = /^\d{4}-\d{2}$/.test(req.query.get('bulan') || '') ? req.query.get('bulan') : '';
     let qDari = /^\d{4}-\d{2}-\d{2}$/.test(req.query.get('dari') || '') ? req.query.get('dari') : '';
     let qSampai = /^\d{4}-\d{2}-\d{2}$/.test(req.query.get('sampai') || '') ? req.query.get('sampai') : '';
+    const riwayatQ = String(req.query.get('riwayat_q') || '').trim();
+    let riwayatDari = /^\d{4}-\d{2}-\d{2}$/.test(req.query.get('riwayat_dari') || '') ? req.query.get('riwayat_dari') : '';
+    let riwayatSampai = /^\d{4}-\d{2}-\d{2}$/.test(req.query.get('riwayat_sampai') || '') ? req.query.get('riwayat_sampai') : '';
     const akhirBulan = ym => {
       const y = Number(String(ym).slice(0, 4)), m = Number(String(ym).slice(5, 7));
       const hari = new Date(Date.UTC(y, m, 0)).getUTCDate();   // hari terakhir bulan tsb
@@ -2176,15 +2179,23 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     };
     if (qBulan) { qDari = qBulan + '-01'; qSampai = akhirBulan(qBulan); }
     if (qDari && qSampai && qDari > qSampai) { const tmp = qDari; qDari = qSampai; qSampai = tmp; }
+    if (riwayatDari && riwayatSampai && riwayatDari > riwayatSampai) {
+      const tmp = riwayatDari; riwayatDari = riwayatSampai; riwayatSampai = tmp;
+    }
     const filterAktif = !!(qBulan || qDari || qSampai);
     const inRange = r => (!qDari || String(r.tanggal || '') >= qDari) && (!qSampai || String(r.tanggal || '') <= qSampai);
+    const inRiwayatRange = r =>
+      (!riwayatQ || String(r.siswa_nama || '').toLocaleLowerCase().includes(riwayatQ.toLocaleLowerCase())) &&
+      (!riwayatDari || String(r.tanggal || '') >= riwayatDari) &&
+      (!riwayatSampai || String(r.tanggal || '') <= riwayatSampai);
     const labelBulan = ym => `${BULAN[Number(String(ym).slice(5, 7)) - 1] || ym} ${String(ym).slice(0, 4)}`;
 
     /* SELURUH riwayat penerimaan TA ini — tanpa batas 30 baris */
     const rowsAll = dbm.iuranBayarRows({ taId });
     const bulanOpts = [...new Set(rowsAll.map(r => String(r.tanggal || '').slice(0, 7)).filter(v => /^\d{4}-\d{2}$/.test(v)))].sort().reverse();
     const pendingRows = rowsAll.filter(r => r.status === 'pending' && inRange(r));
-    const nonBkuRows = rowsAll.filter(r => (r.status === 'manual' || r.status === 'nonbku') && inRange(r));
+    const postedRows = rowsAll.filter(r => r.status === 'posted' && inRange(r) && inRiwayatRange(r));
+    const nonBkuRows = rowsAll.filter(r => (r.status === 'manual' || r.status === 'nonbku') && inRange(r) && inRiwayatRange(r));
     const queue = queueRows(pendingRows);
 
     const bukuss = db.prepare("SELECT * FROM bku WHERE status='aktif' AND tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY jenis DESC, urutan").all(taId || 0);
@@ -2235,13 +2246,41 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </select></div>
       <div class="pb-field"><label>Tanggal Mulai</label><input type="date" name="dari" value="${esc(qBulan ? '' : qDari)}"></div>
       <div class="pb-field"><label>Tanggal Akhir</label><input type="date" name="sampai" value="${esc(qBulan ? '' : qSampai)}"></div>
+      ${riwayatQ ? `<input type="hidden" name="riwayat_q" value="${esc(riwayatQ)}">` : ''}
+      ${riwayatDari ? `<input type="hidden" name="riwayat_dari" value="${esc(riwayatDari)}">` : ''}
+      ${riwayatSampai ? `<input type="hidden" name="riwayat_sampai" value="${esc(riwayatSampai)}">` : ''}
       <div class="pb-actions">
         <button class="btn btn-sm btn-primary">${ui.icon('filter')}Terapkan Filter</button>
         ${filterAktif ? `<a class="btn btn-sm" href="${c.base}/iuran/antrean">${ui.icon('x')}Reset</a>` : ''}
       </div>
       <div class="pb-info">${filterAktif ? `Filter aktif: <b>${esc(periodeInfo)}</b>` : 'Seluruh riwayat ditampilkan (tanpa batas jumlah)'}
-        · ${pendingRows.length} belum terposting · ${nonBkuRows.length} Non-BKU</div>
+        · ${pendingRows.length} belum terposting · ${postedRows.length} terposting BKU · ${nonBkuRows.length} Non-BKU</div>
     </form>`;
+    const riwayatFilter = () => {
+      const keep = [];
+      if (qBulan) keep.push(`<input type="hidden" name="bulan" value="${esc(qBulan)}">`);
+      else {
+        if (qDari) keep.push(`<input type="hidden" name="dari" value="${esc(qDari)}">`);
+        if (qSampai) keep.push(`<input type="hidden" name="sampai" value="${esc(qSampai)}">`);
+      }
+      const reset = new URLSearchParams();
+      if (qBulan) reset.set('bulan', qBulan);
+      else {
+        if (qDari) reset.set('dari', qDari);
+        if (qSampai) reset.set('sampai', qSampai);
+      }
+      const resetHref = `${c.base}/iuran/antrean${reset.toString() ? '?' + reset.toString() : ''}`;
+      const active = !!(riwayatQ || riwayatDari || riwayatSampai);
+      return `<form method="get" action="${c.base}/iuran/antrean" class="period-bar mb-2">
+        ${keep.join('')}
+        <div class="pb-field"><label>Nama Siswa</label><input name="riwayat_q" value="${esc(riwayatQ)}" placeholder="Cari nama siswa" autocomplete="off"></div>
+        <div class="pb-field"><label>Tanggal Mulai</label><input type="date" name="riwayat_dari" value="${esc(riwayatDari)}"></div>
+        <div class="pb-field"><label>Tanggal Akhir</label><input type="date" name="riwayat_sampai" value="${esc(riwayatSampai)}"></div>
+        <div class="pb-actions"><button class="btn btn-sm btn-primary">${ui.icon('filter')}Cari Riwayat</button>
+          ${active ? `<a class="btn btn-sm" href="${resetHref}">${ui.icon('x')}Reset</a>` : ''}</div>
+        <div class="pb-info">${active ? 'Filter riwayat aktif' : 'Cari berdasarkan nama siswa dan rentang tanggal'}</div>
+      </form>`;
+    };
 
     const content = `<div class="between mb-2">
       <div class="toolbar">
@@ -2405,11 +2444,34 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       </tbody></table></div>` : ui.emptyState('Tidak ada penerimaan tertunda', filterAktif ? `Tidak ada penerimaan belum terposting pada ${periodeInfo}.` : '')}
     </div>
     <div class="card mt-3">
+      <div class="card-head"><div><h3>Riwayat Penerimaan BKU</h3>
+        <div class="sub">${postedRows.length} penerimaan terposting · ${filterAktif ? esc(periodeInfo) : 'seluruh periode'} · tercatat sebagai transaksi BKU</div></div>
+        ${deleteToolbar(postedRows.length, c, '#tblAntreanPosted')}</div>
+      ${riwayatFilter()}
+      ${postedRows.length ? `<div class="table-scroll tall"><table id="tblAntreanPosted"><thead><tr>
+        <th style="width:36px"><input type="checkbox" data-check-all-box="ids" data-check-scope="#tblAntreanPosted" title="Pilih semua"></th>
+        <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th>Keterangan</th><th class="num">Dibayar</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
+        ${postedRows.map(b => `<tr><td><input type="checkbox" form="fHapusAntrean" name="ids" data-check-item="ids" data-check-scope="#tblAntreanPosted" value="${b.id}"></td>
+          <td class="nowrap">${tglID(b.tanggal)}</td><td class="mono">${esc(b.kwitansi_no)}</td>
+          <td>${esc(b.siswa_nama)}<div class="t-sub">${esc(b.kelas_nama || '')}</div></td><td>${esc(b.grup_nama || '-')}</td>
+          <td>${ketCell(b)}</td>
+          <td class="num t-strong">${rupiah(b.dibayar)}</td><td>${bayarStatusBadge(b.status, b.sumber)}</td>
+          <td class="right nowrap"><div class="toolbar" style="justify-content:flex-end;gap:6px">
+            <a class="btn btn-sm" target="_blank" href="${c.base}/iuran/kwitansi?ids=${b.id}" title="Cetak kwitansi">${ui.icon('printer')}Kwitansi</a>
+            ${c.can('iuran', 'delete') ? `<form method="post" action="${c.base}/iuran/bayar/delete" style="display:inline"
+              data-confirm="Hapus penerimaan BKU ${esc(b.siswa_nama)} (${rupiah(b.dibayar)})? Transaksi BKU terkait akan ikut dihapus bila periode belum dikunci.">
+              <input type="hidden" name="id" value="${b.id}"><input type="hidden" name="back" value="/iuran/antrean">
+              <button class="btn btn-sm btn-danger" title="Hapus penerimaan">${ui.icon('trash')}Hapus</button></form>` : ''}
+          </div></td></tr>`).join('')}
+      </tbody></table></div>` : `<div class="help">Belum ada penerimaan yang terposting ke BKU${filterAktif ? ` pada ${esc(periodeInfo)}` : ''}${riwayatQ || riwayatDari || riwayatSampai ? ' sesuai filter riwayat.' : '.'}</div>`}
+    </div>
+    <div class="card mt-3">
       <div class="card-head"><div><h3>Riwayat Penerimaan Non-BKU (Data Saja)</h3>
         <div class="sub">${nonBkuRows.length} penerimaan · ${filterAktif ? esc(periodeInfo) : 'seluruh riwayat'} · tidak masuk BKU, hanya mengurangi tagihan siswa</div></div>
         ${deleteToolbar(nonBkuRows.length, c, '#tblAntreanNonBku', editable && bkuDefault ? `<button class="btn btn-sm" type="submit" form="fHapusAntrean" formaction="${c.base}/iuran/antrean/kembali"
           data-confirm-click="Kembalikan semua penerimaan Non-BKU yang dicentang ke antrean posting BKU?">
           ${ui.icon('refresh')}Kembalikan ke Antrean (<b data-check-count="ids" data-check-scope="#tblAntreanNonBku">0</b>)</button>` : '')}</div>
+      ${riwayatFilter()}
       ${nonBkuRows.length ? `<div class="table-scroll tall"><table id="tblAntreanNonBku"><thead><tr>
         <th style="width:36px"><input type="checkbox" data-check-all-box="ids" data-check-scope="#tblAntreanNonBku" title="Pilih semua"></th>
         <th>Tanggal</th><th>Kwitansi</th><th>Siswa</th><th>Grup</th><th>Keterangan</th><th class="num">Dibayar</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
