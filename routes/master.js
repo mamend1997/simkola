@@ -520,6 +520,58 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const pvLogo = s.sekolah_logo
       ? `<img src="${esc(s.sekolah_logo)}" alt="Logo sekolah" width="44" height="44" loading="lazy" decoding="async">`
       : `<div class="pv-ph">${esc(namaSekolah.charAt(0))}</div>`;
+    const kelasTaList = dbm.allTahun();
+    const kelasTaId = Number(req.query.get('ta_kelas') || c.taId || (kelasTaList[0] || {}).id || 0);
+    const kelasPortal = dbm.kelasList(kelasTaId || null, {});
+    const kelasPortalRows = kelasPortal.map(k => {
+      const token = String(k.public_token || '');
+      const path = token ? `/${pgSlugs.base}/publik/kelas/${token}` : '';
+      const link = path ? c.absUrl(path) : '';
+      const qrPath = token ? `${c.base}/${pgSlugs.base}/publik/kelas/${token}/qr` : '';
+      return `<tr>
+        <td class="t-strong">${esc(k.nama_kelas || k.nama)}</td><td>${esc(k.tingkat || '-')}</td>
+        <td>${esc((kelasTaList.find(t => Number(t.id) === Number(k.tahun_ajaran_id)) || {}).nama || '-')}</td>
+        <td class="num">${Number(k.jumlah_siswa || 0)}</td>
+        <td>${k.is_public ? ui.badge('Aktif', 'green') : ui.badge(token ? 'Nonaktif' : 'Belum dibuat', 'gray')}</td>
+        <td class="right nowrap">
+          ${link && k.is_public ? `<button type="button" class="btn btn-sm" data-copy="${esc(link)}">${ui.icon('copy')}Salin</button>
+            <a class="btn btn-sm" href="${esc(link)}" target="_blank" rel="noopener">${ui.icon('link')}Buka</a>` : ''}
+          ${ro ? '' : `<form method="post" action="${c.base}/kelas/publik" style="display:inline">
+            <input type="hidden" name="id" value="${k.id}"><input type="hidden" name="ta" value="${kelasTaId}">
+            <input type="hidden" name="aksi" value="${token ? 'regen' : 'generate'}">
+            <button class="btn btn-sm ${token ? '' : 'btn-primary'}" ${token ? 'data-confirm="Buat tautan baru? Tautan lama langsung tidak berlaku lagi."' : ''}>
+              ${ui.icon(token ? 'refresh' : 'link')}${token ? 'Generate Ulang' : 'Generate Link'}</button>
+          </form>
+          <form method="post" action="${c.base}/kelas/publik" style="display:inline">
+            <input type="hidden" name="id" value="${k.id}"><input type="hidden" name="ta" value="${kelasTaId}">
+            <input type="hidden" name="aksi" value="toggle"><input type="hidden" name="aktif" value="${k.is_public ? '0' : '1'}">
+            <button class="btn btn-sm ${k.is_public ? 'btn-danger' : ''}">${ui.icon(k.is_public ? 'lock' : 'eye')}${k.is_public ? 'Nonaktifkan' : 'Aktifkan'}</button>
+          </form>`}
+          ${link && k.is_public ? `<details style="display:inline-block;vertical-align:middle;margin-left:4px">
+            <summary class="btn btn-sm">${ui.icon('qris')}QR</summary><div class="card" style="width:220px;padding:12px;margin-top:6px">
+              <img src="${esc(qrPath)}" alt="QR portal kelas ${esc(k.nama_kelas || k.nama)}" width="190" height="190" loading="lazy">
+              <a class="btn btn-sm btn-block" href="${esc(qrPath)}" target="_blank" rel="noopener">Buka / Cetak QR</a>
+            </div></details>` : ''}
+        </td></tr>`;
+    }).join('');
+    const kelasPortalCard = `<div class="card mb-3" id="portalWaliKelas">
+      <div class="card-head"><div><h3>Portal Iuran Wali Kelas</h3>
+        <div class="sub">Tautan acak dan QR khusus tiap kelas; menampilkan rekap seluruh siswa serta riwayat iuran semua tahun pelajaran.</div></div>
+        ${ro ? ui.badge('Hanya Lihat', 'gray') : ui.badge('Kelola per Kelas', 'blue')}</div>
+      <div class="alert info">${ui.icon('shield')}<div>Siapa pun yang memiliki tautan dapat melihat data keuangan terperinci siswa di kelas tersebut.
+        Bagikan hanya kepada wali kelas terkait. Tautan dapat dinonaktifkan atau dibuat ulang kapan saja.</div></div>
+      <form method="get" action="${c.base}/portal-publik" class="toolbar mb-2">
+        <label for="taKelasPublik">Tahun Pelajaran Kelas</label>
+        <select id="taKelasPublik" name="ta_kelas" data-autosubmit>
+          ${kelasTaList.map(t => `<option value="${t.id}" ${Number(t.id) === kelasTaId ? 'selected' : ''}>${esc(t.nama)}</option>`).join('')}
+        </select>
+      </form>
+      ${kelasPortal.length ? `<div class="table-wrap sticky-head"><table><thead><tr>
+        <th>Kelas</th><th>Tingkat</th><th>Tahun Pelajaran</th><th class="num">Siswa</th><th>Status Tautan</th><th class="right">Tautan / QR / Aksi</th>
+      </tr></thead><tbody>${kelasPortalRows}</tbody></table></div>`
+        : ui.emptyState('Belum ada kelas', 'Buat kelas pada tahun pelajaran ini terlebih dahulu.')}
+      <p class="help mt-2">QR dibuat di server sekolah dan tidak mengirim alamat rahasia ke layanan QR pihak ketiga.</p>
+    </div>`;
     const slugRow = (label, key, def, hint) => `<div class="field"><label>${esc(label)}</label>
       <input name="${key}" value="${esc(s[key] || def)}" ${ro ? 'readonly' : ''} placeholder="${esc(def)}" maxlength="40" pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9]">
       <div class="hint">${hint}</div></div>`;
@@ -575,6 +627,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             ${ro ? '' : `<div class="form-actions"><button class="btn btn-primary">${ui.icon('save')}Simpan Publikasi &amp; Teks</button></div>`}
           </form>
         </div>
+
+        ${kelasPortalCard}
 
         <div class="card mb-3">
           <div class="card-head"><div><h3>Alamat (URL) Portal Publik</h3>
@@ -691,6 +745,34 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       </div>
     </div>`;
     page(req, res, { title: 'Portal Publik', sub: 'Alamat portal, subdomain & custom domain sekolah', active: 'portal_publik', content });
+  });
+
+  /* ---------------- tautan publik per kelas (portal wali kelas) ---------------- */
+  post('/kelas/publik', (req, res) => {
+    if (!guard(req, res, 'sekolah', 'edit')) return;
+    const id = Number(req.body.id || 0);
+    const taId = Number(req.body.ta || 0);
+    const back = req.BASE + '/portal-publik' + (taId ? '?ta_kelas=' + encodeURIComponent(taId) : '');
+    const sep = taId ? '&' : '?';
+    const kelas = db.prepare('SELECT * FROM kelas WHERE id=? AND tahun_ajaran_id=?').get(id, taId);
+    if (!kelas) return res.redirect(back + sep + 'err=' + encodeURIComponent('Kelas tidak ditemukan pada tahun pelajaran tersebut.'));
+    const namaKelas = String(kelas.nama_kelas || kelas.nama || `Kelas #${id}`);
+    const aksi = String(req.body.aksi || 'toggle');
+    if (aksi === 'generate' || aksi === 'regen') {
+      const r = dbm.publicTokenEnsure('kelas', id, aksi === 'regen');
+      if (!r) return res.redirect(back + sep + 'err=' + encodeURIComponent('Gagal membuat tautan publik kelas.'));
+      dbm.publicSetActive('kelas', id, true);
+      dbm.logAudit(req.user, aksi === 'regen' ? 'GENERATE ULANG LINK PUBLIK' : 'GENERATE LINK PUBLIK',
+        'portal_publik', `Tautan publik wali kelas ${namaKelas} ${aksi === 'regen' ? 'diperbarui' : 'dibuat'} (token …${r.token.slice(-6)})`);
+      return res.redirect(back + sep + 'ok=' + encodeURIComponent(`Tautan portal wali kelas ${namaKelas} dibuat dan diaktifkan.`));
+    }
+    if (aksi !== 'toggle') return res.redirect(back + sep + 'err=' + encodeURIComponent('Aksi tautan publik tidak valid.'));
+    const aktif = String(req.body.aktif || '0') === '1';
+    if (aktif && !kelas.public_token) dbm.publicTokenEnsure('kelas', id, true);
+    dbm.publicSetActive('kelas', id, aktif);
+    dbm.logAudit(req.user, aktif ? 'AKTIFKAN LINK PUBLIK' : 'NONAKTIFKAN LINK PUBLIK',
+      'portal_publik', `Akses publik wali kelas ${namaKelas} ${aktif ? 'diaktifkan' : 'dinonaktifkan'}`);
+    return res.redirect(back + sep + 'ok=' + encodeURIComponent(`Akses portal wali kelas ${namaKelas} ${aktif ? 'diaktifkan' : 'dinonaktifkan'}.`));
   });
 
   /* alamat (slug) ketiga portal — divalidasi semua sebelum disimpan */

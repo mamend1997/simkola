@@ -192,14 +192,18 @@ function openTenantConn(id, file) {
 /** kolom tautan publik (BKU & Grup Iuran) — dipastikan ada untuk DB sekolah lama */
 function ensurePublicColumns(conn) {
   const cols = t => { try { return conn.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
-  try {
-    const bc = cols('bku');
-    if (bc.length && !bc.includes('public_token')) conn.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
-    if (bc.length && !bc.includes('is_public')) conn.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
-    const gc = cols('iuran_grup');
-    if (gc.length && !gc.includes('public_token')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN public_token TEXT');
-    if (gc.length && !gc.includes('is_public')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
-  } catch (e) { }
+  const bc = cols('bku');
+  if (bc.length && !bc.includes('public_token')) conn.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
+  if (bc.length && !bc.includes('is_public')) conn.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  const gc = cols('iuran_grup');
+  if (gc.length && !gc.includes('public_token')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN public_token TEXT');
+  if (gc.length && !gc.includes('is_public')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  const kc = cols('kelas');
+  if (kc.length && !kc.includes('public_token')) conn.exec('ALTER TABLE kelas ADD COLUMN public_token TEXT');
+  if (kc.length && !kc.includes('is_public')) conn.exec('ALTER TABLE kelas ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  if (bc.length) conn.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_bku_public_token ON bku(public_token) WHERE public_token IS NOT NULL');
+  if (gc.length) conn.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_iuran_grup_public_token ON iuran_grup(public_token) WHERE public_token IS NOT NULL');
+  if (kc.length) conn.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_kelas_public_token ON kelas(public_token) WHERE public_token IS NOT NULL');
 }
 /** jalankan fn di dalam konteks database satu sekolah */
 function runAsTenant(tenant, fn) {
@@ -930,7 +934,7 @@ function nextBkuKode(jenis) {
    ditebak. Halaman publik hanya dilayani bila `is_public = 1` DAN token pada
    URL persis sama. Regenerasi token otomatis menonaktifkan tautan lama.
    ========================================================================== */
-const PUBLIC_TABEL = { bku: 'bku', iuran: 'iuran_grup' };
+const PUBLIC_TABEL = { bku: 'bku', iuran: 'iuran_grup', kelas: 'kelas' };
 function newPublicToken() { return crypto.randomBytes(12).toString('hex'); }
 /**
  * Pastikan baris punya token publik.
@@ -1433,8 +1437,12 @@ function bootstrap() {
       const gc = db.prepare('PRAGMA table_info(iuran_grup)').all().map(c => c.name);
       if (!gc.includes('public_token')) db.exec('ALTER TABLE iuran_grup ADD COLUMN public_token TEXT');
       if (!gc.includes('is_public')) db.exec('ALTER TABLE iuran_grup ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+      const kc = db.prepare('PRAGMA table_info(kelas)').all().map(c => c.name);
+      if (!kc.includes('public_token')) db.exec('ALTER TABLE kelas ADD COLUMN public_token TEXT');
+      if (!kc.includes('is_public')) db.exec('ALTER TABLE kelas ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_bku_public_token ON bku(public_token) WHERE public_token IS NOT NULL');
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_iuran_grup_public_token ON iuran_grup(public_token) WHERE public_token IS NOT NULL');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_kelas_public_token ON kelas(public_token) WHERE public_token IS NOT NULL');
     }
 
     // default ukuran kertas & kop (DB lama yang belum punya)

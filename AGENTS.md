@@ -1700,7 +1700,7 @@ Regresi lulus: `round37` (31), `pay-hybrid` (37), `round42` (84), `regress` (23)
   `uq_bku_public_token` & `uq_iuran_grup_public_token`.
 - **Helper `db.js`** (diekspor): `newPublicToken()` (12 byte acak = 24 hex), `publicTokenEnsure(tabel,id,regen)`,
   `publicSetActive(tabel,id,aktif)`, `publicFind(tabel,token)` (HANYA mengembalikan baris `is_public=1`).
-  Tabel yang didukung: `PUBLIC_TABEL = { bku:'bku', iuran:'iuran_grup' }`.
+  Tabel yang didukung: `PUBLIC_TABEL = { bku:'bku', iuran:'iuran_grup', kelas:'kelas' }`.
 - **Alamat publik**: `/<nama-sekolah>/publik/bku/<token>` dan `/<nama-sekolah>/publik/iuran/<token>`.
   `portalSlugMap()` menambah kunci `<base>/publik` → path `/publik` (tenant ditentukan dari nama sekolah),
   `publik` masuk `RESERVED_SLUGS`, dan `/publik/…` masuk `isPublicPath` (alamat tanpa prefiks tetap dilayani
@@ -1846,3 +1846,16 @@ Regresi lulus: `regress` (23), `newfeat` (89), `round17` (59), `round42` (84), `
 - Tombol **Pandu Saya** membuka halaman tahap dengan parameter `panduan`; `public/app.js` menampilkan
   penjelasan kontekstual dan menyorot aksi awal yang tersedia. Implementasi panduan bersifat lokal/berbasis
   aturan, tidak mengirim data sekolah ke layanan model AI eksternal.
+
+## Ronde 49 — Portal publik iuran per kelas untuk wali kelas
+
+- Tabel `kelas` mendapat `public_token` acak 24-hex + `is_public`; migrasi dan indeks unik parsial
+  berjalan untuk tenant lama maupun database utama.
+- Menu `/portal-publik` mengelola tautan unik per kelas/tahun ajaran: generate, generate ulang,
+  aktif/nonaktif, salin/buka, dan QR Code. QR SVG dibuat lokal melalui `qrcode` agar token tautan
+  tidak dikirim ke layanan pihak ketiga.
+- `/<nama-sekolah>/publik/kelas/<token>` menampilkan rekap seluruh siswa roster kelas, filter nama/NISN,
+  grand total lintas tahun ajaran, serta tautan ke rincian siswa. Rincian mengelompokkan semua tagihan
+  historis per tahun dalam scroll box dan menyertakan riwayat pembayaran.
+- Tautan kelas adalah bearer link tanpa login; nonaktifkan/regenerate untuk mencabut akses.
+- Tes: `node dev-tests/round49.js` (17 cek integrasi portal, QR, filter, rekap historis, dan pencabutan link).

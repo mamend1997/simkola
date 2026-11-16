@@ -1,4 +1,5 @@
 'use strict';
+const QRCode = require('qrcode');
 /* ==========================================================================
    DOMAIN PUBLIK (tanpa login) — tautan acak untuk transparansi:
      · /<nama-sekolah>/publik/bku/<token>    → rincian satu BKU + transaksi
@@ -248,6 +249,186 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     </div>`;
 
     res.html(shell({ base, settings: st, judul: 'Rincian ' + b.nama, subtitle: 'Transparansi Buku Kas', content: body }));
+  });
+
+  /* =============== Portal Wali Kelas: seluruh riwayat satu kelas =============== */
+  get('/publik/kelas/:token/qr', async (req, res) => {
+    const kelas = dbm.publicFind('kelas', req.params.token);
+    if (!kelas) return res.html(tidakDitemukan(req.BASE, settings(), 'Kelas'), 404);
+    const slugBase = dbm.portalSlugs().base;
+    const path = `${req.BASE}/${slugBase}/publik/kelas/${encodeURIComponent(kelas.public_token)}`;
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+    const origin = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (host ? `${proto}://${host}` : '');
+    const svg = await QRCode.toString(origin + path, { type: 'svg', width: 220, margin: 2, errorCorrectionLevel: 'Q' });
+    res.raw.writeHead(200, {
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    res.raw.end(svg);
+  });
+
+  get('/publik/kelas/:token', (req, res) => {
+    const st = settings();
+    const base = req.BASE;
+    const k = dbm.publicFind('kelas', req.params.token);
+    if (!k) return res.html(tidakDitemukan(base, st, 'Kelas'), 404);
+
+    const slugBase = dbm.portalSlugs().base;
+    const href = `${base}/${slugBase}/publik/kelas/${encodeURIComponent(k.public_token)}`;
+    const kelasNama = String(k.nama_kelas || k.nama || 'Kelas');
+    const taKelas = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(k.tahun_ajaran_id) || {};
+    const roster = db.prepare(`SELECT s.id, s.nama, s.nisn, s.status
+      FROM siswa_penempatan sp JOIN siswa s ON s.id=sp.siswa_id
+      WHERE sp.kelas_id=? AND sp.tahun_ajaran_id=? ORDER BY s.nama COLLATE NOCASE, s.id`)
+      .all(k.id, k.tahun_ajaran_id);
+    const ids = roster.map(s => Number(s.id));
+    const tagihan = [];
+    for (let i = 0; i < ids.length; i += 250) {
+      tagihan.push(...dbm.iuranTagihanRows({ siswaIds: ids.slice(i, i + 250) }));
+    }
+    const tagsBySiswa = new Map(ids.map(id => [id, []]));
+    for (const t of tagihan) {
+      if (tagsBySiswa.has(Number(t.siswa_id))) tagsBySiswa.get(Number(t.siswa_id)).push(t);
+    }
+    const tagIds = tagihan.map(t => Number(t.id));
+    const paysByTag = new Map();
+    for (let i = 0; i < tagIds.length; i += 250) {
+      for (const [id, payments] of dbm.iuranPaysMap(tagIds.slice(i, i + 250))) paysByTag.set(Number(id), payments);
+    }
+    const taList = dbm.allTahun();
+    const q = String(req.query.get('q') || '').trim();
+    const qLower = q.toLocaleLowerCase('id');
+    const rosterDetail = roster.map(s => {
+      const tags = tagsBySiswa.get(Number(s.id)) || [];
+      return {
+        ...s,
+        tags,
+        nominal: tags.reduce((n, t) => n + Number(t.nominal || 0), 0),
+        dibayar: tags.reduce((n, t) => n + Number(t.terbayar || 0), 0),
+        potongan: tags.reduce((n, t) => n + Number(t.total_potongan || 0), 0),
+        sisa: tags.reduce((n, t) => n + Number(t.sisa || 0), 0)
+      };
+    });
+    const visible = rosterDetail.filter(s => !qLower
+      || `${s.nama} ${s.nisn || ''}`.toLocaleLowerCase('id').includes(qLower));
+    const grand = visible.reduce((a, s) => ({
+      tagihan: a.tagihan + s.nominal,
+      dibayar: a.dibayar + s.dibayar,
+      potongan: a.potongan + s.potongan,
+      belum: a.belum + Math.max(0, s.nominal - s.dibayar),
+      sisa: a.sisa + s.sisa
+    }), { tagihan: 0, dibayar: 0, potongan: 0, belum: 0, sisa: 0 });
+
+    const selectedId = Number(req.query.get('siswa') || 0);
+    const selected = visible.find(s => Number(s.id) === selectedId);
+    const selectedHref = s => `${href}?${new URLSearchParams({ q, siswa: String(s.id) }).toString()}`;
+    const detail = selected ? (() => {
+      const byTa = new Map();
+      for (const t of selected.tags) {
+        const key = Number(t.tahun_ajaran_id || 0);
+        if (!byTa.has(key)) byTa.set(key, []);
+        byTa.get(key).push(t);
+      }
+      const entries = taList.map(ta => ({
+        id: Number(ta.id), tags: byTa.get(Number(ta.id)) || [], ta
+      }));
+      if (byTa.has(0)) entries.push({ id: 0, tags: byTa.get(0), ta: null });
+      entries.sort((a, b) => {
+        const ka = dbm.taSortKey(a.ta), kb = dbm.taSortKey(b.ta);
+        return ka === kb ? a.id - b.id : (!ka ? 1 : !kb ? -1 : ka.localeCompare(kb));
+      });
+      const panels = entries.map(({ ta, tags }) => {
+        let totalTagihan = 0, totalDibayar = 0, totalPotongan = 0, totalSisa = 0;
+        const rows = [];
+        for (const t of tags) {
+          const pays = paysByTag.get(Number(t.id)) || [];
+          const monthly = t.grup_jenis === 'bulanan'
+            ? dbm.iuranMonthDetail(t.grup_id, pays, t.tingkat || dbm.siswaTingkat(t.siswa_id, t.tahun_ajaran_id))
+            : [];
+          if (monthly.length) {
+            for (let mi = 0; mi < monthly.length; mi++) {
+              const m = monthly[mi];
+              rows.push({ label: `${t.grup_nama} — ${NAMA_BULAN[m.bulan - 1] || '-'}`, nominal: m.tagihan,
+                dibayar: m.dibayar, potongan: 0, sisa: m.sisa, status: m.status,
+                pays: mi === 0 ? pays : [], paymentLabel: 'Riwayat pembayaran grup', tagihanId: t.id });
+              totalTagihan += m.tagihan; totalDibayar += m.dibayar; totalSisa += m.sisa;
+            }
+          } else {
+            rows.push({ label: t.grup_nama, nominal: t.nominal, dibayar: t.terbayar,
+              potongan: t.total_potongan, sisa: t.sisa, status: t.status, pays,
+              paymentLabel: 'Riwayat pembayaran', tagihanId: t.id });
+            totalTagihan += Number(t.nominal || 0); totalDibayar += Number(t.terbayar || 0);
+            totalPotongan += Number(t.total_potongan || 0); totalSisa += Number(t.sisa || 0);
+          }
+        }
+        const inner = rows.map(r => `<tr>
+          <td><b>${esc(r.label)}</b>${r.pays.length ? `<details class="mt-1"><summary class="small">${esc(r.paymentLabel)} (${r.pays.length})</summary>
+            <div class="table-wrap mt-1"><table><thead><tr><th>Tanggal</th><th>Bulan</th><th>Metode</th><th class="num">Tagihan dibayar</th><th class="num">Potongan</th></tr></thead><tbody>
+              ${r.pays.map(p => `<tr><td>${esc(tglID(p.tanggal))}</td><td>${esc(p.bulan ? NAMA_BULAN[Number(p.bulan) - 1] || '-' : 'Alokasi otomatis')}</td><td>${esc(p.metode || '-')}</td><td class="num">${rupiah(p.jumlah)}</td><td class="num">${rupiah(p.potongan)}</td></tr>`).join('')}
+            </tbody></table></div></details>` : ''}</td>
+          <td class="num">${rupiah(r.nominal)}</td><td class="num" style="color:var(--green)">${rupiah(r.dibayar)}</td>
+          <td class="num">${rupiah(r.potongan)}</td><td class="num" style="color:${r.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(r.sisa)}</td>
+          <td>${badgeStatus(r.status)}</td></tr>`).join('');
+        return `<section class="portal-ta" style="max-height:430px;overflow:auto;overscroll-behavior:contain">
+          <div class="ta-head"><b>Tahun Pelajaran ${esc(ta ? ta.nama : '-')}</b><span>${tags.length} grup iuran</span></div>
+          <div class="table-wrap"><table class="tbl-modern"><thead><tr><th>Grup Iuran / Bulan</th><th class="num">Tagihan</th>
+            <th class="num">Sudah Dibayar</th><th class="num">Potongan</th><th class="num">Belum Dibayar</th><th>Status</th></tr></thead>
+            <tbody>${inner || '<tr><td colspan="6">Belum ada tagihan pada tahun pelajaran ini.</td></tr>'}</tbody>
+            <tfoot><tr><td>Subtotal ${esc(ta ? ta.nama : '')}</td><td class="num">${rupiah(totalTagihan)}</td>
+              <td class="num">${rupiah(totalDibayar)}</td><td class="num">${rupiah(totalPotongan)}</td><td class="num">${rupiah(totalSisa)}</td><td></td></tr></tfoot>
+          </table></div></section>`;
+      }).join('');
+      return `<div class="portal-card" id="rincianSiswa">
+        <div class="portal-student"><div><h2 class="pname">${esc(selected.nama)}</h2>
+          <div class="muted small">NISN ${esc(selected.nisn || '-')} · Kelas saat tautan dibuat: ${esc(kelasNama)}</div></div>
+          <a class="btn btn-sm" href="${esc(href + (q ? '?q=' + encodeURIComponent(q) : ''))}">Kembali ke rekap kelas</a></div>
+        <div class="kpi-grid" style="gap:12px">
+          <div class="kpi"><div class="lbl">Total Tagihan</div><div class="val">${rupiah(selected.nominal)}</div></div>
+          <div class="kpi"><div class="lbl">Sudah Dibayar</div><div class="val" style="color:var(--green)">${rupiah(selected.dibayar)}</div></div>
+          <div class="kpi"><div class="lbl">Potongan</div><div class="val">${rupiah(selected.potongan)}</div></div>
+          <div class="kpi"><div class="lbl">Sisa Tagihan</div><div class="val" style="color:var(--red)">${rupiah(selected.sisa)}</div></div>
+        </div>
+        <h3 class="mt-2">Rincian Iuran Seluruh Tahun Pelajaran</h3>
+        ${panels || ui.emptyState('Belum ada tagihan', 'Rincian tagihan siswa ini belum tersedia pada tahun pelajaran mana pun.')}
+      </div>`;
+    })() : '';
+
+    const body = `<div class="portal-card">
+      <div class="portal-student"><div><div class="pname">${esc(kelasNama)}</div>
+        <div class="muted small">Rekap Wali Kelas · Tahun kelas ${esc(taKelas.nama || '-')} · ${roster.length} siswa</div></div>
+        <span class="badge blue">Hanya lihat</span></div>
+      <p class="muted small">Tautan ini menampilkan tagihan siswa yang terdaftar pada kelas tersebut, termasuk riwayat seluruh tahun pelajaran.
+        Klik nama siswa untuk melihat rincian iuran, pembayaran, potongan, dan sisa per tahun.</p>
+      <form method="get" action="${href}" class="portal-period">
+        <div class="field" style="min-width:250px"><label>Filter Nama Siswa / NISN</label>
+          <input name="q" value="${esc(q)}" placeholder="Cari nama atau NISN" autocomplete="off"></div>
+        <div class="field" style="min-width:auto"><label>&nbsp;</label><button class="btn btn-primary btn-sm">${ui.icon('search')}Cari</button></div>
+        ${q ? `<a class="btn btn-sm" href="${href}">Reset</a>` : ''}
+      </form>
+      <div class="kpi-grid" style="gap:12px">
+        <div class="kpi"><div class="lbl">Grand Total Tagihan</div><div class="val">${rupiah(grand.tagihan)}</div><div class="meta">${visible.length} dari ${roster.length} siswa</div></div>
+        <div class="kpi"><div class="lbl">Grand Total Sudah Dibayar</div><div class="val" style="color:var(--green)">${rupiah(grand.dibayar)}</div></div>
+        <div class="kpi"><div class="lbl">Grand Total Belum Dibayar</div><div class="val" style="color:var(--red)">${rupiah(grand.belum)}</div></div>
+        <div class="kpi"><div class="lbl">Total Tagihan Tersisa</div><div class="val" style="color:var(--red)">${rupiah(grand.sisa)}</div></div>
+      </div>
+    </div>
+    ${detail}
+    <div class="portal-card">
+      <h3>Rekap Seluruh Siswa — ${esc(kelasNama)}</h3>
+      ${visible.length ? `<div class="table-wrap sticky-head"><table id="tblKelasPublik"><thead><tr>
+        <th style="width:42px">No</th><th>Nama Siswa</th><th>NISN</th><th class="num">Total Tagihan</th>
+        <th class="num">Sudah Dibayar</th><th class="num">Potongan</th><th class="num">Sisa Tagihan</th></tr></thead><tbody>
+        ${visible.map((s, i) => `<tr><td class="num">${i + 1}</td>
+          <td><a class="t-strong" href="${esc(selectedHref(s))}">${esc(s.nama)} ${ui.icon('eye')}</a></td><td class="mono t-sub">${esc(s.nisn || '-')}</td>
+          <td class="num">${rupiah(s.nominal)}</td><td class="num" style="color:var(--green)">${rupiah(s.dibayar)}</td>
+          <td class="num">${rupiah(s.potongan)}</td><td class="num" style="color:${s.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(s.sisa)}</td></tr>`).join('')}
+      </tbody><tfoot><tr><td colspan="3">GRAND TOTAL${q ? ' (HASIL FILTER)' : ''}</td><td class="num">${rupiah(grand.tagihan)}</td>
+        <td class="num">${rupiah(grand.dibayar)}</td><td class="num">${rupiah(grand.potongan)}</td><td class="num">${rupiah(grand.sisa)}</td></tr></tfoot></table></div>`
+        : ui.emptyState(q ? 'Siswa tidak ditemukan' : 'Belum ada siswa pada kelas ini', q ? 'Coba nama atau NISN lainnya.' : 'Belum ada penempatan siswa pada kelas dan tahun pelajaran ini.')}
+    </div>`;
+    res.html(shell({ base, settings: st, judul: 'Rekap ' + kelasNama, subtitle: 'Portal Informasi Iuran Wali Kelas', content: body }));
   });
 
   /* ==================== Grup Iuran: rekap siswa publik ==================== */
