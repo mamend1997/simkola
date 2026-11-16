@@ -634,6 +634,9 @@ tr.dragging{opacity:.55}
 .portal-card h3{margin:0 0 12px;font-size:16px}
 .portal-student{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:14px}
 .portal-student .pname{font-size:18px;font-weight:800}
+.kelas-public-siswa{display:inline-flex;align-items:center;gap:7px}
+.kelas-public-eye{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:0 0 18px;color:var(--o-600)}
+.kelas-public-eye svg{display:block;width:16px;height:16px;flex:none}
 .portal-ta{margin-bottom:16px}
 .portal-ta .ta-head{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;margin-bottom:8px;color:var(--o-700)}
 .portal-foot{text-align:center;font-size:11.5px;color:var(--muted);margin-top:26px}
@@ -1404,7 +1407,8 @@ html[data-mode="dark"] .portal-head .portal-subtitle { color: #fff }
   padding:7px 10px; border:0; border-radius:8px; background:transparent;
   font:inherit; color:var(--ink); text-align:left; cursor:pointer;
 }
-.pihak-opt .jb{font-size:11.5px; color:var(--muted); white-space:nowrap}
+.pihak-opt .nm{flex:1; min-width:0; overflow-wrap:anywhere}
+.pihak-opt .jb{flex:0 1 48%; min-width:0; font-size:11.5px; color:var(--muted); text-align:right; overflow-wrap:anywhere}
 .pihak-opt:hover,.pihak-opt.active{background:var(--o-50)}
 .pihak-opt.active .nm{font-weight:700}
 .pihak-empty{padding:9px 11px; font-size:12px; color:var(--muted); line-height:1.45}

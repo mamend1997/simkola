@@ -102,18 +102,30 @@ const errors = [];
   ok('tombol daftar pegawai terlihat', await page.locator('#mTrxIn [data-pihak-btn]').isVisible());
 
   await inp.click();
-  await page.waitForSelector('#mTrxIn [data-pihak-menu]:not([hidden])', { timeout: 3000 }).catch(() => { });
-  ok('klik kolom membuka daftar pegawai', await page.locator('#mTrxIn [data-pihak-menu]:not([hidden])').isVisible());
-  const opts = await page.locator('#mTrxIn .pihak-opt .nm').allInnerTexts();
+  await page.waitForSelector('body > [data-pihak-menu]:not([hidden])', { timeout: 3000 }).catch(() => { });
+  const menu = page.locator('body > [data-pihak-menu]');
+  ok('klik kolom membuka daftar pegawai', await menu.isVisible());
+  ok('menu diposisikan sebagai anak body agar sejajar di modal',
+    await menu.evaluate(el => el.parentElement === document.body));
+  const inputBox = await inp.boundingBox();
+  const menuBox = await menu.boundingBox();
+  ok('dropdown sejajar dengan kolom nama',
+    !!inputBox && !!menuBox && Math.abs(inputBox.x - menuBox.x) <= 2 &&
+    Math.abs(inputBox.width - menuBox.width) <= 2 &&
+    Math.min(
+      Math.abs(menuBox.y - inputBox.y - inputBox.height - 4),
+      Math.abs(menuBox.y + menuBox.height - inputBox.y + 4)
+    ) <= 3);
+  const opts = await page.locator('body > [data-pihak-menu] .pihak-opt .nm').allInnerTexts();
   ok('daftar berisi nama pegawai dari master', opts.includes('Budi Santoso') && opts.includes('Siti Aminah'), opts.join('|'));
   ok('jabatan pegawai tampil sebagai keterangan',
-    (await page.locator('#mTrxIn .pihak-opt .jb').allInnerTexts()).includes('Guru Matematika'));
+    (await page.locator('body > [data-pihak-menu] .pihak-opt .jb').allInnerTexts()).includes('Guru Matematika'));
 
   await inp.fill('siti');
   await page.waitForTimeout(150);
-  const filtered = await page.locator('#mTrxIn .pihak-opt .nm').allInnerTexts();
+  const filtered = await page.locator('body > [data-pihak-menu] .pihak-opt .nm').allInnerTexts();
   ok('mengetik menyaring daftar pegawai', filtered.length === 1 && filtered[0] === 'Siti Aminah', filtered.join('|'));
-  await page.locator('#mTrxIn [data-pihak-opt="0"]').click();
+  await page.locator('body > [data-pihak-menu] [data-pihak-opt="0"]').click();
   ok('memilih pegawai mengisi kolom nama', (await inp.inputValue()) === 'Siti Aminah', await inp.inputValue());
   ok('daftar tertutup setelah memilih', await page.locator('#mTrxIn [data-pihak-menu]').isHidden());
 
@@ -123,7 +135,7 @@ const errors = [];
   await page.waitForTimeout(120);
   ok('nama bebas (manual) tetap diterima', (await inp.inputValue()) === 'Toko Sinar Jaya', await inp.inputValue());
   ok('teks tanpa padanan menampilkan pesan "tetap disimpan"',
-    (await page.locator('#mTrxIn .pihak-empty').count()) === 1);
+    (await page.locator('body > [data-pihak-menu] .pihak-empty').count()) === 1);
   await page.click('#mTrxIn .modal-head h3');
   ok('klik di luar menutup daftar pegawai', await page.locator('#mTrxIn [data-pihak-menu]').isHidden());
 
@@ -232,9 +244,13 @@ const errors = [];
   await page.waitForSelector('#mTrxIn.show');
   await page.locator('#mTrxIn input[data-pihak]').click();
   await page.waitForTimeout(200);
-  const menuBox = await page.locator('#mTrxIn [data-pihak-menu]').boundingBox();
-  ok('dropdown pegawai tetap di dalam layar mobile', !!menuBox && menuBox.x >= 0 && menuBox.x + menuBox.width <= 391,
-    menuBox ? `${Math.round(menuBox.x)}..${Math.round(menuBox.x + menuBox.width)}` : 'null');
+  const mobileMenuBox = await page.locator('body > [data-pihak-menu]').boundingBox();
+  ok('dropdown pegawai tetap di dalam layar mobile',
+    !!mobileMenuBox && mobileMenuBox.x >= 0 && mobileMenuBox.x + mobileMenuBox.width <= 391,
+    mobileMenuBox ? `${Math.round(mobileMenuBox.x)}..${Math.round(mobileMenuBox.x + mobileMenuBox.width)}` : 'null');
+  const mobileInputBox = await page.locator('#mTrxIn input[data-pihak]').boundingBox();
+  ok('dropdown tetap menempel ke kolom nama di mobile',
+    !!mobileInputBox && !!mobileMenuBox && Math.abs(mobileInputBox.x - mobileMenuBox.x) <= 2);
 
   ok('tanpa error JavaScript', errors.length === 0, errors.slice(0, 3).join(' | '));
 

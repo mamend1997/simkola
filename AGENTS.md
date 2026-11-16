@@ -1783,8 +1783,9 @@ Regresi lulus: `round9` (109), `round34` (105), `round42` (84), `round43` (92), 
   `routes/aset_akun.js` (form Transaksi Masuk/Keluar + edit mutasi).
 - Klien: blok `pihakPicker` di `public/app.js` — daftar dibuka saat fokus/klik, **filter saat mengetik**
   (nama/jabatan), panah atas/bawah + Enter, klik di luar/`Escape` menutup, dan **nilai teks bebas tetap boleh**
-  (tanpa padanan → pesan "teks tetap disimpan apa adanya"). Menu `position:fixed` (z-index 130, di atas modal)
-  agar tidak terpotong `overflow` modal; posisi dihitung ulang saat scroll/`place()`.
+  (tanpa padanan → pesan "teks tetap disimpan apa adanya"). Saat terbuka, menu dipindahkan sementara ke
+  `document.body` karena `backdrop-filter`/animasi modal dapat mengubah containing block elemen fixed; posisi
+  viewport diklem dan disejajarkan ke field, lalu menu dikembalikan ke wrapper saat ditutup.
 - **Gotcha yang terulang**: saat menambahkan blok JS baru lewat tool edit, `$$(` bisa berubah menjadi `$(` →
   `$(...).forEach is not a function` dan seluruh blok mati. Setelah menyunting `public/app.js` **selalu**
   `grep -n '\$(' public/app.js` + `node --check`.
@@ -1856,6 +1857,9 @@ Regresi lulus: `regress` (23), `newfeat` (89), `round17` (59), `round42` (84), `
   tidak dikirim ke layanan pihak ketiga.
 - `/<nama-sekolah>/publik/kelas/<token>` menampilkan rekap seluruh siswa roster kelas, filter nama/NISN,
   grand total lintas tahun ajaran, serta tautan ke rincian siswa. Rincian mengelompokkan semua tagihan
-  historis per tahun dalam scroll box dan menyertakan riwayat pembayaran.
+  historis per tahun dalam scroll box dan menyertakan riwayat pembayaran. Ikon pratinjau mata berukuran
+  16px; setelah rincian siswa dibuka, tabel rekap seluruh roster disembunyikan.
+- Tautan kelas & QR memakai `https://<custom_domain>/<nama-sekolah>/publik/kelas/<token>` bila domain
+  tenant berstatus `VERIFIED`; sebelum itu keduanya memakai host aplikasi, dengan keterangan status di UI.
 - Tautan kelas adalah bearer link tanpa login; nonaktifkan/regenerate untuk mencabut akses.
 - Tes: `node dev-tests/round49.js` (17 cek integrasi portal, QR, filter, rekap historis, dan pencabutan link).

@@ -460,7 +460,7 @@ require('./routes/superadmin_db')({ get, post, dbm, lib, ui, saas });
 /* dokumen legalitas: halaman publik (ToS/SLA) + menu sidebar panel sekolah (/legal/tos, /legal/sla) */
 require('./routes/legal')({ get, dbm, lib, ui, saas, page, ctx, guard });
 /* domain publik: tautan acak BKU & Grup Iuran (tanpa login) */
-require('./routes/publik')({ get, dbm, lib, ui });
+require('./routes/publik')({ get, dbm, lib, ui, saas });
 
 /* ---------------- halaman status (suspend / fitur nonaktif) ---------------- */
 function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {

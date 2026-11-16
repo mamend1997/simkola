@@ -523,11 +523,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const kelasTaList = dbm.allTahun();
     const kelasTaId = Number(req.query.get('ta_kelas') || c.taId || (kelasTaList[0] || {}).id || 0);
     const kelasPortal = dbm.kelasList(kelasTaId || null, {});
+    const customDomain = saas.normalizeDomain(t.custom_domain);
+    const customOrigin = customDomain && String(t.custom_domain_status || '').toUpperCase() === 'VERIFIED'
+      ? `https://${customDomain}` : '';
+    const publicAbsUrl = path => customOrigin
+      ? customOrigin + (c.base || '') + path
+      : c.absUrl(path);
     const kelasPortalRows = kelasPortal.map(k => {
       const token = String(k.public_token || '');
       const path = token ? `/${pgSlugs.base}/publik/kelas/${token}` : '';
-      const link = path ? c.absUrl(path) : '';
-      const qrPath = token ? `${c.base}/${pgSlugs.base}/publik/kelas/${token}/qr` : '';
+      const link = path ? publicAbsUrl(path) : '';
+      const qrPath = token ? publicAbsUrl(`/${pgSlugs.base}/publik/kelas/${token}/qr`) : '';
       return `<tr>
         <td class="t-strong">${esc(k.nama_kelas || k.nama)}</td><td>${esc(k.tingkat || '-')}</td>
         <td>${esc((kelasTaList.find(t => Number(t.id) === Number(k.tahun_ajaran_id)) || {}).nama || '-')}</td>
@@ -570,7 +576,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <th>Kelas</th><th>Tingkat</th><th>Tahun Pelajaran</th><th class="num">Siswa</th><th>Status Tautan</th><th class="right">Tautan / QR / Aksi</th>
       </tr></thead><tbody>${kelasPortalRows}</tbody></table></div>`
         : ui.emptyState('Belum ada kelas', 'Buat kelas pada tahun pelajaran ini terlebih dahulu.')}
-      <p class="help mt-2">QR dibuat di server sekolah dan tidak mengirim alamat rahasia ke layanan QR pihak ketiga.</p>
+      <p class="help mt-2">QR dibuat di server sekolah dan tidak mengirim alamat rahasia ke layanan QR pihak ketiga.
+        ${customOrigin ? `Tautan dan QR memakai domain khusus terverifikasi <b>${esc(customDomain)}</b>.`
+          : t.custom_domain ? `Tautan masih memakai domain aplikasi karena <b>${esc(t.custom_domain)}</b> belum terverifikasi.`
+            : 'Tambahkan dan verifikasi custom domain di bagian atas agar tautan memakai domain sekolah Anda.'}</p>
     </div>`;
     const slugRow = (label, key, def, hint) => `<div class="field"><label>${esc(label)}</label>
       <input name="${key}" value="${esc(s[key] || def)}" ${ro ? 'readonly' : ''} placeholder="${esc(def)}" maxlength="40" pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9]">

@@ -47,6 +47,9 @@ async function req(method, url, body, noCookie = false) {
     await sleep(150);
   }
   const db = new Database(DB);
+  const control = new Database(SDB);
+  control.prepare("UPDATE tenants SET custom_domain=?,custom_domain_status='VERIFIED' WHERE id=1")
+    .run('portal-r49.example');
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
 
@@ -110,6 +113,11 @@ async function req(method, url, body, noCookie = false) {
   r = await req('GET', `/portal-publik?ta_kelas=${activeTa.id}`);
   ok('tautan, tombol salin, dan panel QR tersedia', r.text.includes(`/publik/kelas/${token1}`)
     && r.text.includes('data-copy=') && r.text.includes(`/publik/kelas/${token1}/qr`));
+  const classPath = `/${slug}/publik/kelas/${token1}`;
+  ok('tautan kelas memakai domain custom terverifikasi, bukan host aplikasi',
+    r.text.includes(`https://portal-r49.example${classPath}`));
+  ok('QR kelas juga dibuka dari domain custom terverifikasi',
+    r.text.includes(`src="https://portal-r49.example${classPath}/qr"`));
 
   const publicUrl = `/${slug}/publik/kelas/${token1}`;
   r = await req('GET', publicUrl, null, true);
@@ -119,6 +127,7 @@ async function req(method, url, body, noCookie = false) {
     && r.text.includes('Grand Total Belum Dibayar') && r.text.includes('Total Tagihan Tersisa'));
   ok('grand total sesuai pembayaran lintas TA', r.text.includes('Rp 300.000') && r.text.includes('Rp 400.000'));
   ok('nama siswa menjadi tautan ke rincian', r.text.includes(`siswa=${siswaIds[0]}`));
+  ok('ikon pratinjau nama siswa memakai kelas ukuran khusus', r.text.includes('kelas-public-eye'));
   r = await req('GET', `${publicUrl}?q=Beta`, null, true);
   ok('filter nama hanya menampilkan siswa cocok dan totalnya menyesuaikan', r.status === 200
     && r.text.includes('Siswa R49 Beta') && !r.text.includes('Siswa R49 Alfa')
@@ -126,6 +135,8 @@ async function req(method, url, body, noCookie = false) {
   r = await req('GET', `${publicUrl}?siswa=${siswaIds[0]}`, null, true);
   ok('rincian siswa memuat seluruh tahun pelajaran dalam scroll box', r.text.includes('Rincian Iuran Seluruh Tahun Pelajaran')
     && r.text.includes(oldTa.nama) && r.text.includes('overflow:auto'));
+  ok('detail siswa tidak lagi menampilkan kotak rekap seluruh siswa',
+    !r.text.includes('id="tblKelasPublik"') && !r.text.includes('Rekap Seluruh Siswa —'));
   ok('rincian siswa menampilkan pembayaran dan sisa per grup/bulan', r.text.includes('SPP R49 Historis — Juli')
     && r.text.includes('Iuran R49 Sekarang') && r.text.includes('Riwayat pembayaran grup (1)')
     && r.text.includes('3 Agustus 2026'));
@@ -143,6 +154,7 @@ async function req(method, url, body, noCookie = false) {
   const errors = log.split('\n').filter(line => /Unhandled|TypeError|ReferenceError|SyntaxError/.test(line));
   ok('server tidak mencatat error runtime', errors.length === 0, errors.slice(0, 2).join(' | '));
   db.close();
+  control.close();
   srv.kill('SIGTERM');
   console.log(`\n=== ${pass} lulus, ${fail} gagal ===`);
   if (fail) { console.log('Gagal:\n - ' + fails.join('\n - ')); process.exitCode = 1; }

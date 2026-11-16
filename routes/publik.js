@@ -13,7 +13,7 @@ const QRCode = require('qrcode');
              lain dengan BKU bernama SAMA yang juga dibagikan publik)
      Iuran : ?q=<nama/NISN> · ?kelas=<nama kelas>
    ========================================================================== */
-module.exports = ({ get, dbm, lib, ui }) => {
+module.exports = ({ get, dbm, lib, ui, saas }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID } = lib;
   const PER_HAL = 60;
@@ -259,7 +259,10 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     const path = `${req.BASE}/${slugBase}/publik/kelas/${encodeURIComponent(kelas.public_token)}`;
     const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
     const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
-    const origin = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (host ? `${proto}://${host}` : '');
+    const domain = saas.normalizeDomain(req.tenant && req.tenant.custom_domain);
+    const customOrigin = domain && String(req.tenant.custom_domain_status || '').toUpperCase() === 'VERIFIED'
+      ? `https://${domain}` : '';
+    const origin = customOrigin || String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (host ? `${proto}://${host}` : '');
     const svg = await QRCode.toString(origin + path, { type: 'svg', width: 220, margin: 2, errorCorrectionLevel: 'Q' });
     res.raw.writeHead(200, {
       'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -415,19 +418,19 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       </div>
     </div>
     ${detail}
-    <div class="portal-card">
+    ${selected ? '' : `<div class="portal-card">
       <h3>Rekap Seluruh Siswa — ${esc(kelasNama)}</h3>
       ${visible.length ? `<div class="table-wrap sticky-head"><table id="tblKelasPublik"><thead><tr>
         <th style="width:42px">No</th><th>Nama Siswa</th><th>NISN</th><th class="num">Total Tagihan</th>
         <th class="num">Sudah Dibayar</th><th class="num">Potongan</th><th class="num">Sisa Tagihan</th></tr></thead><tbody>
         ${visible.map((s, i) => `<tr><td class="num">${i + 1}</td>
-          <td><a class="t-strong" href="${esc(selectedHref(s))}">${esc(s.nama)} ${ui.icon('eye')}</a></td><td class="mono t-sub">${esc(s.nisn || '-')}</td>
+          <td><a class="t-strong kelas-public-siswa" href="${esc(selectedHref(s))}">${esc(s.nama)}<span class="kelas-public-eye">${ui.icon('eye')}</span></a></td><td class="mono t-sub">${esc(s.nisn || '-')}</td>
           <td class="num">${rupiah(s.nominal)}</td><td class="num" style="color:var(--green)">${rupiah(s.dibayar)}</td>
           <td class="num">${rupiah(s.potongan)}</td><td class="num" style="color:${s.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(s.sisa)}</td></tr>`).join('')}
       </tbody><tfoot><tr><td colspan="3">GRAND TOTAL${q ? ' (HASIL FILTER)' : ''}</td><td class="num">${rupiah(grand.tagihan)}</td>
         <td class="num">${rupiah(grand.dibayar)}</td><td class="num">${rupiah(grand.potongan)}</td><td class="num">${rupiah(grand.sisa)}</td></tr></tfoot></table></div>`
         : ui.emptyState(q ? 'Siswa tidak ditemukan' : 'Belum ada siswa pada kelas ini', q ? 'Coba nama atau NISN lainnya.' : 'Belum ada penempatan siswa pada kelas dan tahun pelajaran ini.')}
-    </div>`;
+    </div>`}`;
     res.html(shell({ base, settings: st, judul: 'Rekap ' + kelasNama, subtitle: 'Portal Informasi Iuran Wali Kelas', content: body }));
   });
 

@@ -2454,20 +2454,35 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
 
     function close() {
       if (!current) return;
-      current.menu.hidden = true;
+      const st = current;
+      st.menu.hidden = true;
+      st.menu.style.left = '';
+      st.menu.style.top = '';
+      st.menu.style.bottom = '';
+      st.menu.style.width = '';
+      st.menu.style.maxHeight = '';
+      if (st.menu.parentNode !== st.wrap) st.wrap.appendChild(st.menu);
       current = null;
     }
     function place(st) {
       const r = st.input.getBoundingClientRect();
       const m = st.menu;
-      m.style.left = Math.max(8, r.left) + 'px';
-      m.style.width = Math.max(240, r.width) + 'px';
-      if (window.innerHeight - r.bottom < 250 && r.top > 270) {
+      const edge = 8, gap = 4;
+      const width = Math.min(Math.max(240, r.width), Math.max(1, window.innerWidth - edge * 2));
+      const left = Math.max(edge, Math.min(r.left, window.innerWidth - width - edge));
+      const below = Math.max(0, window.innerHeight - r.bottom - gap - edge);
+      const above = Math.max(0, r.top - gap - edge);
+      const openDown = below >= Math.min(m.scrollHeight, 236) || below >= above;
+      const available = openDown ? below : above;
+      m.style.left = left + 'px';
+      m.style.width = width + 'px';
+      m.style.maxHeight = Math.max(80, Math.min(236, available)) + 'px';
+      if (!openDown) {
         m.style.top = 'auto';
-        m.style.bottom = Math.max(8, window.innerHeight - r.top + 4) + 'px';
+        m.style.bottom = (window.innerHeight - r.top + gap) + 'px';
       } else {
         m.style.bottom = 'auto';
-        m.style.top = (r.bottom + 4) + 'px';
+        m.style.top = (r.bottom + gap) + 'px';
       }
     }
     function draw(st) {
@@ -2491,6 +2506,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       st.active = list.findIndex(p => low(p.nama) === low(st.input.value));
       if (st.active > 79) st.active = -1;
       draw(st);
+      if (st.menu.parentNode !== document.body) document.body.appendChild(st.menu);
       st.menu.hidden = false;
       place(st);
     }
@@ -2509,7 +2525,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       const menu = wrap.querySelector('[data-pihak-menu]');
       if (!menu) return;
       wrap.setAttribute('data-pihak-ready', '1');
-      const st = { input, menu, active: -1, shown: [], q: '' };
+      const st = { input, menu, wrap, active: -1, shown: [], q: '' };
 
       input.addEventListener('focus', () => { if (!current || current.input !== input) open(st); });
       input.addEventListener('click', () => { if (!current || current.input !== input) open(st); });
