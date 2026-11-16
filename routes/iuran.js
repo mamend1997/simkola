@@ -624,7 +624,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </div>
     <div class="card mt-3">
       <div class="card-head"><div><h3>Siswa yang Ditetapkan</h3>
-        <div class="sub">${tags.length} tagihan · ${tags.filter(t => Number(t.beasiswa_locked) === 1).length} terkunci otomatis oleh beasiswa</div></div></div>
+        <div class="sub">${tags.length} tagihan · ${tags.filter(t => Number(t.beasiswa_locked) === 1).length} penetapan dilindungi dari penghapusan oleh beasiswa</div></div></div>
       ${tags.length ? `<form method="post" action="${c.base}/iuran/grup/${g.id}/lepas" id="fLepas"
           data-confirm="Hapus penetapan iuran untuk siswa yang dicentang? Pembayaran iuran terkait ikut dihapus.">
           <input type="hidden" name="back" value="/iuran/grup/${g.id}">
@@ -647,7 +647,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <td class="mono">${esc(t.nisn || '-')}</td>
           <td><a class="link-strong" href="${c.base}/iuran/data/${t.siswa_id}">${esc(t.siswa_nama)}</a></td><td>${esc(t.kelas_nama || '-')}</td>
           <td class="num">${rupiah(t.nominal)}</td><td class="num">${rupiah(t.terbayar)}</td><td class="num">${rupiah(t.sisa)}</td>
-          <td>${statusBadge(t.status)}${lock ? '<div class="lock-note" style="margin-top:4px">Beasiswa · terkunci</div>' : ''}</td>
+          <td>${statusBadge(t.status)}${lock ? '<div class="lock-note" style="margin-top:4px">Beasiswa · terlindungi</div>' : ''}</td>
           <td class="right nowrap"><a class="btn btn-sm" href="${c.base}/iuran/data/${t.siswa_id}">${ui.icon('eye')}Detail</a>
           ${editable && !lock ? `<button class="btn btn-sm btn-danger" form="fLepas" name="single" value="${t.id}" data-confirm-click="Hapus penetapan ${esc(t.grup_nama)} untuk ${esc(t.siswa_nama)}?" title="Hapus penetapan">${ui.icon('trash')}</button>` : ''}
           </td></tr>`;
@@ -871,6 +871,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const totalBayar = d.rekap.reduce((s, r) => s + r.terbayar, 0);
     const totalPot = d.rekap.reduce((s, r) => s + r.potongan, 0);
     const totalSisa = d.rekap.reduce((s, r) => s + r.sisa, 0);
+    const pdfParams = new URLSearchParams();
+    if (d.taId) pdfParams.set('ta', d.taId);
+    if (d.q) pdfParams.set('q', d.q);
+    d.kelasIds.forEach(id => pdfParams.append('kelas', id));
+    d.grupIds.forEach(id => pdfParams.append('grup', id));
+    d.tingkatIds.forEach(id => pdfParams.append('tingkat', id));
+    const tagihanPdfHref = `${c.base}/iuran/tagihan/pdf?${pdfParams.toString()}`;
     // filter tersimpan sebagai hidden pada form export
     const keepHidden = `<input type="hidden" name="ta" value="${d.taId || ''}">
       <input type="hidden" name="q" value="${esc(d.q)}">
@@ -883,10 +890,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="sub">${d.rekap.length} siswa · total tagihan ${rupiah(totalTagih)} · sudah dibayar ${rupiah(totalBayar)}</div></div>
         <div class="toolbar">
           <a class="btn btn-sm" href="${c.base}/iuran/bulanan?ta=${d.taId || ''}">${ui.icon('calendar')}Rincian Bulanan</a>
+          <a class="btn btn-sm" target="_blank" href="${esc(tagihanPdfHref)}">${ui.icon('printer')}Cetak Tagihan PDF</a>
           <a class="btn btn-sm wa-icon-btn" href="${c.base}/iuran/pengingat">${ui.icon('whatsapp')}Jadwal Pengingat</a>
           ${canExport ? `<form method="get" action="${c.base}/iuran/export" id="fExpIuran" style="display:inline-flex;gap:6px">${keepHidden}
             <button class="btn btn-sm" name="format" value="xlsx">${ui.icon('download')}Export Excel</button>
             <button class="btn btn-sm" name="format" value="pdf" formtarget="_blank">${ui.icon('printer')}Export PDF</button>
+            <button class="btn btn-sm" formaction="${c.base}/iuran/tagihan/pdf" formmethod="get" formtarget="_blank">${ui.icon('printer')}Cetak Tagihan Terpilih</button>
           </form>` : ''}
           ${editable ? `<button type="button" class="btn btn-sm wa-icon-btn" data-open="mWaMassal">${ui.icon('whatsapp')}Kirim WA Massal</button>` : ''}
           ${editable ? `<button class="btn btn-sm" data-open="mImportIuran">${ui.icon('upload')}Import Data Iuran</button>
@@ -903,7 +912,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         ${d.kelasIds.length || d.grupIds.length || d.tingkatIds.length || d.q ? `<a class="btn" href="${c.base}/iuran/data?ta=${d.taId || ''}">Reset</a>` : ''}
       </form>
       ${d.rekap.length ? `<div class="between mb-1">
-          <div class="small muted">Centang siswa untuk membatasi <b>Export Excel/PDF</b> hanya pada siswa terpilih.</div>
+          <div class="small muted">Centang siswa untuk membatasi <b>Export Excel/PDF</b> atau cetak tagihan hanya pada siswa terpilih.</div>
           <div class="toolbar">
             <button type="button" class="btn btn-sm" data-check-all="siswa">${ui.icon('check')}Pilih Semua Siswa</button>
             <button type="button" class="btn btn-sm" data-check-none="siswa">${ui.icon('x')}Hapus Ceklis</button>
@@ -924,6 +933,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td class="num" style="color:${r.sisa > 0 ? 'var(--red)' : 'var(--green)'}">${rupiah(r.sisa)}</td>
         <td class="right nowrap">
           <a class="btn btn-sm" href="${c.base}/iuran/data/${r.siswa_id}?ta=${d.taId || ''}">${ui.icon('eye')}Detail</a>
+          <a class="btn btn-sm" target="_blank" href="${c.base}/iuran/data/${r.siswa_id}/tagihan.pdf?ta=${d.taId || ''}" title="Cetak tagihan PDF siswa">${ui.icon('printer')}</a>
           ${editable && r.sisa > 0 ? `<button type="button" class="btn btn-sm wa-icon-btn" data-wa-single="${r.siswa_id}"
             data-wa-nama="${esc(r.nama)}" data-wa-kelas="${esc(r.kelas || '')}"
             title="${r.parent_phone ? 'Kirim WA pengingat ke orang tua' : 'Nomor HP orang tua belum diisi'}">${ui.icon('whatsapp')}WA</button>` : ''}
@@ -955,6 +965,105 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     }) : ''}
     ${editable ? waModals(c, d, kelasAll) : ''}`;
     page(req, res, { title: 'Data Iuran', sub: 'Rekapitulasi tagihan & pembayaran iuran siswa', active: 'iuran_data', content: content + impErrorBlock(req) });
+  });
+
+  function tagihanPdfRecords(siswaIds, taId) {
+    return siswaIds.map(siswaId => {
+      const tags = dbm.iuranTagihanRows({ siswaId, taId });
+      const pmap = payMapFor(tags.map(t => t.id));
+      const lines = [];
+      for (const t of tags) {
+        const grup = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(t.grup_id) || {};
+        const payments = pmap.get(t.id) || [];
+        if (grup.jenis === 'bulanan') {
+          for (const m of monthlyDetail(t, grup, payments)) {
+            if (m.sisa > 0) lines.push({
+              label: `${t.grup_nama} — ${bulanTahunLabel(m.bulan, taOfGrup(grup))}`,
+              jenis: 'Bulanan', tagihan: m.tagihan, dibayar: m.dibayar, sisa: m.sisa
+            });
+          }
+        } else if (t.sisa > 0) {
+          lines.push({
+            label: t.grup_nama, jenis: GROUP_LABEL[t.grup_jenis] || t.grup_jenis || '-',
+            tagihan: t.nominal, dibayar: t.terbayar, sisa: t.sisa
+          });
+        }
+      }
+      const siswa = db.prepare('SELECT id,nama,nisn FROM siswa WHERE id=?').get(siswaId);
+      if (!siswa) return null;
+      return {
+        siswa: { ...siswa, kelas: (tags[0] || {}).kelas_nama || '-' },
+        lines,
+        tagihan: lines.reduce((sum, r) => sum + r.tagihan, 0),
+        dibayar: lines.reduce((sum, r) => sum + r.dibayar, 0),
+        sisa: lines.reduce((sum, r) => sum + r.sisa, 0)
+      };
+    }).filter(Boolean);
+  }
+
+  function renderTagihanPdf(req, res, records, backHref, taId) {
+    const c = ctx(req);
+    const orient = printcfg.orient(req, dbm, 'laporan_piutang');
+    const ta = dbm.tahunById(Number(taId || 0)) || c.ta || {};
+    const pages = records.map((r, i) => `<section class="bill-page">
+      ${ui.kop(c.settings)}
+      <div class="bill-title"><h2>TAGIHAN IURAN SISWA</h2>
+        <div>Tahun Pelajaran ${esc(ta.nama || '-')}</div></div>
+      <table class="bill-meta"><tbody><tr><td>Nama Siswa</td><td><b>${esc(r.siswa.nama)}</b></td><td>NISN</td><td>${esc(r.siswa.nisn || '-')}</td></tr>
+        <tr><td>Kelas</td><td>${esc(r.siswa.kelas || '-')}</td><td>Tanggal Cetak</td><td>${tglID(todayISO())}</td></tr></tbody></table>
+      ${r.lines.length ? `<table class="bill-table"><thead><tr><th>No</th><th>Grup Iuran / Bulan</th><th>Jenis</th>
+        <th class="num">Tagihan</th><th class="num">Sudah Dibayar</th><th class="num">Sisa</th></tr></thead><tbody>
+        ${r.lines.map((line, n) => `<tr><td class="num">${n + 1}</td><td>${esc(line.label)}</td><td>${esc(line.jenis)}</td>
+          <td class="num">${rupiah(line.tagihan)}</td><td class="num">${rupiah(line.dibayar)}</td><td class="num"><b>${rupiah(line.sisa)}</b></td></tr>`).join('')}
+        </tbody><tfoot><tr><td colspan="3">TOTAL TAGIHAN TERSISA</td><td class="num">${rupiah(r.tagihan)}</td>
+          <td class="num">${rupiah(r.dibayar)}</td><td class="num">${rupiah(r.sisa)}</td></tr></tfoot></table>`
+        : '<div class="bill-empty">Tidak ada sisa tagihan iuran pada tahun pelajaran ini.</div>'}
+      <p class="bill-note">Sudah dibayar mencakup pembayaran siswa dan potongan beasiswa yang tercatat otomatis.</p>
+    </section>`).join('');
+    dbm.logAudit(req.user, 'CETAK TAGIHAN', 'iuran', `Cetak tagihan PDF untuk ${records.length} siswa`);
+    return res.html(ui.printPage({
+      settings: c.settings, base: c.base, title: 'Tagihan Iuran Siswa',
+      backHref, orient, selfPath: req.url,
+      pageCss: `@page{size:A4 ${orient === 'landscape' ? 'landscape' : 'portrait'};margin:10mm}
+        html,body{margin:0;padding:0;background:#fff}.print-area{padding:0}
+        .bill-page{page-break-after:always;break-after:page;page-break-inside:avoid;break-inside:avoid}
+        .bill-page:last-child{page-break-after:auto;break-after:auto}
+        .bill-title{text-align:center;margin:5mm 0}.bill-title h2{font-size:15pt;margin:0 0 1mm}
+        .bill-title div{font-size:10pt;color:#444}
+        .bill-meta,.bill-table{width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:4mm}
+        .bill-meta td,.bill-table th,.bill-table td{border:.6px solid #444;padding:2mm}
+        .bill-meta td:nth-child(odd){width:20mm;font-weight:700;background:#f8f2ec}
+        .bill-table th{text-align:left;background:#f6e8da}.bill-table .num{text-align:right;white-space:nowrap}
+        .bill-table tfoot td{font-weight:800;background:#fff5e9}
+        .bill-empty{border:1px solid #bbb;padding:8mm;text-align:center;margin-top:8mm}
+        .bill-note{font-size:8pt;color:#555;margin-top:3mm}
+        @media print{.bill-page{page-break-inside:avoid;break-inside:avoid}}`,
+      body: pages
+    }));
+  }
+
+  get('/iuran/tagihan/pdf', (req, res) => {
+    guard(req, res, 'iuran', 'view');
+    const c = ctx(req);
+    const d = dataIuranRows(req, c);
+    const selected = (req.query.getAll ? req.query.getAll('siswa') : []).map(Number).filter(Boolean);
+    const ids = selected.length ? selected : d.rekap.map(r => Number(r.siswa_id));
+    if (!ids.length) return res.redirect(c.base + '/iuran/data?err=' + encodeURIComponent('Tidak ada siswa bertagihan untuk dicetak.'));
+    const records = tagihanPdfRecords(ids, d.taId);
+    return renderTagihanPdf(req, res, records, '/iuran/data?ta=' + (d.taId || ''), d.taId);
+  });
+
+  get('/iuran/data/:id/tagihan.pdf', (req, res) => {
+    guard(req, res, 'iuran', 'view');
+    const c = ctx(req);
+    const siswaId = Number(req.params.id) || 0;
+    const allTags = dbm.iuranTagihanRows({ siswaId });
+    const taIds = [...new Set(allTags.map(t => Number(t.tahun_ajaran_id)).filter(Boolean))]
+      .sort((a, b) => dbm.taSortKey(b).localeCompare(dbm.taSortKey(a)));
+    const taId = Number(req.query.get('ta') || 0) || taIds[0] || c.taId;
+    const records = tagihanPdfRecords([siswaId], taId);
+    if (!records.length) return res.redirect(c.base + `/iuran/data/${siswaId}?err=` + encodeURIComponent('Data siswa tidak ditemukan.'));
+    return renderTagihanPdf(req, res, records, `/iuran/data/${siswaId}?ta=${taId || ''}`, taId);
   });
 
   /* detail siswa (iuran) */
@@ -1018,6 +1127,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const content = `<div class="between mb-2">
       <a class="btn" href="${c.base}/iuran/data">${ui.icon('x')}Kembali ke Data Iuran</a>
       <div class="toolbar">
+        <a class="btn" target="_blank" href="${c.base}/iuran/data/${s.id}/tagihan.pdf?ta=${taSel ? taSel.id : ''}">${ui.icon('printer')}Cetak Tagihan PDF</a>
         <a class="btn" href="${c.base}/iuran/transaksi?q=${encodeURIComponent(s.nama)}">${ui.icon('receipt')}Semua Transaksi</a>
       </div></div>
     <div class="split">
@@ -1076,16 +1186,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       const det = bulanan ? monthlyDetail(t, grupObj, payments) : [];
       const lockedTag = isLocked(t);
       const rowHtml = `<tr class="${lockedTag ? 'row-locked' : ''}">
-            <td>${bulanan ? '' : `<input type="checkbox" name="item" value="g:${t.id}" data-label="${esc(t.grup_nama)}" data-sisa="${Number(t.sisa) || 0}" ${lockedTag ? 'disabled' : ''}>`}</td>
+            <td>${bulanan ? '' : `<input type="checkbox" name="item" value="g:${t.id}" data-label="${esc(t.grup_nama)}" data-sisa="${Number(t.sisa) || 0}">`}</td>
             <td class="t-strong">${esc(t.grup_nama)}${bulanan ? `<div class="t-sub">${det.filter(m => m.status !== 'lunas').map(m => esc(`${t.grup_nama} - ${bulanTahunLabel(m.bulan, taOfGrup(grupObj))}`)).join(' · ') || 'semua bulan lunas'}</div>` : ''}</td>
             <td>${GROUP_LABEL[t.grup_jenis]}</td>
-            <td>${statusBadge(t.status)}${lockedTag ? '<div class="lock-note" style="margin-top:4px">Beasiswa · terkunci</div>' : ''}</td>
+            <td>${statusBadge(t.status)}${lockedTag ? '<div class="lock-note" style="margin-top:4px">Beasiswa · potongan otomatis</div>' : ''}</td>
             <td class="nowrap">${last ? tglID(last) : '-'}</td>
             <td class="num">${rupiah(t.nominal)}</td><td class="num">${rupiah(t.terbayar)}</td>
             <td class="num">${rupiah(t.total_potongan)}</td><td class="num">${rupiah(t.sisa)}</td>
             <td class="right nowrap">
               <button type="button" class="btn btn-sm" data-open="mRiwayat${t.id}">${ui.icon('clock')}Riwayat</button>
-              ${editable && t.sisa > 0 && !lockedTag ? `<button type="button" class="btn btn-sm btn-primary" data-open="mBayar${t.id}">${ui.icon('coins')}${bulanan ? 'Bayar Semua Bulan' : 'Bayar'}</button>` : ''}
+              ${editable && t.sisa > 0 ? `<button type="button" class="btn btn-sm btn-primary" data-open="mBayar${t.id}">${ui.icon('coins')}${bulanan ? 'Bayar Semua Bulan' : 'Bayar'}</button>` : ''}
             </td></tr>`;
       // rincian per bulan (grup bulanan): deret LENGKAP Juli … Juni, masing-masing bisa dibayar sendiri
       const detMap = new Map(det.map(m => [m.bulan, m]));
@@ -1104,7 +1214,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         const lastM = m.dibayar > 0 ? payments.filter(p => Number(p.bulan) === m.bulan).map(p => p.tanggal).sort().pop()
           || payments.map(p => p.tanggal).sort().pop() : null;
         return `<tr class="month-row${lockedTag ? ' row-locked' : ''}">
-          <td><input type="checkbox" name="item" value="m:${t.id}:${m.bulan}" data-label="${esc(label)}" data-sisa="${Number(m.sisa) || 0}" ${lockedTag ? 'disabled' : ''}></td>
+          <td><input type="checkbox" name="item" value="m:${t.id}:${m.bulan}" data-label="${esc(label)}" data-sisa="${Number(m.sisa) || 0}"></td>
           <td class="month-cell">↳ <b>${esc(label)}</b></td>
           <td class="t-sub">Bulanan</td>
           <td>${statusBadge(m.status)}</td>
@@ -1113,7 +1223,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <td class="num t-sub">—</td><td class="num">${rupiah(m.sisa)}</td>
           <td class="right nowrap">
             <button type="button" class="btn btn-sm" data-open="mRiwayat${t.id}">${ui.icon('clock')}Riwayat</button>
-            ${editable && m.sisa > 0 && !lockedTag ? `<button type="button" class="btn btn-sm btn-primary" data-open="mBayar${t.id}_${m.bulan}">${ui.icon('coins')}Bayar ${esc(bulanLabel(m.bulan))}</button>` : ''}
+            ${editable && m.sisa > 0 ? `<button type="button" class="btn btn-sm btn-primary" data-open="mBayar${t.id}_${m.bulan}">${ui.icon('coins')}Bayar ${esc(bulanLabel(m.bulan))}</button>` : ''}
           </td></tr>
           ${editable && m.sisa > 0 ? late('mBayar' + t.id + '_' + m.bulan, {
           title: 'Form Bayar Iuran — ' + t.grup_nama + ' ' + bulanTahunLabel(m.bulan, taOfGrup(grupObj)),
@@ -1321,10 +1431,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const back = req.BASE + backPath;
     const ids = [].concat(req.body.tagihan_id || []).filter(Boolean);
     if (!ids.length) return res.redirect(back + '?err=' + encodeURIComponent('Pilih minimal satu grup iuran yang akan dibayar.'));
-    const locked = ids.map(id => db.prepare('SELECT * FROM iuran_tagihan WHERE id=?').get(id)).filter(t => t && Number(t.beasiswa_locked) === 1);
-    if (locked.length) {
-      return res.redirect(back + '?err=' + encodeURIComponent('Tagihan yang dibayar otomatis oleh beasiswa terkunci dan tidak dapat dibayar manual. Ubah melalui menu Beasiswa SPP.'));
-    }
     const tanggal = req.body.tanggal || todayISO();
     // "Hanya Simpan Data Pembayaran (Non-BKU)" — riwayat siswa saja, tanpa antrean & tanpa kas BKU
     const nonBku = String(req.body.nonbku || '') === '1';
@@ -1441,7 +1547,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         if (!parsed) { errs.push('Item tidak dikenali.'); continue; }
         const t = db.prepare('SELECT * FROM iuran_tagihan WHERE id=?').get(parsed.tagihanId);
         if (!t) { errs.push('Tagihan tidak ditemukan.'); continue; }
-        if (Number(t.beasiswa_locked) === 1) { errs.push('Tagihan terkunci karena dibayar otomatis oleh beasiswa — ubah melalui menu Beasiswa SPP.'); continue; }
         const grupObj = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(t.grup_id) || {};
         const row = dbm.iuranTagihanRows({ siswaId: t.siswa_id, grupId: t.grup_id }).find(x => x.id === t.id);
         if (!row) { errs.push('Tagihan tidak ditemukan.'); continue; }
@@ -2784,7 +2889,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         if (!tgl) { errors.push({ row: lineNo, msg: `Format tanggal bayar ${label} salah (gunakan DD/MM/YYYY).`, raw }); continue; }
         const t = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?').get(rec.grup.id, sis.id);
         if (!t) { errors.push({ row: lineNo, msg: `${rec.grup.nama} belum ditetapkan untuk siswa ${sis.nama}.`, raw }); continue; }
-        if (Number(t.beasiswa_locked) === 1) { errors.push({ row: lineNo, msg: `${rec.grup.nama} dibayar otomatis oleh beasiswa dan terkunci.`, raw }); continue; }
         const trow = dbm.iuranTagihanRows({ siswaId: sis.id, grupId: rec.grup.id })[0];
         if (!trow) { errors.push({ row: lineNo, msg: `Tagihan ${rec.grup.nama} tidak ditemukan.`, raw }); continue; }
         let sisa = trow.sisa;

@@ -4649,7 +4649,7 @@ function beasiswaSync(beasiswaId) {
     if (!glist.length) return;
     const recips = db.prepare('SELECT * FROM beasiswa_siswa WHERE beasiswa_id=?').all(id);
     if (!recips.length) return;
-    // nominal tersimpan = potongan untuk SEMUA penerima → bagi rata per siswa
+    // nominal tersimpan = nilai beasiswa untuk semua penerima → bagi rata per siswa
     const perSiswa = Math.max(0, Math.round(Number(b.nominal || 0) / recips.length)) || Number(b.nominal || 0);
     const ins = db.prepare(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,keterangan,bku_id,transaksi_id,status,bulan,sumber,beasiswa_id,created_at)
       VALUES (?,?,?,?,?,?,'beasiswa',?,NULL,NULL,'beasiswa',?,'beasiswa',?,?)`);
@@ -4660,7 +4660,8 @@ function beasiswaSync(beasiswaId) {
       for (const gg of glist) {
         const g = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(gg.grup_id);
         if (!g) continue;
-        const nom = iuranNominalMap(g.id);
+        const tingkat = siswaTingkat(r.siswa_id, g.tahun_ajaran_id);
+        const nom = iuranNominalMap(g.id, tingkat);
         const allMonths = BULAN_TA.filter(m => Number(nom[m] || 0) > 0);
         const mask = String(gg.bulan_mask || b.bulan_mask || '').split(',').map(Number).filter(Boolean);
         const months = g.jenis === 'bulanan'
@@ -4668,7 +4669,7 @@ function beasiswaSync(beasiswaId) {
           : [null];
         if (!months.length) continue;
         const total = g.jenis === 'bulanan'
-          ? months.reduce((a2, m) => a2 + Number(nom[m] || 0), 0)
+          ? allMonths.reduce((a2, m) => a2 + Number(nom[m] || 0), 0)
           : Object.values(nom).reduce((a2, v) => a2 + Number(v || 0), 0);
         if (!(total > 0)) continue;
         let t = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?').get(g.id, r.siswa_id);
@@ -4680,13 +4681,26 @@ function beasiswaSync(beasiswaId) {
           db.prepare('UPDATE iuran_tagihan SET nominal=? WHERE id=?').run(total, t.id);
         }
         db.prepare('UPDATE iuran_tagihan SET beasiswa_locked=1, beasiswa_id=? WHERE id=?').run(id, t.id);
+        const existing = db.prepare(`SELECT jumlah, potongan, dibayar, bulan FROM iuran_bayar
+          WHERE tagihan_id=? AND status<>'void' ORDER BY tanggal, id`).all(t.id);
+        const paidByMonth = g.jenis === 'bulanan'
+          ? new Map(iuranMonthDetail(g.id, existing, tingkat).map(x => [x.bulan, x.dibayar]))
+          : new Map();
+        const paidTotal = g.jenis === 'bulanan'
+          ? 0
+          : existing.reduce((sum, p) => sum + Number(p.jumlah || 0), 0);
         for (const m of months) {
           const tagih = g.jenis === 'bulanan' ? Number(nom[m] || 0) : total;
           if (!(tagih > 0)) continue;
-          const pakai = Math.max(0, Math.min(tagih, sisaShare));
-          sisaShare -= pakai;
-          const pot = Math.max(0, tagih - pakai);
-          ins.run(t.id, r.siswa_id, tgl, tagih, pot, pakai,
+          const alreadyPaid = g.jenis === 'bulanan' ? Number(paidByMonth.get(m) || 0) : paidTotal;
+          const available = Math.max(0, tagih - alreadyPaid);
+          const wanted = Number(b.persen) > 0
+            ? Math.round(tagih * Math.min(100, Number(b.persen)) / 100)
+            : Math.min(tagih, sisaShare);
+          const pakai = Math.min(available, wanted);
+          if (!(Number(b.persen) > 0)) sisaShare -= pakai;
+          if (!(pakai > 0)) continue;
+          ins.run(t.id, r.siswa_id, tgl, pakai, 0, pakai,
             `Beasiswa ${b.nama}${m ? ' — ' + (NAMA_BULAN[m - 1] || '') : ''}`, m, id, nowStamp());
           rows++;
         }

@@ -131,7 +131,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             <input type="text" inputmode="decimal" name="persen" value="${esc(ed && Number(ed.persen) ? String(Number(ed.persen)).replace('.', ',') : '')}" data-bea-persen placeholder="mis. 50">
             <div class="hint">Dihitung dari total tagihan grup &amp; bulan terpilih.</div></div>
           <div class="field"><label>Status Beasiswa</label>
-            <label class="check"><input type="checkbox" name="aktif" value="1" ${!ed || ed.aktif ? 'checked' : ''}> Aktif (mengurangi tunggakan)</label>
+            <label class="check"><input type="checkbox" name="aktif" value="1" ${!ed || ed.aktif ? 'checked' : ''}> Aktif (mencatat potongan sebagai pembayaran otomatis)</label>
             <div class="hint">Beasiswa nonaktif disimpan sebagai catatan tanpa potongan.</div></div>
         </div>
 
@@ -232,7 +232,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     ${!canCreate && !ed ? `<div class="alert info mb-3">${ui.icon('info')}<div>Anda hanya dapat melihat data beasiswa (tanpa hak menambah/mengubah).</div></div>` : ''}
 
     <div class="card" data-bea-list>
-      <div class="card-head"><div><h3>Data Beasiswa</h3><div class="sub">Nilai beasiswa mengurangi tunggakan iuran/SPP siswa penerima</div></div>
+      <div class="card-head"><div><h3>Data Beasiswa</h3><div class="sub">Potongan beasiswa dicatat sebagai pembayaran otomatis; sisa tagihan tetap dapat dibayar siswa</div></div>
         ${canCreate ? `<div class="toolbar"><button type="button" class="btn btn-primary" data-open="mBeasiswa">${ui.icon('plus')}Tambah Beasiswa</button></div>` : ''}</div>
       ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Nama Beasiswa</th><th>Grup Iuran</th><th>Bulan</th><th class="num">Potongan / Siswa</th><th class="num">Persen</th><th class="num">Penerima</th><th class="num">Total</th><th>Status</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(b => {
@@ -310,7 +310,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       `${persen ? ` (${String(persen).replace('.', ',')}%)` : ''} · ${penerima.length} penerima (total ${rupiah(totalNominal)})`);
     res.redirect(back + '&ok=' + encodeURIComponent(
       `Data beasiswa disimpan: ${grupIds.length} grup iuran · ${penerima.length} siswa penerima · total ${rupiah(totalNominal)}.` +
-      ` ${synced.rows} tagihan iuran otomatis dilunasi & dikunci.`));
+      ` Potongan diterapkan pada tagihan terkait; sisa tagihan tetap dapat dibayar siswa.`));
   });
 
   /* ================= simpan final dari pratinjau (JSON payload, kompatibilitas) ================= */
@@ -342,8 +342,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     try { synced = dbm.beasiswaSync(info.bid); } catch (e) { console.error('[beasiswa]', e.message); }
     dbm.logAudit(req.user, 'TAMBAH', 'beasiswa',
       `Beasiswa ${payload.nama} ditetapkan untuk ${info.n} siswa · potongan ${rupiah(nominalPer)}/siswa (total ${rupiah(total)})` +
-      ` · ${synced.rows} pembayaran iuran otomatis (status LUNAS & terkunci)`);
-    res.redirect(back + '&ok=' + encodeURIComponent(`Beasiswa ${payload.nama} disimpan untuk ${info.n} siswa (total potongan ${rupiah(total)}). ${synced.rows} tagihan iuran otomatis dilunasi & dikunci.`));
+      ` · ${synced.rows} pembayaran otomatis dicatat`);
+    res.redirect(back + '&ok=' + encodeURIComponent(`Beasiswa ${payload.nama} disimpan untuk ${info.n} siswa (total potongan ${rupiah(total)}). Potongan diterapkan sebagai pembayaran otomatis; sisa tagihan tetap dapat dibayar siswa.`));
   });
 
   post('/beasiswa/delete', (req, res) => {

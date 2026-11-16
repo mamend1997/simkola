@@ -141,11 +141,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('import menerima pembayaran tarif khusus tingkat', r.status === 303 && bayarTingkat && Number(bayarTingkat.jumlah) === 125000,
     bayarTingkat && bayarTingkat.jumlah);
 
-  /* ================= 6. beasiswa: auto lunas & terkunci ================= */
+  /* ================= 6. beasiswa parsial & sisa tetap dapat dibayar ================= */
   const nominalGrup = db.prepare('SELECT COALESCE(SUM(nominal),0) s FROM iuran_nominal WHERE grup_id=?').get(gSpp.id).s;
   const payload = JSON.stringify({
     nama: 'Beasiswa Uji', deskripsi: 'Uji', tahun_ajaran_id: ta.id, grup_id: gSpp.id,
-    bulan_mask: '', nominal_per_siswa: Number(nominalGrup), persen: 0, siswa: [sBea.id], aktif: true
+    bulan_mask: '', nominal_per_siswa: Math.round(Number(nominalGrup) / 2), persen: 50, siswa: [sBea.id], aktif: true
   });
   r = await req('POST', '/beasiswa/save-final', { payload, tahun_ajaran_id: ta.id });
   ok('beasiswa tersimpan', r.status === 303);
@@ -156,12 +156,22 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const bayarBea = db.prepare("SELECT * FROM iuran_bayar WHERE tagihan_id=? AND sumber='beasiswa'").all(tagBea.id);
   ok('pembayaran otomatis beasiswa dibuat', bayarBea.length >= 1, bayarBea.length);
   const totJumlah = bayarBea.reduce((a, b) => a + Number(b.jumlah), 0);
-  ok('tagihan beasiswa menjadi LUNAS', Math.round(totJumlah) === Math.round(Number(tagBea.nominal)), `${totJumlah} vs ${tagBea.nominal}`);
+  ok('beasiswa 50 persen hanya mencatat setengah tagihan dibayar', Math.round(totJumlah) === Math.round(Number(tagBea.nominal) / 2), `${totJumlah} vs ${tagBea.nominal}`);
+  const partialTag = db.prepare('SELECT * FROM iuran_tagihan WHERE id=?').get(tagBea.id);
+  const partialRows = db.prepare("SELECT jumlah,bulan FROM iuran_bayar WHERE tagihan_id=? AND sumber='beasiswa'").all(tagBea.id);
+  ok('sisa setelah beasiswa tetap menjadi tunggakan', Math.round(Number(partialTag.nominal) - partialRows.reduce((a, b) => a + Number(b.jumlah), 0)) === Math.round(Number(tagBea.nominal) / 2));
+  ok('potongan persentase tersebar pada tiap bulan', partialRows.length === 12 && partialRows.every(b => Number(b.jumlah) === 50000));
   ok('pembayaran beasiswa tidak masuk antrean BKU', bayarBea.every(b => b.status === 'beasiswa' && !b.bku_id));
+  r = await req('GET', `/iuran/data?ta=${ta.id}`);
+  ok('menu Data Iuran menyediakan cetak tagihan PDF', /Cetak Tagihan PDF/.test(r.text) && /Cetak Tagihan Terpilih/.test(r.text));
+  r = await req('GET', `/iuran/tagihan/pdf?ta=${ta.id}&siswa=${sBea.id}`);
+  ok('cetak PDF tagihan terpilih menampilkan rincian siswa', r.status === 200 && /TAGIHAN IURAN SISWA/.test(r.text) && /Sudah Dibayar/.test(r.text), r.status);
+  r = await req('GET', `/iuran/data/${sBea.id}/tagihan.pdf?ta=${ta.id}`);
+  ok('cetak PDF tagihan tersedia dari detail siswa', r.status === 200 && /TAGIHAN IURAN SISWA/.test(r.text), r.status);
   r = await req('GET', `/iuran/data/${sBea.id}?ta=${ta.id}`);
-  ok('detail iuran menampilkan status terkunci', /terkunci/i.test(r.text), r.status);
+  ok('detail iuran menampilkan beasiswa dan aksi bayar sisa', /potongan otomatis/i.test(r.text) && /Bayar Semua Bulan/.test(r.text), r.status);
   r = await req('POST', '/iuran/bayar', { tagihan_id: tagBea.id, tanggal: today, jumlah: '1000', potongan: '0', metode: 'tunai', bku_id: bku.id, back: `/iuran/data/${sBea.id}` });
-  ok('bayar manual pada tagihan terkunci ditolak', r.status === 303 && /err=/.test(r.loc), r.loc);
+  ok('pembayaran siswa untuk sisa tagihan beasiswa diterima', r.status === 303 && /\/iuran\/kwitansi\?rows=/.test(r.loc), r.loc);
   const bayarRow = bayarBea[0];
   r = await req('POST', '/iuran/bayar/delete', { id: bayarRow.id, back: `/iuran/data/${sBea.id}` });
   ok('hapus pembayaran beasiswa ditolak', /err=/.test(r.loc), r.loc);
@@ -171,6 +181,20 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   // beasiswa nonaktif / dihapus → lock dilepas
   await req('POST', '/beasiswa/delete', { id: bea.id });
   ok('hapus beasiswa menghapus pembayaran otomatis', db.prepare("SELECT COUNT(*) c FROM iuran_bayar WHERE sumber='beasiswa'").get().c === 0);
+
+  await req('POST', '/iuran/save', { nama: 'Iuran Sekali Beasiswa', jenis: 'sekali', mode_nominal: 'rata', nominal_rata: '200000', aktif: '1', tahun_ajaran_id: ta.id });
+  const gSekali = db.prepare("SELECT * FROM iuran_grup WHERE nama='Iuran Sekali Beasiswa'").get();
+  await req('POST', `/iuran/grup/${gSekali.id}/tetapkan`, { kelas_id: kX.id, siswa_id: [sBea.id] });
+  const tagSekali = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?').get(gSekali.id, sBea.id);
+  const payloadSekali = JSON.stringify({
+    nama: 'Beasiswa Sekali 50', deskripsi: 'Uji', tahun_ajaran_id: ta.id, grup_ids: [gSekali.id],
+    bulan_mask: '', nominal_per_siswa: 100000, persen: 50, siswa: [sBea.id], aktif: true
+  });
+  await req('POST', '/beasiswa/save-final', { payload: payloadSekali, tahun_ajaran_id: ta.id });
+  const bayarSekali = db.prepare("SELECT jumlah FROM iuran_bayar WHERE tagihan_id=? AND sumber='beasiswa'").get(tagSekali.id);
+  ok('beasiswa persentase juga diterapkan pada grup non-bulanan', bayarSekali && Number(bayarSekali.jumlah) === 100000);
+  const beaSekali = db.prepare("SELECT id FROM beasiswa WHERE nama='Beasiswa Sekali 50'").get();
+  await req('POST', '/beasiswa/delete', { id: beaSekali.id });
 
   /* ================= 7. bulk unassign penetapan ================= */
   const tagBiasa = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?').get(gSpp.id, sBiasa.id);
