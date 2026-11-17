@@ -559,6 +559,8 @@ CREATE TABLE IF NOT EXISTS iuran_bayar (
 );
 CREATE INDEX IF NOT EXISTS idx_iuran_bayar_tag ON iuran_bayar(tagihan_id);
 CREATE INDEX IF NOT EXISTS idx_iuran_bayar_tgl ON iuran_bayar(tanggal);
+CREATE INDEX IF NOT EXISTS idx_iuran_tagihan_ta_id ON iuran_tagihan(tahun_ajaran_id, id);
+CREATE INDEX IF NOT EXISTS idx_iuran_bayar_status_tgl ON iuran_bayar(status, tanggal, id);
 /* ---------- pembayaran iuran mandiri dari portal orang tua ----------
    Satu baris = satu keranjang pembayaran (bisa beberapa item tagihan/bulan).
    status: 'menunggu' (menunggu pembayaran gateway / verifikasi bendahara),
@@ -4123,16 +4125,25 @@ function iuranBayarRows(opts = {}) {
   if (opts.kwitansiNo) { sql += ' AND b.kwitansi_no=?'; args.push(opts.kwitansiNo); }
   if (opts.taId) { sql += ' AND t.tahun_ajaran_id=?'; args.push(opts.taId); }
   if (opts.status) { sql += ' AND b.status=?'; args.push(opts.status); }
+  if (opts.statuses) {
+    const statuses = [].concat(opts.statuses).map(String).filter(Boolean);
+    if (statuses.length) { sql += ` AND b.status IN (${statuses.map(() => '?').join(',')})`; args.push(...statuses); }
+  }
   if (opts.dari) { sql += ' AND b.tanggal>=?'; args.push(opts.dari); }
   if (opts.sampai) { sql += ' AND b.tanggal<=?'; args.push(opts.sampai); }
+  if (opts.q) { sql += ' AND (s.nama LIKE ? OR s.nisn LIKE ?)'; args.push('%' + opts.q + '%', '%' + opts.q + '%'); }
   if (opts.grupId) {
     const gs = [].concat(opts.grupId).map(Number).filter(Boolean);
     if (gs.length) { sql += ` AND t.grup_id IN (${gs.map(() => '?').join(',')})`; args.push(...gs); }
   }
   if (opts.bulan) { sql += ' AND b.bulan=?'; args.push(opts.bulan); }
   if (opts.metode) { sql += ' AND b.metode=?'; args.push(opts.metode); }
-  if (opts.q) { sql += ' AND (s.nama LIKE ? OR s.nisn LIKE ?)'; args.push('%' + opts.q + '%', '%' + opts.q + '%'); }
   sql += ' ORDER BY b.tanggal DESC, b.id DESC';
+  const limit = Math.max(0, Math.min(500, Number(opts.limit) || 0));
+  if (limit) {
+    sql += ' LIMIT ? OFFSET ?';
+    args.push(limit, Math.max(0, Number(opts.offset) || 0));
+  }
   return db.prepare(sql).all(...args);
 }
 

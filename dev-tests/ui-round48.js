@@ -179,6 +179,15 @@ const errors = [];
   ok('Riwayat BKU punya pilihan baris dan tombol kwitansi',
     (await page.locator('#tblAntreanPosted tbody input[data-check-item="ids"]').count()) === 1
     && (await page.locator('#tblAntreanPosted a:has-text("Kwitansi")').count()) === 1);
+  const rowPosted = page.locator('#tblAntreanPosted tbody tr').first();
+  ok('riwayat BKU punya tombol Tinjau / Edit dan Kembalikan ke Antrean',
+    (await rowPosted.locator('button:has-text("Tinjau / Edit")').count()) === 1
+    && (await rowPosted.locator('button:has-text("Kembalikan ke Antrean")').count()) === 1);
+  await rowPosted.locator('button:has-text("Tinjau / Edit")').click();
+  const postedModal = page.locator('.modal.show').last();
+  ok('Tinjau / Edit riwayat BKU membuka modal koreksi', await postedModal.isVisible()
+    && (await postedModal.locator('input[name="jumlah"]').count()) === 1);
+  await postedModal.locator('[data-close]').first().click();
   ok('antrean menampilkan badge Masuk BKU',
     (await page.locator('#tblAntreanQueue .badge').allInnerTexts()).some(t => /Masuk BKU/i.test(t)));
   ok('riwayat Non-BKU menampilkan badge Non-BKU',

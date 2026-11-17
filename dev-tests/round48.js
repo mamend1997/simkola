@@ -7,9 +7,8 @@ process.env.TZ = process.env.TZ || 'Asia/Jakarta';
       + isian manual (ui.pihakInput / ui.pihakData, combobox di app.js).
    2) Antrean Posting: kolom Keterangan (Masuk BKU / Non-BKU) sesuai pilihan
       saat pembayaran diinput + DUA tombol aksi per baris & masal.
-   3) Tanpa batas 30 data + filter periode (bulan & rentang tanggal) pada
-      Antrean Posting & riwayat, filter nama/rentang tanggal pada Riwayat BKU
-      dan Non-BKU; tombol "Kembalikan ke Antrean".
+   3) Riwayat bertahap agar halaman ringan, filter periode (bulan & rentang
+      tanggal), aksi edit/kembalikan pada riwayat BKU & Non-BKU.
    Jalankan: node dev-tests/round48.js
    ===================================================================== */
 const { spawn } = require('child_process');
@@ -184,6 +183,8 @@ const countOf = (html, needle) => html.split(needle).length - 1;
   ok('Riwayat BKU menampilkan baris terposting & kwitansi', countOf(tblPosted, 'data-check-item="ids"') === 2
     && tblPosted.includes('KW-BKU-01') && tblPosted.includes('Kwitansi'));
   ok('Riwayat BKU punya aksi hapus terpilih', /Hapus Terpilih/.test(cut(r.text, 'Riwayat Penerimaan BKU', 'Riwayat Penerimaan Non-BKU')));
+  ok('Riwayat BKU menyediakan Tinjau / Edit dan Kembalikan ke Antrean',
+    tblPosted.includes('Tinjau / Edit') && tblPosted.includes('Kembalikan ke Antrean'));
   ok('kedua riwayat punya filter nama & rentang tanggal',
     countOf(r.text, 'name="riwayat_q"') === 2 && countOf(r.text, 'name="riwayat_dari"') === 2
     && countOf(r.text, 'name="riwayat_sampai"') === 2);
@@ -211,9 +212,9 @@ const countOf = (html, needle) => html.split(needle).length - 1;
     /Kembalikan ke Antrean \(<b data-check-count="ids"/.test(r.text));
 
   /* ==================================================================
-     3. TANPA BATAS 30 DATA
+     3. PAGINASI RIWAYAT
      ================================================================== */
-  console.log('\n[3] Riwayat Non-BKU tanpa batas 30 data');
+  console.log('\n[3] Riwayat Non-BKU tetap lengkap dan riwayat besar dipaginasi');
   ok('seluruh 40 penerimaan Non-BKU tampil', countOf(tblNon, 'data-check-item="ids"') === 40,
     'baris=' + countOf(tblNon, 'data-check-item="ids"'));
   ok('baris paling lama (KW-NB-01) ikut tampil', tblNon.includes('KW-NB-01'));
@@ -296,6 +297,30 @@ const countOf = (html, needle) => html.split(needle).length - 1;
   // kelompok yang sudah diposting hilang dari antrean
   r = await req('GET', '/iuran/antrean');
   ok('baris terposting hilang dari antrean', !cut(r.text, '<table id="tblAntreanPending"', '</table>').includes('KW-PD-01'));
+  ok('baris BKU menampilkan dua aksi baru', /Tinjau \/ Edit/.test(cut(r.text, '<table id="tblAntreanPosted"', '</table>'))
+    && /Kembalikan ke Antrean/.test(cut(r.text, '<table id="tblAntreanPosted"', '</table>')));
+  r = await req('POST', '/iuran/antrean/edit', { id: posted.id, jumlah: '320000', potongan: '0' });
+  ok('edit nominal penerimaan BKU berhasil', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 100));
+  ok('nominal transaksi BKU disinkronkan setelah edit', Number(one('SELECT nominal FROM transaksi WHERE id=?', posted.transaksi_id).nominal) === 320000);
+  r = await req('POST', '/iuran/antrean/kembali', { ids: posted.id });
+  ok('penerimaan BKU dapat dikembalikan ke antrean', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 120));
+  ok('pembayaran kembali pending dan transaksi BKU dihapus',
+    one('SELECT status FROM iuran_bayar WHERE id=?', posted.id).status === 'pending'
+      && !one('SELECT id FROM transaksi WHERE id=?', posted.transaksi_id));
+
+  for (let i = 1; i <= 45; i++) {
+    const tgl = `2026-10-${String(((i - 1) % 28) + 1).padStart(2, '0')}`;
+    insBayar.run(postedTag.id, postedSiswa.id, tgl, 10000, 0, 10000, 'tunai', 'Posted paginasi',
+      bku.id, 'posted', `KW-PAGE-${String(i).padStart(2, '0')}`, tgl + ' 12:00:00');
+  }
+  r = await req('GET', '/iuran/antrean');
+  tblPostedB = cut(r.text, '<table id="tblAntreanPosted"', '</table>');
+  ok('riwayat BKU besar dibatasi 40 baris per halaman',
+    countOf(tblPostedB, 'data-check-item="ids"') === 40 && r.text.includes('posted_hal=2'));
+  r = await req('GET', '/iuran/antrean?posted_hal=2');
+  tblPostedB = cut(r.text, '<table id="tblAntreanPosted"', '</table>');
+  ok('halaman kedua memuat sisa riwayat BKU', countOf(tblPostedB, 'data-check-item="ids"') === 7,
+    String(countOf(tblPostedB, 'data-check-item="ids"')));
 
   /* ==================================================================
      6. REGRESI HALAMAN IURAN LAIN
