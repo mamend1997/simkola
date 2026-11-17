@@ -96,12 +96,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     // notifikasi antrean posting: iuran hari kemarin/belum diposting + honor ekskul tertunda
     const yr = dbm.dateOffsetISO(-1);   // kemarin menurut jam WIB
     const iuranPendingRows = dbm.iuranBayarRows({ taId: ta ? ta.id : null, status: 'pending' });
+    const iuranNonBkuQueueRows = dbm.iuranBayarRows({ taId: ta ? ta.id : null, status: 'pending_nonbku' });
     const iuranLate = iuranPendingRows.filter(b => String(b.tanggal) <= yr);
     const iuranLateGroups = new Set(iuranLate.map(b => (b.grup_id || 0) + '|' + String(b.tanggal).slice(0, 10))).size;
+    const iuranNonBkuLate = iuranNonBkuQueueRows.filter(b => String(b.tanggal) <= yr);
     const ekskulPending = dbm.ekskulPending();
     const queueAlerts = [];
     if (iuranLateGroups) queueAlerts.push(`<a href="${c.base}/iuran/antrean" style="color:inherit"><b>${iuranLateGroups} kelompok</b> penerimaan Grup Iuran belum di-posting ke BKU (${rupiah(iuranLate.reduce((a, b) => a + Number(b.dibayar || 0), 0))} dari ${iuranLate.length} transaksi).</a>`);
     if (iuranPendingRows.length && !iuranLateGroups) queueAlerts.push(`<a href="${c.base}/iuran/antrean" style="color:inherit"><b>${iuranPendingRows.length} penerimaan iuran</b> hari ini masih menunggu posting ke BKU.</a>`);
+    if (iuranNonBkuQueueRows.length) queueAlerts.push(`<a href="${c.base}/iuran/antrean" style="color:inherit"><b>${iuranNonBkuQueueRows.length} penerimaan iuran</b> menunggu diproses di antrean Non-BKU${iuranNonBkuLate.length ? ` (${iuranNonBkuLate.length} dari hari sebelumnya)` : ''}.</a>`);
     if (ekskulPending.length) queueAlerts.push(`<a href="${c.base}/ekskul/antrean" style="color:inherit"><b>${ekskulPending.length} draf honor pembina ekstrakurikuler</b> belum terposting ke BKU.</a>`);
 
     const kpi = (cls, ico, lbl, val, meta) => `<div class="kpi ${cls}">

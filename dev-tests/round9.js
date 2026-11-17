@@ -107,17 +107,31 @@ const periode = today.slice(0, 7);
   ok('nominal per item tersimpan (50rb)', Number(bulan9.jumlah) === 50000 && bulan9.metode === 'transfer');
   ok('BKU per item tersimpan', Number(bulan8.bku_id) === bku.id && bulan9.bku_id === bku.id);
 
-  /* ===== 3. non-BKU: tidak masuk antrean & tidak menambah kas ===== */
+  /* ===== 3. non-BKU: masuk antrean sebelum difinalkan & tidak menambah kas ===== */
+  await req('POST', '/iuran/bayar', {
+    tagihan_id: tPrak.id, tanggal: today, jumlah: '1000', potongan: '0',
+    metode: 'tunai', nonbku: '1', back: `/iuran/data/${s1.id}`
+  });
+  const bayarNonBku = db.prepare('SELECT * FROM iuran_bayar WHERE tagihan_id=? ORDER BY id DESC LIMIT 1').get(tPrak.id);
+  ok('form bayar biasa juga mengantrekan pilihan Non-BKU',
+    bayarNonBku.status === 'pending_nonbku' && !bayarNonBku.bku_id, JSON.stringify({ s: bayarNonBku.status, b: bayarNonBku.bku_id }));
   const bulan10 = db.prepare('SELECT * FROM iuran_bayar WHERE bulan=10 ORDER BY id DESC LIMIT 1').get();
-  ok('item non-BKU berstatus manual & tanpa BKU', bulan10.status === 'manual' && !bulan10.bku_id, JSON.stringify({ s: bulan10.status, b: bulan10.bku_id }));
+  ok('item non-BKU masuk antrean khusus & tanpa BKU', bulan10.status === 'pending_nonbku' && !bulan10.bku_id, JSON.stringify({ s: bulan10.status, b: bulan10.bku_id }));
   r = await req('GET', '/iuran/antrean');
-  // ronde 17: baris non-BKU punya kartu sendiri; bagian "Rincian Penerimaan Belum Terposting"
-  // hanya boleh memuat pembayaran berstatus pending.
-  const antrePending = r.text.split('Penerimaan Non-BKU (Data Saja)')[0];
-  ok('antrean tidak memuat baris pembayaran non-BKU', !antrePending.includes('mE' + bulan10.id + '"'), 'baris non-BKU muncul di antrean');
+  const pendingNonBkuTable = (r.text.split('<table id="tblAntreanNonBkuQueue">')[1] || '').split('</table>')[0];
+  const pendingBkuTable = (r.text.split('<table id="tblAntreanPending">')[1] || '').split('</table>')[0];
+  ok('pembayaran non-BKU menunggu di tabel antrean khusus',
+    pendingNonBkuTable.includes(`value="${bulan10.id}"`) && pendingNonBkuTable.includes(`value="${bayarNonBku.id}"`) && /Antrean Non-BKU/.test(pendingNonBkuTable));
+  ok('pembayaran non-BKU tidak ikut antrean posting BKU', !pendingBkuTable.includes(`value="${bulan10.id}"`));
   const pendingCount = db.prepare("SELECT COUNT(*) c FROM iuran_bayar WHERE status='pending'").get().c;
-  ok('jumlah pending = jumlah baris antrean rincian', (antrePending.match(/data-open="mE\d+"/g) || []).length === pendingCount,
-    `pending=${pendingCount} baris=${(antrePending.match(/data-open="mE\d+"/g) || []).length}`);
+  ok('jumlah pending BKU = jumlah baris rincian BKU', (pendingBkuTable.match(/data-check-item="ids"/g) || []).length === pendingCount,
+    `pending=${pendingCount} baris=${(pendingBkuTable.match(/data-check-item="ids"/g) || []).length}`);
+  r = await req('POST', '/iuran/antrean/nonbku', { ids: [bulan10.id, bayarNonBku.id] });
+  const bulan10Final = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(bulan10.id);
+  const bayarNonBkuFinal = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(bayarNonBku.id);
+  ok('proses antrean Non-BKU mengubah keduanya menjadi data saja',
+    r.status === 303 && bulan10Final.status === 'manual' && bayarNonBkuFinal.status === 'manual'
+      && !bulan10Final.bku_id && !bayarNonBkuFinal.bku_id);
   const kasBku = db.prepare(`SELECT COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE -nominal END),0) s FROM transaksi WHERE bku_id=? AND status='posted'`).get(bku.id).s;
   ok('kas BKU tidak bertambah oleh non-BKU', Number(kasBku) === 0, String(kasBku));
   const trxIuran = await req('GET', '/iuran/transaksi');

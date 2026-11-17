@@ -114,12 +114,15 @@ const today = new Date().toISOString().slice(0, 10);
   ok('edit antrean: Non-BKU → Antrean Posting', r.status === 303 && rowBack.status === 'pending' && Number(rowBack.bku_id) === bku.id,
     JSON.stringify({ s: rowBack.status, b: rowBack.bku_id }));
 
-  // edit: jadikan Non-BKU lagi (kasus "lupa mencentang di tahap awal")
+  // edit: masukkan kembali ke antrean proses Non-BKU, lalu finalkan dari antrean
   r = await req('POST', '/iuran/antrean/edit', {
-    id: rowBack.id, jumlah: '150000', potongan: '0', tanggal: today, keterangan: 'non-bku', status_tujuan: 'manual'
+    id: rowBack.id, jumlah: '150000', potongan: '0', tanggal: today, keterangan: 'non-bku', status_tujuan: 'pending_nonbku'
   });
   const rowNb = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(rowBack.id);
-  ok('edit antrean: ubah status menjadi Non-BKU', r.status === 303 && rowNb.status === 'manual' && !rowNb.bku_id);
+  ok('edit antrean: ubah ke antrean proses Non-BKU', r.status === 303 && rowNb.status === 'pending_nonbku' && !rowNb.bku_id);
+  r = await req('POST', '/iuran/antrean/nonbku', { ids: rowNb.id });
+  ok('proses antrean Non-BKU memfinalkan data saja',
+    r.status === 303 && db.prepare('SELECT status FROM iuran_bayar WHERE id=?').get(rowNb.id).status === 'manual');
 
   // baris kedua dikembalikan ke antrean lalu diposting → transaksi BKU terbentuk
   await req('POST', '/iuran/antrean/edit', {
