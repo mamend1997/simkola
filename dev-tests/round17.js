@@ -120,9 +120,21 @@ const today = new Date().toISOString().slice(0, 10);
   });
   const rowNb = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(rowBack.id);
   ok('edit antrean: ubah ke antrean proses Non-BKU', r.status === 303 && rowNb.status === 'pending_nonbku' && !rowNb.bku_id);
+  r = await req('POST', '/iuran/antrean/edit', {
+    id: rowNb.id, jumlah: '150000', potongan: '0', tanggal: today, keterangan: 'pindah ke BKU',
+    status_tujuan: 'pending', bku_id: bku.id
+  });
+  const rowBkuAgain = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(rowNb.id);
+  ok('edit antrean: Non-BKU pending dapat dipindah ke antrean BKU',
+    r.status === 303 && rowBkuAgain.status === 'pending' && Number(rowBkuAgain.bku_id) === bku.id);
+  r = await req('POST', '/iuran/antrean/edit', {
+    id: rowBkuAgain.id, jumlah: '150000', potongan: '0', tanggal: today, keterangan: 'non-bku', status_tujuan: 'pending_nonbku'
+  });
+  const rowNbAgain = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(rowNb.id);
   r = await req('POST', '/iuran/antrean/nonbku', { ids: rowNb.id });
   ok('proses antrean Non-BKU memfinalkan data saja',
-    r.status === 303 && db.prepare('SELECT status FROM iuran_bayar WHERE id=?').get(rowNb.id).status === 'manual');
+    r.status === 303 && rowNbAgain.status === 'pending_nonbku'
+      && db.prepare('SELECT status FROM iuran_bayar WHERE id=?').get(rowNb.id).status === 'manual');
 
   // baris kedua dikembalikan ke antrean lalu diposting → transaksi BKU terbentuk
   await req('POST', '/iuran/antrean/edit', {

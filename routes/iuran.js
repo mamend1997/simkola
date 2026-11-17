@@ -2681,7 +2681,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     guard(req, res, 'iuran', 'edit');
     const b = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(req.body.id);
     const back = req.BASE + '/iuran/antrean';
-    if (!b || !['pending', 'manual', 'nonbku', 'posted'].includes(b.status)) return res.redirect(back + '?err=' + encodeURIComponent('Penerimaan tidak ditemukan atau sudah berubah status.'));
+    if (!b || !['pending', 'pending_nonbku', 'manual', 'nonbku', 'posted'].includes(b.status)) return res.redirect(back + '?err=' + encodeURIComponent('Penerimaan tidak ditemukan atau sudah berubah status.'));
     const jumlah = lib.parseMoney(req.body.jumlah);
     const potongan = Math.max(0, lib.parseMoney(req.body.potongan));
     if (jumlah <= 0) return res.redirect(back + '?err=' + encodeURIComponent('Jumlah iuran harus lebih dari 0.'));
