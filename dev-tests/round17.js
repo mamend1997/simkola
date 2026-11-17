@@ -120,6 +120,20 @@ const today = new Date().toISOString().slice(0, 10);
   });
   const rowNb = db.prepare('SELECT * FROM iuran_bayar WHERE id=?').get(rowBack.id);
   ok('edit antrean: ubah ke antrean proses Non-BKU', r.status === 303 && rowNb.status === 'pending_nonbku' && !rowNb.bku_id);
+  r = await req('GET', '/iuran/antrean');
+  ok('antrean Non-BKU menyediakan tombol Hapus Terpilih',
+    /tblAntreanNonBkuQueue/.test(r.text) && /formaction="\/iuran\/bayar\/hapus-masal"/.test(r.text) && /Hapus Terpilih/.test(r.text));
+  await req('POST', '/iuran/bayar-item', {
+    back: `/iuran/data/${siswa.id}`, n: '1', key_0: `m:${tagSpp.id}:9`, tanggal_0: today, metode_0: 'tunai',
+    jumlah_0: '150000', potongan_0: '0', bku_0: '', nonbku_0: '1'
+  });
+  const rowForDelete = db.prepare("SELECT * FROM iuran_bayar WHERE tagihan_id=? AND bulan=9 AND status='pending_nonbku'").get(tagSpp.id);
+  ok('pembayaran Non-BKU tambahan masuk antrean', !!rowForDelete);
+  if (rowForDelete) {
+    r = await req('POST', '/iuran/bayar/hapus-masal', { ids: [rowForDelete.id], back: '/iuran/antrean' });
+    ok('hapus terpilih menghapus antrean Non-BKU yang keliru diinput',
+      r.status === 303 && !db.prepare('SELECT id FROM iuran_bayar WHERE id=?').get(rowForDelete.id));
+  } else ok('hapus terpilih menghapus antrean Non-BKU yang keliru diinput', false);
   r = await req('POST', '/iuran/antrean/edit', {
     id: rowNb.id, jumlah: '150000', potongan: '0', tanggal: today, keterangan: 'pindah ke BKU',
     status_tujuan: 'pending', bku_id: bku.id

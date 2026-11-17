@@ -2406,6 +2406,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             ${editable ? `<button class="btn btn-sm btn-primary" type="submit"
               data-confirm-click="Simpan penerimaan yang dipilih sebagai Non-BKU? Tidak ada transaksi BKU yang dibuat.">
               ${ui.icon('save')}Proses Non-BKU (<b data-check-count="nbids" data-check-scope="#tblAntreanNonBkuQueue">0</b>)</button>` : ''}
+            ${c.can('iuran', 'delete') ? `<button class="btn btn-sm btn-danger" type="submit"
+              formaction="${c.base}/iuran/bayar/hapus-masal" formmethod="post"
+              data-confirm-click="Hapus penerimaan Non-BKU yang dipilih? Data hilang dari riwayat pembayaran siswa dan tagihan kembali terutang.">
+              ${ui.icon('trash')}Hapus Terpilih (<b data-check-count="nbids" data-check-scope="#tblAntreanNonBkuQueue">0</b>)</button>` : ''}
           </div></div>
       </form>
       <div class="table-scroll tall"><table id="tblAntreanNonBkuQueue"><thead><tr>
