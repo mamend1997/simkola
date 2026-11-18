@@ -78,6 +78,9 @@ const periode = today.slice(0, 7);
   await req('POST', `/iuran/grup/${gPrak.id}/tetapkan`, { kelas_id: kelas.id, siswa_id: [s1.id] });
   const tSpp = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=?').get(gSpp.id);
   const tPrak = db.prepare('SELECT * FROM iuran_tagihan WHERE grup_id=?').get(gPrak.id);
+  const formDetail = await req('GET', `/iuran/data/${s1.id}`);
+  ok('form bayar punya tombol simpan saja dan simpan cetak',
+    /Simpan Saja/.test(formDetail.text) && /Simpan &amp; Cetak Kwitansi/.test(formDetail.text));
 
   /* ===== 1. kwitansi hanya item yang baru diisi ===== */
   r = await req('POST', '/iuran/bayar', { tagihan_id: tSpp.id, bulan: '7', tanggal: today, jumlah: '100000', potongan: '0', metode: 'tunai', bku_id: bku.id, back: `/iuran/data/${s1.id}` });
@@ -106,6 +109,16 @@ const periode = today.slice(0, 7);
   const bulan9 = db.prepare('SELECT * FROM iuran_bayar WHERE bulan=9 ORDER BY id DESC LIMIT 1').get();
   ok('nominal per item tersimpan (50rb)', Number(bulan9.jumlah) === 50000 && bulan9.metode === 'transfer');
   ok('BKU per item tersimpan', Number(bulan8.bku_id) === bku.id && bulan9.bku_id === bku.id);
+  r = await req('POST', '/iuran/bayar', {
+    tagihan_id: tSpp.id, bulan: '11', tanggal: today, jumlah: '2500',
+    potongan: '0', metode: 'tunai', bku_id: bku.id, after: 'saja',
+    back: `/iuran/data/${s1.id}?ta=${ta.id}`
+  });
+  const simpanSaja = db.prepare('SELECT * FROM iuran_bayar WHERE tagihan_id=? AND bulan=11 ORDER BY id DESC LIMIT 1').get(tSpp.id);
+  ok('simpan saja kembali ke detail tanpa kwitansi',
+    r.status === 303 && /\/iuran\/data\/\d+\?ta=\d+&ok=/.test(r.loc) && !/\/iuran\/kwitansi/.test(r.loc)
+      && simpanSaja && Number(simpanSaja.jumlah) === 2500,
+    JSON.stringify({ location: r.loc, payment: simpanSaja }));
 
   /* ===== 3. non-BKU: masuk antrean sebelum difinalkan & tidak menambah kas ===== */
   await req('POST', '/iuran/bayar', {

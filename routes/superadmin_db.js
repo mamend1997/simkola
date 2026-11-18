@@ -134,7 +134,6 @@ ${ui.fontLinks()}
 </div>
 <script src="${req.BASE}/assets/app.js?v=${ui.ASSET_V}" defer></script>
 <script>
-document.querySelectorAll('[data-confirm]').forEach(function(f){f.addEventListener('submit',function(e){if(!confirm(f.dataset.confirm))e.preventDefault();});});
 document.querySelectorAll('[data-open]').forEach(function(b){b.addEventListener('click',function(){var m=document.getElementById(b.dataset.open); if(m) m.classList.add('show');});});
 document.querySelectorAll('[data-close]').forEach(function(b){b.addEventListener('click',function(){var m=document.getElementById(b.dataset.close); if(m) m.classList.remove('show');});});
 </script>

@@ -71,6 +71,81 @@
     f.querySelectorAll('input[data-money]').forEach(i => { i.value = digitsOf(i.value); });
   }, true);
 
+  /* Konfirmasi memakai dialog aplikasi, bukan dialog bawaan browser. */
+  const confirmedSubmits = new WeakSet();
+  const confirmedClicks = new WeakSet();
+  const pendingClickConfirm = new WeakMap();
+  let confirmQueue = Promise.resolve();
+  function confirmInApp(message) {
+    const show = () => new Promise(resolve => {
+      let dialog = document.getElementById('appConfirmDialog');
+      if (!dialog) {
+        dialog = document.createElement('div');
+        dialog.id = 'appConfirmDialog';
+        dialog.className = 'modal app-confirm';
+        dialog.setAttribute('aria-hidden', 'true');
+        dialog.innerHTML = `<div class="modal-box app-confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="appConfirmTitle" aria-describedby="appConfirmMessage">
+          <div class="app-confirm-top"><div class="app-confirm-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 21 20H3L12 3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 9v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg></div></div>
+          <div class="app-confirm-copy"><h3 id="appConfirmTitle">Konfirmasi Tindakan</h3><p class="app-confirm-message" id="appConfirmMessage"></p></div>
+          <div class="app-confirm-actions"><button class="btn" type="button" data-confirm-cancel>Batal</button><button class="btn btn-primary" type="button" data-confirm-ok>Ya, Lanjutkan</button></div>
+        </div>`;
+        document.body.appendChild(dialog);
+      }
+
+      const cancel = dialog.querySelector('[data-confirm-cancel]');
+      const accept = dialog.querySelector('[data-confirm-ok]');
+      const box = dialog.querySelector('.modal-box');
+      const previousFocus = document.activeElement;
+      const messageEl = dialog.querySelector('#appConfirmMessage');
+      const titleEl = dialog.querySelector('#appConfirmTitle');
+      let settled = false;
+      const text = String(message || 'Apakah Anda yakin ingin melanjutkan?');
+      const danger = /\b(hapus|delete|reset|bersihkan|kosongkan|nonaktifkan)\b/i.test(text);
+      messageEl.textContent = text;
+      titleEl.textContent = danger ? 'Konfirmasi Penghapusan' : 'Konfirmasi Tindakan';
+      dialog.classList.toggle('is-danger', danger);
+      accept.textContent = danger ? 'Ya, Hapus' : 'Ya, Lanjutkan';
+      const finish = yes => {
+        if (settled) return;
+        settled = true;
+        dialog.classList.remove('show');
+        dialog.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('confirm-open');
+        dialog.removeEventListener('click', onClick);
+        dialog.removeEventListener('keydown', onKeydown);
+        if (previousFocus && previousFocus.isConnected && previousFocus.focus) previousFocus.focus();
+        resolve(yes);
+      };
+      const onClick = e => {
+        if (e.target.closest('[data-confirm-cancel]')) finish(false);
+        else if (e.target.closest('[data-confirm-ok]')) finish(true);
+        else if (e.target === dialog) finish(false);
+      };
+      const onKeydown = e => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          finish(false);
+          return;
+        }
+        if (e.key !== 'Tab') return;
+        const focusable = Array.from(box.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+        if (!focusable.length) { e.preventDefault(); return; }
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      };
+      dialog.addEventListener('click', onClick);
+      dialog.addEventListener('keydown', onKeydown);
+      dialog.classList.add('show');
+      dialog.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('confirm-open');
+      cancel.focus();
+    });
+    const result = confirmQueue.then(show, show);
+    confirmQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   /* ===== Tahun pelajaran mengikuti TANGGAL transaksi =====
      Server menyimpan transaksi pada tahun pelajaran yang memuat tanggal transaksi
      (bukan tahun pelajaran yang sedang dibuka). Di sini pengguna diperingatkan
@@ -158,10 +233,12 @@
       const inp = f.querySelector('input[name="tanggal"]');
       if (!inp) return;
       const info = noteFor(inp);
-      if (!info || !info.warn) return;
-      const lanjut = window.confirm('PERINGATAN TAHUN PELAJARAN\n\n' + info.text
-        + '\n\nLanjutkan menyimpan transaksi pada tahun pelajaran sesuai tanggal tersebut?');
-      if (!lanjut) { e.preventDefault(); e.stopPropagation(); }
+      if (!info || !info.warn) {
+        delete f.dataset.taConfirm;
+        return;
+      }
+      f.dataset.taConfirm = 'PERINGATAN TAHUN PELAJARAN\n\n' + info.text
+        + '\n\nLanjutkan menyimpan transaksi pada tahun pelajaran sesuai tanggal tersebut?';
     }, true);
   })();
 
@@ -501,8 +578,36 @@
     place();
   })();
 
-  /* confirm */
-  $$('form[data-confirm]').forEach(f => f.addEventListener('submit', e => { if (!confirm(f.dataset.confirm)) e.preventDefault(); }));
+  /* Konfirmasi terpusat untuk form, peringatan TA, dan tombol aksi. */
+  document.addEventListener('submit', e => {
+    const form = e.target;
+    if (!form || !form.matches || !form.matches('form')) return;
+    if (confirmedSubmits.has(form)) {
+      confirmedSubmits.delete(form);
+      return;
+    }
+    const messages = [];
+    if (form.dataset.confirm) messages.push(form.dataset.confirm);
+    if (form.dataset.taConfirm) messages.push(form.dataset.taConfirm);
+    const clickMessages = pendingClickConfirm.get(form);
+    if (clickMessages) messages.push.apply(messages, clickMessages);
+    pendingClickConfirm.delete(form);
+    if (!messages.length) return;
+
+    e.preventDefault();
+    confirmInApp(messages.join('\n\n')).then(yes => {
+      if (!yes) return;
+      confirmedSubmits.add(form);
+      try {
+        if (form.requestSubmit) {
+          if (e.submitter && e.submitter.form === form) form.requestSubmit(e.submitter);
+          else form.requestSubmit();
+        } else form.submit();
+      } finally {
+        confirmedSubmits.delete(form);
+      }
+    });
+  }, true);
 
   /* flash auto-dismiss helpers not needed */
 
@@ -1249,10 +1354,34 @@ function terbilang(n) {
     });
   });
 
-  /* tombol submit dengan konfirmasi sendiri (mis. bayar di dalam form multi-aksi) */
-  $$('[data-confirm-click]').forEach(btn => btn.addEventListener('click', e => {
-    if (!confirm(btn.dataset.confirmClick)) { e.preventDefault(); e.stopPropagation(); }
-  }));
+  /* Tombol aksi dengan konfirmasi; submit akan diteruskan ke dialog terpusat di atas. */
+  document.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('[data-confirm-click]');
+    if (!btn) return;
+    if (confirmedClicks.has(btn)) {
+      confirmedClicks.delete(btn);
+      return;
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const form = btn.form || btn.closest('form');
+    const isSubmit = form && ((btn.tagName === 'BUTTON' && (!btn.hasAttribute('type') || btn.type === 'submit'))
+      || (btn.tagName === 'INPUT' && (btn.type === 'submit' || btn.type === 'image')));
+    if (isSubmit) {
+      const messages = pendingClickConfirm.get(form) || [];
+      messages.push(btn.dataset.confirmClick);
+      pendingClickConfirm.set(form, messages);
+      confirmedClicks.add(btn);
+      btn.click();
+      if (pendingClickConfirm.has(form)) pendingClickConfirm.delete(form);
+      return;
+    }
+    confirmInApp(btn.dataset.confirmClick).then(yes => {
+      if (!yes) return;
+      confirmedClicks.add(btn);
+      btn.click();
+    });
+  }, true);
 
   /* ===== drag & drop urutan nama leger honor ===== */
   const payTable = document.querySelector('.payroll-table');

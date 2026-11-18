@@ -1230,12 +1230,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           ${editable && m.sisa > 0 ? late('mBayar' + t.id + '_' + m.bulan, {
           title: 'Form Bayar Iuran — ' + t.grup_nama + ' ' + bulanTahunLabel(m.bulan, taOfGrup(grupObj)),
           body: bayarForm(t, 'fb' + t.id + '_' + m.bulan, m.bulan, m.sisa),
-          footer: `<button class="btn" data-close="mBayar${t.id}_${m.bulan}">Batal</button><button class="btn btn-primary" form="fb${t.id}_${m.bulan}">${ui.icon('save')}Simpan &amp; Cetak Kwitansi</button>`
+          footer: `<button class="btn" data-close="mBayar${t.id}_${m.bulan}">Batal</button><button class="btn" name="after" value="saja" type="submit" form="fb${t.id}_${m.bulan}">${ui.icon('save')}Simpan Saja</button><button class="btn btn-primary" form="fb${t.id}_${m.bulan}">${ui.icon('save')}Simpan &amp; Cetak Kwitansi</button>`
         }) : ''}`;
       }).join('') : '';
       return rowHtml + monthRows + late('mBayar' + t.id, {
         title: 'Form Bayar Iuran — ' + t.grup_nama, body: bayarForm(t, 'fb' + t.id),
-        footer: `<button class="btn" data-close="mBayar${t.id}">Batal</button><button class="btn btn-primary" form="fb${t.id}">${ui.icon('save')}Simpan &amp; Cetak Kwitansi</button>`
+        footer: `<button class="btn" data-close="mBayar${t.id}">Batal</button><button class="btn" name="after" value="saja" type="submit" form="fb${t.id}">${ui.icon('save')}Simpan Saja</button><button class="btn btn-primary" form="fb${t.id}">${ui.icon('save')}Simpan &amp; Cetak Kwitansi</button>`
       }) + late('mRiwayat' + t.id, {
         title: 'Riwayat Pembayaran — ' + t.grup_nama, wide: true,
         body: riwayatHtml(t, c, grupObj)
@@ -1496,6 +1496,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const msg = (nonBku
       ? `Pembayaran dicatat (${n} item, ${rupiah(total)}) dan masuk antrean Non-BKU. Proses dari halaman Antrean Iuran untuk menyimpannya sebagai data saja.`
       : `Pembayaran dicatat (${n} grup, ${rupiah(total)}). Masuk antrean posting BKU ${bku.nama}.`) + (peringatan ? ' Catatan: ' + peringatan : '');
+    if (req.body.after === 'saja') {
+      return res.redirect(req.BASE + flashUrl(backPath, 'ok', msg));
+    }
     // `rows` = hanya pembayaran yang baru dibuat, sehingga kwitansi tidak mencampur item lain
     // `back` dibawa ke halaman kwitansi agar tombol Kembali/Tutup kembali ke halaman detail siswa
     res.redirect(req.BASE + `/iuran/kwitansi?rows=${inserted.join(',')}&auto=1&back=${encodeURIComponent(backPath)}&info=` + encodeURIComponent(msg));
