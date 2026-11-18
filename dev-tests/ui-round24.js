@@ -25,7 +25,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       nama: 'SD UI Uji', admin_nama: 'Admin UI', admin_email: 'admin@sd-uji.sch.id',
-      admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', telp: '081200007771',
+      admin_password: 'Rahasia123!', jenjang: 'SD/MI', alamat: 'Jl. UI Uji', telp: '081200007771',
       otp_token: otpUi
     }).toString(), redirect: 'manual'
   });
@@ -50,8 +50,8 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
 
   await page.fill('input[name=kode]', t.school_code);
   await page.fill('input[name=email]', 'admin@sd-uji.sch.id');
-  await page.fill('input[name=password]', 'rahasia123');
-  await page.click('form button');
+  await page.fill('input[name=password]', 'Rahasia123!');
+  await page.click('form button[type=submit]');
   await page.waitForTimeout(700);
   ok('login sekolah (kode acak) lewat UI', page.url() === base + '/', page.url());
 
@@ -107,7 +107,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   await page.goto(base + '/super-admin/login');
   await page.fill('input[name=email]', 'super@simkeu.id');
   await page.fill('input[name=password]', 'SuperAdmin2026!');
-  await page.click('form button');
+  await page.click('form button[type=submit]');
   await page.waitForTimeout(600);
   ok('login super admin UI', page.url().endsWith('/super-admin'), page.url());
 

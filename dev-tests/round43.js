@@ -183,7 +183,7 @@ const ck = sc => String(sc || '').split(';')[0];
   /* submit tanpa OTP & dengan nomor berbeda */
   const regBody = {
     nama: 'SMK OTP Uji', admin_nama: 'Admin OTP', admin_email: 'admin@otp-uji.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SMK',
+    admin_password: 'Rahasia123!', jenjang: 'SMK', alamat: 'Jl. OTP',
     telp: '081234560011', paket: 'basic'
   };
   r = await req('POST', '/register', regBody);
@@ -220,7 +220,7 @@ const ck = sc => String(sc || '').split(';')[0];
   ok('form pendaftaran tanpa blok OTP saat dinonaktifkan', !/data-otp-box/.test(r.text) && !/id="btnDaftar"[^>]*disabled/.test(r.text));
   r = await req('POST', '/register', {
     nama: 'SD Tanpa OTP', admin_nama: 'Admin', admin_email: 'admin@tanpa-otp.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD', telp: '081234560077', paket: 'basic'
+    admin_password: 'Rahasia123!', jenjang: 'SD', alamat: 'Jl. Tanpa OTP', telp: '081234560077', paket: 'basic'
   });
   ok('pendaftaran tanpa OTP berhasil saat sakelar mati', r.status === 303 && /welcome=1/.test(r.loc), r.loc);
   ok('tenant dibuat saat OTP dimatikan', !!sdb.prepare("SELECT id FROM tenants WHERE nama='SD Tanpa OTP'").get());

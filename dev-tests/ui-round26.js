@@ -32,7 +32,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   await page.fill('input[name=kode]', 'SK01');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
   await page.fill('input[name=password]', 'admin123');
-  await Promise.all([page.waitForNavigation(), page.click('form button')]);
+  await Promise.all([page.waitForNavigation(), page.click('form button[type=submit]')]);
   await page.waitForTimeout(400);
   ok('login sekolah', page.url() === base + '/', page.url());
 
@@ -115,7 +115,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   await page.goto(base + '/super-admin/login');
   await page.fill('input[name=email]', 'super@simkeu.id');
   await page.fill('input[name=password]', 'SuperAdmin2026!');
-  await Promise.all([page.waitForNavigation(), page.click('form button')]);
+  await Promise.all([page.waitForNavigation(), page.click('form button[type=submit]')]);
   await page.waitForTimeout(400);
   ok('login Super Admin', page.url() === base + '/super-admin', page.url());
   ok('menu Backup & Restore Database System tampil', /Backup &amp; Restore Database System/.test(await page.content())

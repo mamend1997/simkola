@@ -2308,6 +2308,15 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     if (shown) { el.textContent = '•'.repeat(real.length); el.setAttribute('data-shown', '0'); btn.innerHTML = btn.innerHTML.replace('Sembunyikan', 'Lihat'); }
     else { el.textContent = real; el.setAttribute('data-shown', '1'); btn.innerHTML = btn.innerHTML.replace('Lihat', 'Sembunyikan'); }
   }));
+  qa('[data-password-toggle]').forEach(btn => btn.addEventListener('click', () => {
+    const host = btn.closest('.password-control');
+    const input = host && host.querySelector('input[type="password"], input[type="text"]');
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+    btn.setAttribute('aria-label', show ? 'Sembunyikan kata sandi' : 'Lihat kata sandi');
+  }));
   /* tutup kartu sambutan pendaftaran (sekali tampil, tidak muncul lagi) */
   const closeWelcome = q('[data-close-welcome]');
   if (closeWelcome) closeWelcome.addEventListener('click', () => {

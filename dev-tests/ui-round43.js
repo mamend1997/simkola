@@ -98,7 +98,7 @@ async function req(method, url, body, opt = {}) {
   await page.fill('input[name=kode]', 'SK01');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
   await page.fill('input[name=password]', 'admin123');
-  await page.click('form button');
+  await page.click('form button[type=submit]');
   await page.waitForTimeout(700);
 
   await page.goto(base + '/petunjuk');
@@ -154,7 +154,7 @@ async function req(method, url, body, opt = {}) {
   await page2.goto(base + '/super-admin/login');
   await page2.fill('input[name=email]', 'super@simkeu.id');
   await page2.fill('input[name=password]', 'SuperAdmin2026!');
-  await page2.click('form button');
+  await page2.click('form button[type=submit]');
   await page2.waitForTimeout(600);
   await page2.goto(base + '/super-admin/petunjuk');
   await page2.waitForTimeout(300);
@@ -170,15 +170,17 @@ async function req(method, url, body, opt = {}) {
   page3.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|ERR_|net::/i.test(m.text())) errors.push(m.text()); });
   await page3.goto(base + '/register');
   await page3.waitForTimeout(300);
-  ok('blok verifikasi OTP tampil di form pendaftaran', await page3.locator('[data-otp-box]').count() === 1);
+  ok('blok OTP menunggu tombol kirim ditekan', await page3.locator('[data-otp-box]').count() === 1
+    && !(await page3.locator('[data-otp-box]').isVisible()));
   ok('tombol daftar terkunci sebelum verifikasi', await page3.locator('#btnDaftar').isDisabled());
   await page3.fill('input[name=nama]', 'SMK OTP Browser');
+  await page3.fill('input[name=alamat]', 'Jl. OTP Browser');
   await page3.fill('input[name=admin_nama]', 'Ibu OTP');
   await page3.fill('input[name=admin_email]', 'otp@browser.sch.id');
-  await page3.fill('input[name=admin_password]', 'rahasiaOtp1');
-  await page3.fill('input[name=admin_password2]', 'rahasiaOtp1');
+  await page3.fill('input[name=admin_password]', 'RahasiaOtp1!');
   await page3.fill('#fDaftarTelp', '081200005555');
   await page3.click('[data-otp-kirim]');
+  ok('field OTP muncul setelah meminta kode', await page3.locator('[data-otp-box]').isVisible());
   await page3.waitForSelector('[data-otp-demo]', { timeout: 8000 });
   const kode = String(await page3.locator('[data-otp-demo]').getAttribute('data-otp-demo')).trim();
   ok('kode OTP 4 digit tampil (mode uji gateway)', /^\d{4}$/.test(kode), kode);
@@ -204,7 +206,7 @@ async function req(method, url, body, opt = {}) {
   await page4.waitForTimeout(300);
   const overflowReg = await page4.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   ok('form pendaftaran tidak overflow horizontal di 390px', overflowReg <= 2, String(overflowReg));
-  ok('kotak OTP tetap terlihat di mobile', await page4.locator('[data-otp-box]').isVisible());
+  ok('kotak OTP tersembunyi di mobile sebelum diminta', !(await page4.locator('[data-otp-box]').isVisible()));
   await page4.close();
 
   /* ================= 4. HONOR EKSKUL — BULAN POSTING BKU ================= */
@@ -216,7 +218,7 @@ async function req(method, url, body, opt = {}) {
   await page5.fill('input[name=kode]', 'SK01');
   await page5.fill('input[name=email]', 'admin@sekolah.sch.id');
   await page5.fill('input[name=password]', 'admin123');
-  await page5.click('form button');
+  await page5.click('form button[type=submit]');
   await page5.waitForTimeout(700);
 
   await page5.goto(base + '/ekskul/antrean');

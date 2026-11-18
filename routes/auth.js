@@ -76,11 +76,14 @@ ${ui.themeCss(tema)}
           <input type="text" name="kode" required maxlength="4" value="${lib.esc(kode)}" placeholder="SK01"
             style="text-transform:uppercase;letter-spacing:.28em;font-weight:700" autocomplete="organization"></div>
         <div class="field"><label>Username / Email</label><input type="text" name="email" required placeholder="admin@sekolah.sch.id" autocomplete="username"></div>
-        <div class="field"><label>Password</label><input type="password" name="password" required placeholder="••••••••" autocomplete="current-password"></div>
+        <div class="field"><label>Password</label>
+          <div class="password-control"><input type="password" name="password" required placeholder="••••••••" autocomplete="current-password" id="loginPassword">
+            <button type="button" class="password-eye" data-password-toggle aria-label="Lihat kata sandi" aria-pressed="false">${ui.icon('eye')}</button></div>
+        </div>
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:6px">Masuk</button>
       </form>
-      <p class="small muted" style="margin-top:18px;text-align:center">Belum punya akun sekolah?
-        <a href="${base}/register" style="color:var(--o-700);font-weight:700">Daftarkan sekolah Anda</a></p>`
+      <div style="margin-top:18px;text-align:center"><span class="small muted">Belum punya akun sekolah?</span>
+        <a class="btn btn-primary btn-sm" href="${base}/register" style="margin:8px auto 0">Daftarkan Sekolah Anda</a></div>`
     }));
   });
 
@@ -131,6 +134,17 @@ ${ui.themeCss(tema)}
     return available.find(p => p.kode === preferred.kode) || available[0] || null;
   }
 
+  function phoneAlreadyRegistered(raw) {
+    const phone = lib.normPhone(raw);
+    if (!phone) return false;
+    return saas.allTenants().some(t => {
+      if (lib.normPhone(t.contact_telp) === phone) return true;
+      const conn = dbm.openTenantConn(t.id, t.db_file);
+      const schoolPhone = conn.prepare("SELECT v FROM settings WHERE k='sekolah_telp'").get();
+      return lib.normPhone(schoolPhone && schoolPhone.v) === phone;
+    });
+  }
+
   function registerForm(req, res, { err } = {}) {
     const base = req.BASE;
     const q = req.query;
@@ -144,7 +158,6 @@ ${ui.themeCss(tema)}
     const otpVerified = !!otpCheck.ok;
     const otpToken = otpVerified ? otpTokenQ : '';
     const trialPkg = trialPackage();
-    const trialHari = trialPkg ? saas.packageTrialDays(trialPkg) : 0;
     const cap = saas.captchaConfig();
     const capSite = cap.siteKey;
     let captchaHtml = '';
@@ -177,34 +190,41 @@ ${ui.themeCss(tema)}
       <div class="auth-login-head">
         <div class="auth-logo-ph">${ui.icon('school')}</div>
         <div class="auth-welcome">Pendaftaran Sekolah Baru</div>
-        <div class="small muted">${lib.esc(saas.appName())} · uji coba ${saas.trialDays()} hari</div>
       </div>
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${lib.esc(err)}</div></div>` : ''}
       <form method="post" action="${base}/register">
-        <div class="row2">
-          <div class="field"><label>Nama Sekolah</label><input type="text" name="nama" value="${v('nama')}" required placeholder="SMK Negeri 1 Contoh"></div>
-          <div class="field"><label>Nama Kepala Sekolah</label><input type="text" name="kepala" value="${v('kepala')}" placeholder="Opsional"></div>
+        <div class="field"><label>Nama Sekolah</label><input type="text" name="nama" value="${v('nama')}" required placeholder="SMK Negeri 1 Contoh"></div>
+        <div class="field"><label>Jenjang Pendidikan</label>
+          <select name="jenjang">
+            ${Object.entries(dbm.JENJANG).map(([k, val]) => `<option value="${lib.esc(k)}" ${v('jenjang') === lib.esc(k) ? 'selected' : ''}>${lib.esc(val.label)}${val.preset.length ? ' — tingkat ' + val.preset.join(', ') : ''}</option>`).join('')}
+          </select>
         </div>
-        <div class="field"><label>Alamat Sekolah</label><input type="text" name="alamat" value="${v('alamat')}" placeholder="Jl. Pendidikan No. 1, Kota"></div>
+        <div class="field"><label>Alamat Sekolah</label><input type="text" name="alamat" value="${v('alamat')}" required placeholder="Jl. Pendidikan No. 1, Kota"></div>
         <div class="row2">
           <div class="field"><label>Nama Admin</label><input type="text" name="admin_nama" value="${v('admin_nama')}" required placeholder="Nama bendahara/admin"></div>
-          <div class="field"><label>Email Admin (untuk login)</label><input type="email" name="admin_email" value="${v('admin_email')}" required placeholder="admin@sekolah.sch.id"></div>
+          <div class="field"><label>Email Admin</label><input type="email" name="admin_email" value="${v('admin_email')}" required placeholder="admin@sekolah.sch.id" data-register-email>
+            <div class="hint" data-email-warning hidden></div></div>
         </div>
-        <div class="row2">
-          <div class="field"><label>Password Admin</label><input type="password" name="admin_password" required minlength="6" placeholder="minimal 6 karakter"></div>
-          <div class="field"><label>Ulangi Password</label><input type="password" name="admin_password2" required minlength="6" placeholder="ulangi password"></div>
+        <div class="field"><label>Password Admin</label>
+          <div class="password-control"><input type="password" name="admin_password" id="registerPassword" required minlength="8"
+            pattern="(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,}" title="Minimal 8 karakter, dengan huruf besar, angka, dan simbol."
+            placeholder="Minimal 8 karakter" autocomplete="new-password" data-register-password>
+            <button type="button" class="password-eye" data-password-toggle aria-label="Lihat kata sandi" aria-pressed="false">${ui.icon('eye')}</button></div>
+          <ul class="password-rules" aria-live="polite">
+            <li data-password-rule="length"><span>${ui.icon('check')}</span>Minimal 8 karakter</li>
+            <li data-password-rule="upper"><span>${ui.icon('check')}</span>Memiliki huruf besar</li>
+            <li data-password-rule="number"><span>${ui.icon('check')}</span>Memiliki angka</li>
+            <li data-password-rule="symbol"><span>${ui.icon('check')}</span>Memiliki simbol</li>
+          </ul>
         </div>
         <div class="field"><label>Nomor WhatsApp / Telepon${otpCfg.aktif ? ' <span style="color:var(--red)">*</span>' : ''}</label>
           <div class="otp-row">
-            <input type="text" name="telp" id="fDaftarTelp" value="${v('telp')}" ${otpCfg.aktif ? 'required' : ''}
-              inputmode="tel" autocomplete="tel" placeholder="08xxxxxxxxxx">
+            <input type="text" name="telp" id="fDaftarTelp" value="${v('telp') || '+62'}" ${otpCfg.aktif ? 'required' : ''}
+              inputmode="numeric" autocomplete="tel" maxlength="18" pattern="\\+62[0-9]{7,15}" placeholder="+628xxxxxxxxxx">
             ${otpCfg.aktif ? `<button type="button" class="btn" id="btnOtpKirim" data-otp-kirim>${ui.icon('send')}Kirim Kode OTP</button>` : ''}
           </div>
-          <div class="hint">${otpCfg.aktif
-        ? `Nomor ini akan diverifikasi dengan <b>kode OTP 4 digit</b> yang dikirim lewat WhatsApp — sekaligus dipakai untuk informasi tagihan perpanjangan aplikasi.`
-        : 'Dipakai untuk informasi tagihan perpanjangan aplikasi.'}</div>
         </div>
-        ${otpCfg.aktif ? `<div class="otp-box${otpVerified ? ' verified' : ''}" id="otpBox" data-otp-box>
+        ${otpCfg.aktif ? `<div class="otp-box${otpVerified ? ' verified' : ''}" id="otpBox" data-otp-box ${otpVerified ? '' : 'hidden'}>
           <div class="otp-head">${ui.icon('shield')}<div><b>Verifikasi Nomor WhatsApp</b>
             <div class="small muted">Masukkan <b>4 digit kode OTP</b> yang dikirim ke WhatsApp Anda sebelum mendaftar.</div></div></div>
           <div class="otp-digits">
@@ -217,18 +237,11 @@ ${ui.themeCss(tema)}
         : `Kode berlaku ${otpCfg.menit} menit.`}</div>
           <input type="hidden" name="otp_token" id="otpToken" value="${lib.esc(otpToken)}">
         </div>` : `<input type="hidden" name="otp_token" value="">`}
-        <div class="field"><label>Jenjang Pendidikan</label>
-          <select name="jenjang">
-            ${Object.entries(dbm.JENJANG).map(([k, val]) => `<option value="${lib.esc(k)}" ${v('jenjang') === lib.esc(k) ? 'selected' : ''}>${lib.esc(val.label)}${val.preset.length ? ' — tingkat ' + val.preset.join(', ') : ''}</option>`).join('')}
-          </select>
-          <div class="hint">Preset tingkat kelas otomatis mengikuti jenjang ini.</div></div>
         <hr class="sep">
-        ${trialPkg
-        ? `<div class="alert info">${ui.icon('info')}<div>Mulai dengan uji coba gratis selama <b>${trialHari} hari</b>. Anda dapat memilih paket setelah masuk ke aplikasi.</div></div>`
-        : `<div class="alert warn">${ui.icon('alert')}<div>Pendaftaran uji coba sedang belum tersedia. Silakan hubungi pengelola layanan.</div></div>`}
+        ${!trialPkg ? `<div class="alert warn">${ui.icon('alert')}<div>Pendaftaran sedang belum tersedia. Silakan hubungi pengelola layanan.</div></div>` : ''}
         ${captchaHtml}
         <button class="btn btn-primary btn-block" type="submit" id="btnDaftar" data-otp-gate="${otpCfg.aktif && !otpVerified ? '1' : '0'}"
-          ${!trialPkg || (otpCfg.aktif && !otpVerified) ? 'disabled' : ''}>${trialPkg ? `Coba Gratis ${trialHari} Hari` : 'Uji Coba Belum Tersedia'}</button>
+          ${!trialPkg || (otpCfg.aktif && !otpVerified) ? 'disabled' : ''}>${trialPkg ? 'Daftar Saja' : 'Pendaftaran Belum Tersedia'}</button>
       </form>
       <p class="small muted" style="margin-top:16px;text-align:center">Sudah punya akun? <a href="${base}/login" style="color:var(--o-700);font-weight:700">Masuk</a></p>
       <script>
@@ -280,8 +293,9 @@ ${ui.themeCss(tema)}
           });
         });
         if (sendBtn) sendBtn.addEventListener('click', function () {
+          if (box) box.hidden = false;
           var nomor = (telp.value || '').trim();
-          if (!nomor) { say('Isi nomor WhatsApp terlebih dahulu.', 'err'); telp.focus(); return; }
+          if (!/^\\+62\\d{7,15}$/.test(nomor)) { say('Masukkan nomor WhatsApp dengan awalan +62 dan angka yang valid.', 'err'); telp.focus(); return; }
           sendBtn.disabled = true;
           say('Mengirim kode OTP…', '');
           fetch(OTP_BASE + '/register/otp/kirim', {
@@ -335,6 +349,52 @@ ${ui.themeCss(tema)}
         });
         syncGate();
       })();` : ''}
+      (function () {
+        var telp = document.getElementById('fDaftarTelp');
+        function normalizePhone() {
+          if (!telp) return;
+          var digits = (telp.value || '').replace(/\\D/g, '');
+          if (digits.slice(0, 3) === '620') digits = '62' + digits.slice(3);
+          else if (digits.charAt(0) === '0') digits = '62' + digits.slice(1);
+          else if (digits.charAt(0) === '8') digits = '62' + digits;
+          else if (digits.slice(0, 2) !== '62') digits = '62' + digits;
+          telp.value = '+' + digits.slice(0, 17);
+        }
+        if (telp) {
+          telp.addEventListener('input', normalizePhone);
+          normalizePhone();
+        }
+        var pw = document.querySelector('[data-register-password]');
+        if (pw) {
+          var rules = {
+            length: function (v) { return v.length >= 8; },
+            upper: function (v) { return /[A-Z]/.test(v); },
+            number: function (v) { return /[0-9]/.test(v); },
+            symbol: function (v) { return /[^A-Za-z0-9]/.test(v); }
+          };
+          function syncPasswordRules() {
+            Object.keys(rules).forEach(function (key) {
+              var row = document.querySelector('[data-password-rule="' + key + '"]');
+              if (row) row.classList.toggle('met', rules[key](pw.value));
+            });
+          }
+          pw.addEventListener('input', syncPasswordRules);
+          syncPasswordRules();
+        }
+        var email = document.querySelector('[data-register-email]');
+        var emailWarning = document.querySelector('[data-email-warning]');
+        if (email && emailWarning) {
+          function syncEmailWarning() {
+            var invalid = !!email.value && !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email.value);
+            emailWarning.hidden = !invalid;
+            emailWarning.textContent = invalid ? 'Email belum lengkap. Gunakan format nama@domain.tld.' : '';
+            email.setCustomValidity(invalid ? 'Lengkapi email dengan format nama@domain.tld.' : '');
+          }
+          email.addEventListener('input', syncEmailWarning);
+          email.addEventListener('blur', syncEmailWarning);
+          syncEmailWarning();
+        }
+      })();
       </script>`
     }));
   }
@@ -352,7 +412,14 @@ ${ui.themeCss(tema)}
     const cfg = (() => { try { return saas.daftarOtpCfg(); } catch (e) { return { aktif: false }; } })();
     if (!cfg.aktif) return res.json({ ok: false, err: 'Verifikasi OTP sedang dinonaktifkan oleh administrator.' }, 400);
     try {
-      const r = await saas.otpDaftarSend(String(b.telp || '').trim(), saas.clientIpOf(req));
+      const telp = String(b.telp || '').trim();
+      if (!/^\+?\d{8,17}$/.test(telp)) {
+        return res.json({ ok: false, err: 'Nomor WhatsApp tidak valid. Gunakan angka dengan awalan +62.' }, 400);
+      }
+      if (phoneAlreadyRegistered(telp)) {
+        return res.json({ ok: false, err: 'Nomor WhatsApp ini sudah dipakai untuk sekolah lain. Gunakan nomor yang belum terdaftar.' }, 409);
+      }
+      const r = await saas.otpDaftarSend(telp, saas.clientIpOf(req));
       if (!r.ok) return res.json({ ok: false, err: r.err || 'Gagal mengirim kode OTP.' }, 400);
       /* gateway aktif tetapi penolakan/gagal kirim & mode uji mati → jangan mengaku terkirim */
       if (!r.demo && (!r.kirim || !r.kirim.ok)) {
@@ -388,10 +455,12 @@ ${ui.themeCss(tema)}
     const b = req.body || {};
     const back = q => base + '/register?' + Object.keys(q).map(k => k + '=' + encodeURIComponent(q[k] || '')).join('&');
     const nama = String(b.nama || '').trim();
+    const alamat = String(b.alamat || '').trim();
+    const adminNama = String(b.admin_nama || '').trim();
     const email = String(b.admin_email || '').trim();
-    const p1 = String(b.admin_password || ''), p2 = String(b.admin_password2 || '');
+    const p1 = String(b.admin_password || '');
     const keep = {
-      nama, admin_email: email, admin_nama: b.admin_nama, alamat: b.alamat, kepala: b.kepala,
+      nama, admin_email: email, admin_nama: adminNama, alamat,
       telp: b.telp, jenjang: b.jenjang,
       // token OTP yang sudah terverifikasi disertakan agar pengguna tidak perlu verifikasi ulang
       otp: b.otp_token || ''
@@ -416,9 +485,16 @@ ${ui.themeCss(tema)}
     // ---- 3) validasi isian ----
     const fail = msg => { saas.regLog(ip, email, 'gagal'); return res.redirect(back(Object.assign({}, keep, { err: msg }))); };
     if (!nama) return fail('Nama sekolah wajib diisi.');
+    if (!alamat) return fail('Alamat sekolah wajib diisi.');
+    if (!adminNama) return fail('Nama admin wajib diisi.');
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail('Email admin tidak valid.');
-    if (p1.length < 6) return fail('Password minimal 6 karakter.');
-    if (p1 !== p2) return fail('Konfirmasi password tidak sama.');
+    if (String(b.telp || '').trim() && (!/^\+?\d{8,17}$/.test(String(b.telp).trim()) || !lib.normPhone(b.telp))) {
+      return fail('Nomor WhatsApp hanya boleh berisi angka dan harus valid.');
+    }
+    if (phoneAlreadyRegistered(b.telp)) return fail('Nomor WhatsApp ini sudah dipakai untuk sekolah lain. Gunakan nomor yang belum terdaftar.');
+    if (p1.length < 8 || !/[A-Z]/.test(p1) || !/[0-9]/.test(p1) || !/[^A-Za-z0-9]/.test(p1)) {
+      return fail('Password minimal 8 karakter dan wajib memuat huruf besar, angka, serta simbol.');
+    }
     const jenjang = dbm.JENJANG[String(b.jenjang || '')] ? String(b.jenjang) : '';
 
     /* ---- verifikasi nomor WhatsApp (OTP 4 digit) WAJIB sebelum submit ---- */
@@ -435,6 +511,7 @@ ${ui.themeCss(tema)}
     const trialHari = saas.packageTrialDays(pkgSel);
 
     // ---- 4) batas per jam (setelah validasi dasar) ----
+    if (phoneAlreadyRegistered(b.telp)) return fail('Nomor WhatsApp ini sudah dipakai untuk sekolah lain. Gunakan nomor yang belum terdaftar.');
     const hit = saas.regHit(ip, email, 'sukses');
     if (hit.blocked) {
       return res.redirect(back(Object.assign({}, keep, {
@@ -445,9 +522,9 @@ ${ui.themeCss(tema)}
     try {
       const tenant = saas.createTenant({
         nama, admin_email: email, admin_password: p1,
-        admin_nama: String(b.admin_nama || 'Administrator Sekolah').trim(),
-        alamat: String(b.alamat || ''), kepala: String(b.kepala || ''),
-        contact_telp: String(b.telp || ''), jenjang,
+        admin_nama: adminNama,
+        alamat, kepala: '',
+        contact_telp: lib.normPhone(b.telp) || '', jenjang,
         paket: pkgSel.kode, days: trialHari, trial: true
       });
       /* ================================================================

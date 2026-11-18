@@ -113,20 +113,20 @@ const ck = sc => String(sc || '').split(';')[0];
   r = await req('GET', '/register');
   ok('judul tab default memakai branding SIMKOLA', /<title>SIMKOLA<\/title>/.test(r.text));
   ok('pilihan paket tidak ditampilkan', !/class="pk-pick|class="pk-grid|name="paket"/.test(r.text));
-  ok('hanya tombol coba gratis 7 hari', /id="btnDaftar"[^>]*>Coba Gratis 7 Hari<\/button>/.test(r.text)
-    && !/id="btnWa"/.test(r.text));
+  ok('tombol daftar tidak memuat keterangan masa uji coba', /id="btnDaftar"[^>]*>Daftar Saja<\/button>/.test(r.text)
+    && !/uji coba|Coba Gratis|id="btnWa"/i.test(r.text));
 
   r = await req('POST', '/super-admin/branding', { saas_nama: 'SIMKEU', trial_hari: '14', captcha_provider: 'off', reg_limit_per_hour: '50', reg_block_hours: '24' }, { cookie: cSa });
   ok('simpan branding & trial 14 hari', r.status === 303 && /ok=/.test(r.loc));
   r = await req('GET', '/register');
   ok('judul tab mengikuti nama branding yang disimpan', /<title>SIMKEU<\/title>/.test(r.text));
-  ok('label tombol mengikuti masa trial 14 hari', /id="btnDaftar"[^>]*>Coba Gratis 14 Hari<\/button>/.test(r.text));
+  ok('label tombol tetap Daftar Saja setelah trial diubah', /id="btnDaftar"[^>]*>Daftar Saja<\/button>/.test(r.text));
   await req('POST', '/super-admin/branding', { trial_hari: '7' }, { cookie: cSa });
 
   // nilai paket berbayar yang dikirim manual tidak boleh mengubah paket uji coba
   const regBase = {
     nama: 'SMA Pilihan Diabaikan Uji', admin_nama: 'Admin Uji', admin_email: 'admin@sma-bayar.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SMA/MA', telp: '081200002501'
+    admin_password: 'Rahasia123!', jenjang: 'SMA/MA', alamat: 'Jl. Pilihan', telp: '081200002501'
   };
   const otpBerbayar = await otpDaftar(base, regBase.telp);
   r = await req('POST', '/register', Object.assign({}, regBase, { paket: 'standard', otp_token: otpBerbayar }));

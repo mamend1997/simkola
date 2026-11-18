@@ -40,7 +40,7 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
   await page.fill('input[name=kode]', 'SK01');
   await page.fill('input[name=email]', 'admin@sekolah.sch.id');
   await page.fill('input[name=password]', 'admin123');
-  await Promise.all([page.waitForNavigation(), page.click('form button')]);
+  await Promise.all([page.waitForNavigation(), page.click('form button[type=submit]')]);
   await page.waitForTimeout(400);
 
   /* ---------- 1. form & pratinjau ---------- */

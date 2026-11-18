@@ -65,11 +65,11 @@ async function req(method, url, body, opt = {}) {
   /* ============ 1. DAFTAR → LANGSUNG DASHBOARD ============ */
   const SEKOLAH = 'SMK Negeri 30 Uji';
   const EMAIL = 'bendahara@smk30.sch.id';
-  const PASS = 'rahasiaUji30';
+  const PASS = 'RahasiaUji30!';
   const otp1 = await otpDaftar(base, '081200000030');
   let r = await req('POST', '/register', {
     nama: SEKOLAH, admin_nama: 'Ibu Bendahara', admin_email: EMAIL,
-    admin_password: PASS, admin_password2: PASS, jenjang: 'SMK',
+    admin_password: PASS, jenjang: 'SMK',
     alamat: 'Jl. Uji No. 30', telp: '081200000030', otp_token: otp1
   }, { who: 'baru' });
   ok('daftar berhasil & redirect', r.status === 303 && !/err=/.test(r.loc), dec(r.loc));
@@ -78,6 +78,8 @@ async function req(method, url, body, opt = {}) {
 
   const tenantBaru = ctl.prepare('SELECT * FROM tenants WHERE nama=?').get(SEKOLAH);
   ok('tenant baru dibuat', !!tenantBaru, String(tenantBaru && tenantBaru.id));
+  r = await req('POST', '/register/otp/kirim', { telp: '081200000030' }, { who: 'duplikat' });
+  ok('nomor WA terdaftar ditolak sebelum OTP dikirim', r.status === 409 && /sudah dipakai/.test(r.text), r.status + ' ' + r.text);
   const KODE = tenantBaru ? tenantBaru.school_code : '';
   ok('kode sekolah 4 karakter alfanumerik', /^[A-Z0-9]{4}$/.test(KODE), KODE);
   const sesi = ctl.prepare('SELECT * FROM sessions WHERE tenant_id=? ORDER BY rowid DESC LIMIT 1').get(tenantBaru.id);
@@ -93,8 +95,8 @@ async function req(method, url, body, opt = {}) {
   const uname = (r.text.match(/data-cred="user">([^<]*)</) || [])[1] || '';
   ok('username tampil di kartu', !!uname && uname.length > 0, uname);
   ok('username = email atau bagian depannya', uname === EMAIL || uname === EMAIL.split('@')[0], uname);
-  ok('password tampil (tersamar) dengan tombol Lihat', /data-pw="rahasiaUji30"/.test(r.text) && /data-pw-toggle/.test(r.text));
-  ok('password TERNYATA tidak dirender polos di HTML', !/>rahasiaUji30</.test(r.text));
+  ok('password tampil (tersamar) dengan tombol Lihat', /data-pw="RahasiaUji30!"/.test(r.text) && /data-pw-toggle/.test(r.text));
+  ok('password TERNYATA tidak dirender polos di HTML', !/>RahasiaUji30!</.test(r.text));
   ok('ada tombol salin kode / username / password', (r.text.match(/data-copy=/g) || []).length >= 3);
   ok('ada tombol "Mengerti, lanjut ke dashboard"', /data-close-welcome/.test(r.text));
   ok('peringatan password hanya sekali', /Password hanya ditampilkan sekali/.test(r.text));
@@ -157,7 +159,7 @@ async function req(method, url, body, opt = {}) {
   const otp2 = await otpDaftar(base, '081200000031');
   const r2 = await req('POST', '/register', {
     nama: 'SMA Dua Uji', admin_nama: 'Pak Dua', admin_email: 'pakdua@sma2.sch.id',
-    admin_password: 'rahasiaDua', admin_password2: 'rahasiaDua', jenjang: 'SMA',
+    admin_password: 'RahasiaDua1!', jenjang: 'SMA', alamat: 'Jl. Uji Dua',
     telp: '081200000031', otp_token: otp2
   }, { who: 'dua' });
   const tenant2 = ctl.prepare('SELECT * FROM tenants WHERE nama=?').get('SMA Dua Uji');
@@ -177,6 +179,11 @@ async function req(method, url, body, opt = {}) {
   ok('validasi gagal → kembali ke form register', bad.status === 303 && /\/register\?/.test(bad.loc) && /err=/.test(bad.loc), dec(bad.loc).slice(0, 120));
   ok('pendaftaran gagal tidak membuat sesi login', after === before, `${before} → ${after}`);
   ok('pendaftaran gagal tidak membuat tenant', !ctl.prepare('SELECT id FROM tenants WHERE nama=?').get('Sekolah Gagal'));
+  const weak = await req('POST', '/register', {
+    nama: 'Sekolah Sandi Lemah', alamat: 'Jl. Uji', admin_nama: 'Admin',
+    admin_email: 'lemah@sd.sch.id', admin_password: 'password1'
+  }, { who: 'lemah' });
+  ok('password tanpa huruf besar dan simbol ditolak server', /Password%20minimal|Password\+minimal/.test(weak.loc), dec(weak.loc));
 
   /* ============ ringkasan ============ */
   try { ctl.close(); } catch (e) { }

@@ -39,21 +39,55 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
   page.on('pageerror', e => errors.push(String(e.message)));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
 
+  await page.goto(base + '/login');
+  ok('login memiliki tombol mata dan tautan daftar berwarna',
+    await page.locator('[data-password-toggle]').count() === 1
+      && await page.locator('a[href$="/register"].btn-primary').count() === 1);
+  await page.locator('[data-password-toggle]').click();
+  ok('ikon mata di login mengubah visibilitas password',
+    await page.locator('input[name=password]').getAttribute('type') === 'text');
+
   /* ---------- 1. daftar dari halaman publik ---------- */
   await page.goto(base + '/register');
   await page.waitForTimeout(300);
   ok('form pendaftaran tampil', (await page.locator('#btnDaftar').count()) === 1);
+  ok('field kepala sekolah dan konfirmasi password dihapus',
+    await page.locator('input[name=kepala], input[name=admin_password2]').count() === 0);
+  ok('alamat sekolah diwajibkan', await page.locator('input[name=alamat]').getAttribute('required') !== null);
+  ok('email memakai validasi email', await page.locator('input[name=admin_email]').getAttribute('type') === 'email');
+  ok('jenjang berada setelah nama sekolah dan sebelum alamat', await page.evaluate(() => {
+    const form = document.querySelector('form[action$="/register"]');
+    const names = ['input[name=nama]', 'select[name=jenjang]', 'input[name=alamat]']
+      .map(s => Array.from(form.querySelectorAll('input,select')).indexOf(form.querySelector(s)));
+    return names[0] >= 0 && names[0] < names[1] && names[1] < names[2];
+  }));
+  ok('nomor WA diawali +62 dan hanya menerima angka', (await page.locator('#fDaftarTelp').inputValue()) === '+62'
+    && await page.locator('#fDaftarTelp').getAttribute('inputmode') === 'numeric');
+  ok('tombol daftar menggantikan CTA uji coba', /Daftar Saja/.test(await page.locator('#btnDaftar').innerText())
+    && !/uji coba|Coba Gratis/i.test(await page.locator('main').innerText()));
   await page.fill('input[name=nama]', 'SMK Tampilan Uji');
+  await page.fill('input[name=alamat]', 'Jl. Uji Tampilan');
   await page.fill('input[name=admin_nama]', 'Ibu Tampilan');
+  await page.fill('input[name=admin_email]', 'belum-lengkap');
+  ok('email belum lengkap memunculkan peringatan', await page.locator('[data-email-warning]').isVisible());
   await page.fill('input[name=admin_email]', 'tampilan@smk.sch.id');
-  await page.fill('input[name=admin_password]', 'rahasiaTampil1');
-  await page.fill('input[name=admin_password2]', 'rahasiaTampil1');
+  await page.fill('input[name=admin_password]', 'RahasiaTampil1!');
+  ok('ceklist syarat password tercentang otomatis', await page.locator('[data-password-rule].met').count() === 4);
+  await page.locator('[data-password-toggle]').click();
+  ok('tombol mata menampilkan password pendaftaran', await page.locator('#registerPassword').getAttribute('type') === 'text');
+  await page.locator('[data-password-toggle]').click();
+  ok('tombol mata menyembunyikan password pendaftaran', await page.locator('#registerPassword').getAttribute('type') === 'password');
 
   /* ---------- 1b. VERIFIKASI OTP NOMOR WHATSAPP (4 digit) ---------- */
-  ok('blok verifikasi OTP tampil', (await page.locator('[data-otp-box]').count()) === 1);
+  ok('blok OTP belum tampil sebelum tombol kirim ditekan',
+    (await page.locator('[data-otp-box]').count()) === 1 && !(await page.locator('[data-otp-box]').isVisible()));
   ok('tombol daftar terkunci sebelum verifikasi', await page.locator('#btnDaftar').isDisabled());
+  await page.fill('#fDaftarTelp', 'abc');
+  ok('huruf dibuang dari nomor WhatsApp', (await page.locator('#fDaftarTelp').inputValue()) === '+62');
   await page.fill('#fDaftarTelp', '081200006661');
+  ok('nomor WA dinormalisasi ke format +62 angka', (await page.locator('#fDaftarTelp').inputValue()) === '+6281200006661');
   await page.click('[data-otp-kirim]');
+  ok('field OTP muncul setelah tombol kirim ditekan', await page.locator('[data-otp-box]').isVisible());
   await page.waitForSelector('[data-otp-demo]', { timeout: 8000 });
   const kodeOtp = (await page.locator('[data-otp-demo]').getAttribute('data-otp-demo')).trim();
   ok('kode OTP 4 digit tersedia (mode uji gateway)', /^\d{4}$/.test(kodeOtp), kodeOtp);
@@ -90,7 +124,7 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
   /* tombol Lihat password */
   await page.click('[data-pw-toggle]');
   await page.waitForTimeout(200);
-  ok('tombol "Lihat" menampilkan password asli', (await pwdCell.innerText()) === 'rahasiaTampil1', await pwdCell.innerText());
+  ok('tombol "Lihat" menampilkan password asli', (await pwdCell.innerText()) === 'RahasiaTampil1!', await pwdCell.innerText());
   await page.click('[data-pw-toggle]');
   await page.waitForTimeout(200);
   ok('tombol dapat menyembunyikan password lagi', (await pwdCell.innerText()).startsWith('•'));
@@ -129,8 +163,12 @@ function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra });
   await page.waitForTimeout(300);
   await page.fill('input[name=kode]', kode);
   await page.fill('input[name=email]', user);
-  await page.fill('input[name=password]', 'rahasiaTampil1');
-  await Promise.all([page.waitForNavigation(), page.click('form button')]);
+  await page.fill('input[name=password]', 'RahasiaTampil1!');
+  await page.locator('[data-password-toggle]').click();
+  ok('ikon mata di login memperlihatkan password', await page.locator('input[name=password]').getAttribute('type') === 'text');
+  await page.locator('[data-password-toggle]').click();
+  ok('ikon mata di login menyembunyikan password', await page.locator('input[name=password]').getAttribute('type') === 'password');
+  await Promise.all([page.waitForNavigation(), page.click('form button[type=submit]')]);
   await page.waitForTimeout(700);
   ok('login ulang dengan kredensial hasil daftar berhasil', /Ringkasan Keuangan/.test(await page.locator('main.content').innerText()));
   ok('kartu kredensial tidak muncul pada login biasa', (await page.locator('#welcomeKredensial').count()) === 0);

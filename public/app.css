@@ -194,6 +194,18 @@ textarea{min-height:84px; resize:vertical}
 input:focus,select:focus,textarea:focus{outline:none; border-color:var(--o-400); box-shadow:0 0 0 4px rgba(249,115,22,.13)}
 input[readonly]{background:#FAF6F2; color:var(--ink-2)}
 select{appearance:none; background-image:url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%238A7A70' stroke-width='2'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; padding-right:32px}
+.password-control{position:relative}
+.password-control input{padding-right:46px}
+.password-eye{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:9px;background:transparent;color:var(--muted);cursor:pointer}
+.password-eye:hover{background:var(--o-50);color:var(--o-700)}
+.password-eye svg{width:18px;height:18px}
+.password-rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 12px;list-style:none;padding:0;margin:8px 0 0;font-size:11.5px;color:var(--muted)}
+.password-rules li{display:flex;align-items:center;gap:5px}
+.password-rules li span{display:grid;place-items:center;width:15px;height:15px;border:1px solid var(--line-2);border-radius:50%;color:transparent}
+.password-rules li svg{width:10px;height:10px}
+.password-rules li.met{color:var(--green);font-weight:650}
+.password-rules li.met span{background:var(--green);border-color:var(--green);color:#fff}
+[data-email-warning]:not([hidden]){color:var(--red)}
 .row2{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px}
 .row3{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px}
 .check{display:flex; align-items:center; gap:9px; font-size:13px; font-weight:500; cursor:pointer}

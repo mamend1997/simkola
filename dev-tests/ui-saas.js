@@ -21,7 +21,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   const otpUi = await otpDaftar(base, '081200008881');
   await fetch(base + '/register', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ nama: 'SMP Negeri 2 Cikoneng', alamat: 'Jl. Melati 5', kepala: 'Dra. Ani', admin_nama: 'Bendahara', admin_email: 'admin@smpn2.sch.id', admin_password: 'rahasia123', admin_password2: 'rahasia123', telp: '081200008881', paket: 'basic', otp_token: otpUi }).toString(),
+    body: new URLSearchParams({ nama: 'SMP Negeri 2 Cikoneng', alamat: 'Jl. Melati 5', admin_nama: 'Bendahara', admin_email: 'admin@smpn2.sch.id', admin_password: 'Rahasia123!', telp: '081200008881', paket: 'basic', otp_token: otpUi }).toString(),
     redirect: 'manual'
   });
 
@@ -33,7 +33,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   await page.goto(base + '/super-admin/login');
   await page.fill('input[name=email]', 'super@simkeu.id');
   await page.fill('input[name=password]', 'SuperAdmin2026!');
-  await page.click('form button');
+  await page.click('form button[type=submit]');
   await page.waitForTimeout(600);
   ok('login super admin lewat UI', page.url().endsWith('/super-admin'), page.url());
   ok('KPI dashboard tampil', await page.locator('.sa-kpi').count() >= 4);
@@ -97,8 +97,8 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   const t2code = (require('better-sqlite3')(SDB, { readonly: true }).prepare("SELECT school_code FROM tenants WHERE nama LIKE 'SMP Negeri 2%'").get() || {}).school_code;
   await p2.fill('input[name=kode]', t2code);
   await p2.fill('input[name=email]', 'admin@smpn2.sch.id');
-  await p2.fill('input[name=password]', 'rahasia123');
-  await p2.click('form button');
+  await p2.fill('input[name=password]', 'Rahasia123!');
+  await p2.click('form button[type=submit]');
   await p2.waitForTimeout(700);
   ok('login sekolah lewat UI', p2.url() === base + '/', p2.url());
   ok('dashboard memuat kartu Info Layanan', await p2.locator('#infoLayanan').count() === 1);
@@ -138,7 +138,7 @@ const ok = (n, c, x = '') => { out.push(c); console.log((c ? 'ok   ' : 'FAIL ') 
   await p2.fill('input[name=kode]', 'SK01');
   await p2.fill('input[name=email]', 'admin@sekolah.sch.id');
   await p2.fill('input[name=password]', 'admin123');
-  await p2.click('form button');
+  await p2.click('form button[type=submit]');
   await p2.waitForTimeout(700);
   await p2.goto(base + '/pengaturan-backup');
   await p2.waitForTimeout(250);

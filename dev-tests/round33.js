@@ -86,8 +86,8 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
   const EMAIL = 'admin@onboarding33.sch.id';
   const otpBaru = await otpDaftar(base, '081200003333');
   r = await req('POST', '/register', {
-    nama: NAMA, admin_nama: 'Admin Baru', admin_email: EMAIL, admin_password: 'rahasia123',
-    admin_password2: 'rahasia123', jenjang: 'SD', alamat: 'Jl. Onboarding 33', telp: '081200003333',
+    nama: NAMA, admin_nama: 'Admin Baru', admin_email: EMAIL, admin_password: 'Rahasia123!',
+    jenjang: 'SD', alamat: 'Jl. Onboarding 33', telp: '081200003333',
     otp_token: otpBaru
   }, { who: 'baru' });
   ok('registrasi sekolah baru berhasil', r.status === 303 && !/err=/.test(r.loc), dec(r.loc));

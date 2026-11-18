@@ -155,7 +155,7 @@ function startFakeSmtp() {
   r = await req('POST', '/register', {
     nama: 'SMP Negeri 2 Contoh', alamat: 'Jl. Melati 5', kepala: 'Dra. Ani',
     admin_nama: 'Bendahara SMPN 2', admin_email: 'admin@smpn2.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', telp: '081200009999', paket: 'basic',
+    admin_password: 'Rahasia123!', telp: '081200009999', paket: 'basic',
     otp_token: otpSaas
   });
   ok('registrasi sekolah baru redirect', r.status === 303, r.status);

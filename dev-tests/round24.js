@@ -129,7 +129,7 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
   /* ============ 5. REGISTRASI: kode acak, trial, paket default, jenjang ============ */
   const regBody = n => ({
     nama: 'SD Negeri Uji ' + n, admin_nama: 'Admin Uji', admin_email: 'admin' + n + '@sduji.sch.id',
-    admin_password: 'rahasia123', admin_password2: 'rahasia123', jenjang: 'SD/MI', paket: 'basic', telp: '0812345670' + n
+    admin_password: 'Rahasia123!', jenjang: 'SD/MI', paket: 'basic', alamat: 'Jl. Uji ' + n, telp: '0812345670' + n
   });
   /* setiap pendaftaran wajib lolos verifikasi OTP nomor WhatsApp */
   const otp1 = await otpDaftar(base, '08123456701');
