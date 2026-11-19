@@ -1106,10 +1106,23 @@ async function bayarGateway(tenantId, { durasi, paket, pengirim, catatan, oleh, 
     { order_id: oid, amount: nominal, label: `Langganan ${d} hari — ${t.nama}`, customer: { nama: t.nama, email: t.email || '' } }
   );
   if (!charge.ok) {
+    const chargeError = (() => {
+      if (typeof charge.error === 'string') return charge.error;
+      if (charge.error && typeof charge.error === 'object') {
+        const direct = charge.error.message || charge.error.error_message || charge.error.error_description
+          || charge.error.detail || charge.error.error;
+        if (typeof direct === 'string' && String(direct).trim()) return String(direct).trim();
+        try {
+          const raw = JSON.stringify(charge.error);
+          if (raw && raw !== '{}') return raw;
+        } catch (e) { /* abaikan */ }
+      }
+      return 'tidak diketahui';
+    })();
     S.prepare("UPDATE saas_payments SET status='rejected', gateway_status='GAGAL', alasan=? WHERE id=?")
-      .run('Gagal membuat QRIS: ' + (charge.error || 'tidak diketahui'), id);
-    logSaas(null, 'BAYAR GATEWAY', 'pembayaran', `${t.nama} gagal membuat QRIS (${cfg.provider}): ${charge.error || '-'}`, tenantId);
-    throw new Error(charge.error || 'Gagal membuat QRIS pada payment gateway.');
+      .run('Gagal membuat QRIS: ' + chargeError, id);
+    logSaas(null, 'BAYAR GATEWAY', 'pembayaran', `${t.nama} gagal membuat QRIS (${cfg.provider}): ${chargeError}`, tenantId);
+    throw new Error(chargeError === 'tidak diketahui' ? 'Gagal membuat QRIS pada payment gateway.' : chargeError);
   }
   S.prepare('UPDATE saas_payments SET qr_string=?,qr_url=?,checkout_url=?,expires_at=?,gateway_status=? WHERE id=?')
     .run(clean(charge.qr_string), clean(charge.qr_url), clean(charge.checkout_url), clean(charge.expires_at), 'PENDING', id);

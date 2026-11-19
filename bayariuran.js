@@ -23,6 +23,22 @@ const paygw = require('./paygw');
 const lib = require('./lib');
 
 const clean = v => String(v === null || v === undefined ? '' : v).trim();
+function errorText(v) {
+  if (typeof v === 'string') return clean(v);
+  if (v && typeof v === 'object') {
+    const direct = v.message || v.error_message || v.error_description || v.detail || v.error;
+    if (typeof direct === 'string' && clean(direct)) return clean(direct);
+    if (direct && typeof direct === 'object') {
+      const nested = errorText(direct);
+      if (nested) return nested;
+    }
+    try {
+      const raw = JSON.stringify(v);
+      if (raw && raw !== '{}') return raw;
+    } catch (e) { /* abaikan */ }
+  }
+  return clean(v) || 'tidak diketahui';
+}
 
 /* ---------- skema (tenant lama yang dibuat sebelum fitur ini) ---------- */
 function ensureTables(dbm) {
@@ -230,9 +246,11 @@ async function createGateway({ dbm, saas, tenant, siswa, items, total, taId, bas
     }
   );
   if (!charge.ok) {
+    const alasan = 'Gagal membuat QRIS: ' + errorText(charge.error);
     dbm.db.prepare("UPDATE iuran_checkout SET status='batal', alasan=? WHERE id=?")
-      .run('Gagal membuat QRIS: ' + (charge.error || 'tidak diketahui'), id);
-    throw new Error(charge.error || 'Gagal membuat QRIS pada payment gateway.');
+      .run(alasan, id);
+    throw new Error(errorText(charge.error) === 'tidak diketahui'
+      ? 'Gagal membuat QRIS pada payment gateway.' : errorText(charge.error));
   }
   dbm.db.prepare('UPDATE iuran_checkout SET qr_string=?,qr_url=?,checkout_url=?,expires_at=? WHERE id=?')
     .run(clean(charge.qr_string), clean(charge.qr_url), clean(charge.checkout_url), clean(charge.expires_at), id);

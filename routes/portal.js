@@ -375,13 +375,15 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     try { items = JSON.parse(row.items || '[]'); } catch (e) { }
     const qr = row.qr_string || '';
     const qrImg = qr ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(qr)}` : '';
+    const alasan = String(row.alasan || '').trim()
+      .replace(/\[object Object\]/gi, 'Respons payment gateway tidak dapat dibaca.');
     return `<div class="portal-card">
       <h3>Status Pembayaran</h3>
       <div class="alert ${row.status === 'lunas' ? 'ok' : row.status === 'ditolak' || row.status === 'batal' ? 'err' : 'warn'}">
         ${ui.icon(row.status === 'lunas' ? 'check' : 'info')}
         <div><b>${esc(row.nama || '')}</b> · ${statusBadge(row.status)}
           <div class="small" style="margin-top:4px">Total ${esc(rupiah(row.total))} · ${row.metode === 'gateway' ? 'QRIS ' + esc(row.provider || '') : 'Transfer manual'} · ${esc(lib.stampShort(row.created_at))}</div>
-          ${row.alasan ? `<div class="small" style="margin-top:4px">Alasan: ${esc(row.alasan)}</div>` : ''}</div>
+          ${alasan ? `<div class="small" style="margin-top:4px">Alasan: ${esc(alasan)}</div>` : ''}</div>
       </div>
       ${ok ? `<div class="alert ok">${ui.icon('check')}<div>${esc(ok)}</div></div>` : ''}
       ${err ? `<div class="alert err">${ui.icon('alert')}<div>${esc(err)}</div></div>` : ''}

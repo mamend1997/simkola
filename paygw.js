@@ -37,6 +37,32 @@ const DEF = {
 
 const clean = v => String(v === null || v === undefined ? '' : v).trim();
 
+/** Ambil pesan error dari respons JSON yang mungkin berbentuk objek bersarang. */
+function responseError(j, fallback = '') {
+  if (!j) return fallback;
+  if (typeof j === 'string') return clean(j) || fallback;
+  if (j instanceof Error) return clean(j.message) || fallback;
+  if (typeof j !== 'object') return clean(j) || fallback;
+  const candidates = [
+    j.message, j.error_message, j.error_description, j.status_message,
+    j.detail, j.description, j.error,
+    j.data && (j.data.message || j.data.error_description || j.data.error),
+    j.meta && j.meta.message
+  ];
+  for (const v of candidates) {
+    if (typeof v === 'string' && clean(v)) return clean(v);
+    if (v && typeof v === 'object') {
+      const nested = responseError(v, '');
+      if (nested) return nested;
+    }
+  }
+  try {
+    const raw = JSON.stringify(j);
+    if (raw && raw !== '{}' && raw !== 'null') return fallback ? fallback + ' — ' + raw : raw;
+  } catch (e) { /* abaikan */ }
+  return fallback;
+}
+
 function orderNo(tenantId) {
   return `SK-${Number(tenantId) || 0}-${Date.now().toString(36).toUpperCase()}`;
 }
@@ -200,7 +226,7 @@ async function kaseraCreateTransaction(cfg, req = {}) {
     });
     const j = await r.json().catch(() => ({}));
     const p = kaseraPayload(j);
-    const pesan = clean(j.message || j.error_message || j.error || (j.data && j.data.message));
+    const pesan = responseError(j);
     if (!r.ok) {
       /* 404/405/501 = endpoint transactions belum aktif pada akun ini →
          masih boleh mencoba endpoint QRIS lama. Kode lain = ditolak tegas. */
@@ -219,7 +245,8 @@ async function kaseraCreateTransaction(cfg, req = {}) {
     }
     return { ok: true, api: 'transactions', http: Number(r.status), ...p, external_id, amount };
   } catch (e) {
-    return { ok: false, api: 'transactions', fallback: true, error: 'Gagal menghubungi Kasera: ' + e.message };
+    return { ok: false, api: 'transactions', fallback: true,
+      error: 'Gagal menghubungi Kasera: ' + responseError(e) };
   }
 }
 
@@ -238,13 +265,13 @@ async function kaseraCheckTransaction(cfg, order_id) {
       return {
         ok: false, api: 'transactions', http: Number(r.status),
         fallback: [404, 405, 501].includes(Number(r.status)),
-        error: clean(j.message || j.error_message) || `HTTP ${r.status}`, raw: j
+        error: responseError(j, `HTTP ${r.status}`), raw: j
       };
     }
     const p = kaseraPayload(j);
     return { ok: true, api: 'transactions', paid: !!p.paid, status: p.status || 'PENDING', raw: j };
   } catch (e) {
-    return { ok: false, api: 'transactions', fallback: true, error: e.message };
+    return { ok: false, api: 'transactions', fallback: true, error: responseError(e) };
   }
 }
 
@@ -358,7 +385,7 @@ async function createCharge(cfg, { order_id, amount, label, customer }) {
         signal: AbortSignal.timeout(20000)
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.message || `Xendit menolak permintaan (HTTP ${r.status}).`);
+      if (!r.ok) throw new Error(responseError(j, `Xendit menolak permintaan (HTTP ${r.status}).`));
       return { ok: true, provider, order_id, qr_string: j.qr_string || '', expires_at: j.expires_at || expiresAt, raw: j };
     }
     if (provider === 'kasera') {
@@ -404,7 +431,7 @@ async function createCharge(cfg, { order_id, amount, label, customer }) {
       const j = await r.json().catch(() => ({}));
       const p = kaseraPayload(j);
       if (!r.ok || j.success === false || (p.status && ['FAILED', 'ERROR'].includes(p.status))) {
-        throw new Error(j.message || j.error_message || `Kasera menolak permintaan (HTTP ${r.status}).`);
+        throw new Error(responseError(j, `Kasera menolak permintaan (HTTP ${r.status}).`));
       }
       return {
         ok: true, provider, order_id, api: 'qris',
@@ -417,7 +444,8 @@ async function createCharge(cfg, { order_id, amount, label, customer }) {
     }
     throw new Error('Provider payment gateway tidak dikenal.');
   } catch (e) {
-    return { ok: false, provider, order_id, error: e.message };
+    const err = responseError(e, 'Gagal membuat pembayaran.');
+    return { ok: false, provider, order_id, error: err };
   }
 }
 
@@ -457,7 +485,7 @@ async function checkStatus(cfg, { order_id }) {
         signal: AbortSignal.timeout(15000)
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) return { ok: false, paid: false, status: 'ERROR', error: j.message || ('HTTP ' + r.status) };
+      if (!r.ok) return { ok: false, paid: false, status: 'ERROR', error: responseError(j, 'HTTP ' + r.status) };
       return { ok: true, paid: String(j.status).toUpperCase() === 'COMPLETED', status: String(j.status || '').toUpperCase(), raw: j };
     }
     if (provider === 'kasera') {
@@ -475,12 +503,12 @@ async function checkStatus(cfg, { order_id }) {
       });
       const j = await r.json().catch(() => ({}));
       const p = kaseraPayload(j);
-      if (!r.ok) return { ok: false, paid: false, status: 'ERROR', error: j.message || ('HTTP ' + r.status) };
+      if (!r.ok) return { ok: false, paid: false, status: 'ERROR', error: responseError(j, 'HTTP ' + r.status) };
       return { ok: true, paid: !!p.paid, status: p.status || 'PENDING', api: 'qris', raw: j };
     }
     return { ok: false, paid: false, status: 'UNKNOWN' };
   } catch (e) {
-    return { ok: false, paid: false, status: 'ERROR', error: e.message };
+    return { ok: false, paid: false, status: 'ERROR', error: responseError(e, 'Gagal memeriksa status pembayaran.') };
   }
 }
 
@@ -565,6 +593,6 @@ function parseCallback(cfg, body = {}) {
 module.exports = {
   PROVIDERS, PROVIDER_KEYS, DEF, publicConfig, orderNo, createCharge, checkStatus, verifyCallback, parseCallback,
   kaseraBase, kaseraHeaders, kaseraPaid, kaseraCfg, kaseraSecrets, kaseraCreateTransaction,
-  kaseraCheckTransaction, kaseraSignature, kaseraVerifySignature, kaseraEvent, kaseraPayload, kaseraUsable,
+  kaseraCheckTransaction, kaseraSignature, kaseraVerifySignature, kaseraEvent, kaseraPayload, kaseraUsable, responseError,
   KASERA, KASERA_API_MODES, clean
 };
