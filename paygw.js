@@ -412,7 +412,13 @@ async function createCharge(cfg, { order_id, amount, label, customer }) {
       const j = await r.json().catch(() => ({}));
       const p = kaseraPayload(j);
       if (!r.ok || j.success === false || (p.status && ['FAILED', 'ERROR'].includes(p.status))) {
-        throw new Error(responseError(j, `Kasera menolak permintaan (HTTP ${r.status}).`));
+        const providerMsg = responseError(j, `Kasera menolak permintaan (HTTP ${r.status}).`);
+        if (Number(r.status) === 404) {
+          throw new Error(`Endpoint QRIS Kasera tidak ditemukan (HTTP 404): ${k.base}/v1/qris. `
+            + `Pastikan Base URL, mode Production, API Key, dan fitur QRIS Kasera untuk akun ini sudah aktif. `
+            + `Respons Kasera: ${providerMsg}`);
+        }
+        throw new Error(providerMsg);
       }
       return {
         ok: true, provider, order_id, api: 'qris',
