@@ -393,9 +393,9 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
       </tbody></table></div>
       ${row.status === 'menunggu' && row.metode === 'gateway' ? `
         <div class="qris-box mt-2">
-          ${qrImg ? `<img src="${esc(qrImg)}" alt="QRIS pembayaran" width="240" height="240" loading="lazy"
-            onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'qris-code',textContent:${JSON.stringify(qr)}}))">`
-        : '<div class="help">QRIS tidak tersedia — buka tautan pembayaran dari gateway.</div>'}
+          ${qr ? `<img src="${esc(qrImg)}" alt="QRIS pembayaran" width="240" height="240" loading="lazy"
+            onerror="this.style.display='none'">`
+        : '<div class="help">QR statis tidak dikembalikan gateway. Gunakan tautan halaman pembayaran.</div>'}
           <div style="flex:1;min-width:200px">
             <b>Pindai QRIS untuk membayar</b>
             <p class="muted small" style="margin:6px 0">Nominal sudah termasuk seluruh item yang Anda pilih. Setelah membayar, tekan <b>Cek Status Pembayaran</b>.</p>

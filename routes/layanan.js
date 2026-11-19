@@ -11,6 +11,7 @@
 
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flashUrl, saas }) => {
   const { esc, rupiah, tglID, nowStamp } = lib;
+  const QRCode = require('qrcode');
 
   const durasiLabel = d => (Number(d) >= 365 ? '12 Bulan (+365 hari)' : '1 Bulan (+30 hari)');
   const pkgName = kode => { const p = saas.packageByKode(kode); return p ? p.nama : (kode || '-'); };
@@ -265,7 +266,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
   });
 
   /* ---------------- QRIS OTOMATIS: halaman pembayaran ---------------- */
-  get('/perpanjang/qris', (req, res) => {
+  get('/perpanjang/qris', async (req, res) => {
     guard(req, res, 'dashboard', 'view');
     const c = ctx(req);
     const t = req.tenant;
@@ -277,6 +278,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
     const pay = saas.payConfig('');
     const qrImg = String(py.qr_url || '');
     const qrTxt = String(py.qr_string || '');
+    let qrData = '';
+    if (!qrImg && qrTxt) {
+      try { qrData = await QRCode.toDataURL(qrTxt, { width: 320, margin: 1, errorCorrectionLevel: 'M' }); } catch (e) { qrData = ''; }
+    }
     const approved = py.status === 'approved';
     const content = `<div class="split">
       <div class="card">
@@ -289,10 +294,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
         : `${py.checkout_url ? `<div class="alert info mb-2">${ui.icon('link')}<div><b>Halaman checkout ${esc(pay.provider_label)} tersedia.</b>
              Selesaikan pembayaran pada halaman tersebut — status akan terverifikasi otomatis lewat webhook.</div></div>
            <a class="btn btn-primary btn-block mb-2" href="${esc(py.checkout_url)}" target="_blank" rel="noopener">${ui.icon('link')}Buka Halaman Pembayaran</a>` : ''}
-           <div style="display:grid;place-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
-             ${qrImg ? `<img src="${esc(qrImg)}" alt="QRIS" style="max-width:100%;max-height:320px;object-fit:contain">`
-        : `<div class="mono" style="word-break:break-all;font-size:11px;padding:18px;text-align:center">${esc(qrTxt || 'QR tidak tersedia')}</div>`}
-           </div>
+           ${(qrImg || qrData) ? `<div style="display:grid;place-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px">
+             <img src="${esc(qrImg || qrData)}" alt="QRIS" style="max-width:100%;max-height:320px;object-fit:contain">
+           </div>` : `<div class="alert warn mt-2">${ui.icon('qris')}<div><b>QR statis tidak dikembalikan gateway.</b> Gunakan tombol <b>Buka Halaman Pembayaran</b> atau pilih metode QRIS/VA di halaman Kasera.</div></div>`}
            <div class="list mt-2">
              <div class="list-row"><div><div class="mt">Nominal</div><div class="nm">${rupiah(py.nominal)}</div></div></div>
              <div class="list-row"><div><div class="mt">Durasi</div><div class="nm">${esc(durasiLabel(py.durasi))}</div></div></div>
