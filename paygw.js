@@ -198,27 +198,8 @@ async function kaseraCreateTransaction(cfg, req = {}) {
   const body = {
     amount,                                  // integer rupiah utuh (tanpa desimal)
     external_id,                             // nomor pesanan
-    description: clean(req.description) || ('Pembayaran ' + external_id),
-    /* field pelengkap yang dipakai sebagian akun Kasera / dashboard lama */
-    currency: 'IDR',
-    reference_id: external_id,
-    order_id: external_id
+    description: clean(req.description) || ('Pembayaran ' + external_id)
   };
-  const customer = req.customer || null;
-  if (customer && (clean(customer.nama) || clean(customer.name) || clean(customer.email))) {
-    body.customer = {
-      name: clean(customer.nama || customer.name) || 'Pelanggan',
-      email: clean(customer.email),
-      phone: clean(customer.phone)
-    };
-  }
-  const webhookUrl = clean(req.webhook_url);
-  if (webhookUrl) body.webhook_url = webhookUrl;
-  if (clean(req.callback_url)) body.callback_url = clean(req.callback_url);
-  if (clean(req.return_url)) body.return_url = clean(req.return_url);
-  if (Number(cfg && (cfg.expire_menit || cfg.expiry_minutes))) {
-    body.expiry_minutes = Math.max(5, Number(cfg.expire_menit || cfg.expiry_minutes) || 60);
-  }
   try {
     const r = await fetch(`${k.base}/v1/transactions`, {
       method: 'POST', headers, body: JSON.stringify(body),
