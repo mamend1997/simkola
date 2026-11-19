@@ -376,6 +376,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const before = trxSnapshot(t);
     if (isHapus) {
       db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+      db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(t.id);
       logPerubahan(req.user, 'HAPUS', b, before, null, `alasan: ${alasan}`);
       return go(`Transaksi ${t.no_bukti || ''} dihapus. Saldo berjalan & total BKU dihitung ulang.`, 'ok');
     }
@@ -402,8 +403,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const perluApproval = jenis === 'pengeluaran' && nom > threshold && t.status !== 'posted';
     const status = perluApproval ? 'pending' : 'posted';
 
-    db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,no_bukti=?,status=? WHERE id=?`)
-      .run(bkuTujuan, tanggal, jenis, metode || 'tunai', coa_id || null, nom, uraian, nama_pihak || '', no_bukti || t.no_bukti, status, t.id);
+    const periodePenyesuaian = t.is_penyesuaian ? String(tanggal).slice(0, 7) : t.periode_penyesuaian;
+    if (t.is_penyesuaian &&
+        (Number(t.bku_id) !== Number(bkuTujuan) || String(t.periode_penyesuaian || t.tanggal).slice(0, 7) !== periodePenyesuaian)) {
+      db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(t.id);
+    }
+    db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,no_bukti=?,status=?,
+      periode_penyesuaian=? WHERE id=?`)
+      .run(bkuTujuan, tanggal, jenis, metode || 'tunai', coa_id || null, nom, uraian, nama_pihak || '', no_bukti || t.no_bukti, status, periodePenyesuaian, t.id);
 
     const after = trxSnapshot({ ...t, bku_id: bkuTujuan, tanggal, jenis, metode, nominal: nom, uraian, nama_pihak, coa_id, no_bukti: no_bukti || t.no_bukti });
     logPerubahan(req.user, 'EDIT', b, before, after, `alasan: ${alasan}`);

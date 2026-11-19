@@ -3,7 +3,7 @@
 process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* ============================================================================
    TES RONDE 33 — Onboarding & branding default, slug dinamis, slip honor massal,
-   reorganisasi menu iuran, tabel satu halaman (scrollable), cetak ledger aset,
+   reorganisasi menu iuran, tabel transaksi berpaginasi, cetak ledger aset,
    QRIS Super Admin, Legalitas (ToS/SLA), kop surat dinamis, field website.
 
    1. Registrasi sekolah baru → nama aplikasi & logo dari branding sistem,
@@ -14,7 +14,7 @@ process.env.TZ = process.env.TZ || 'Asia/Jakarta';
    5. Tautan bertoken slip honor langsung membuka slip tanpa kode OTP.
    6. Menu Beasiswa SPP pindah ke grup Iuran; Salin Periodik grup iuran.
    7. Antrean Posting BKU: ceklis + aksi masal (posting masal & Non-BKU).
-   8. Rekap transaksi & detail BKU & rincian bulanan = satu halaman scrollable;
+   8. Rekap transaksi berpaginasi; detail BKU & rincian bulanan memakai tabel scrollable;
       hapus masal transaksi; form edit transaksi = form transaksi.
    9. Ledger aset: cetak (print layout) & export Excel.
   10. QRIS Super Admin menerima WebP (hasil konversi klien) & menolak non-gambar.

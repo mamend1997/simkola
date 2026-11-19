@@ -120,19 +120,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (to) { where += ' AND t.tanggal<=?'; args.push(to); }
     if (kw) { where += ' AND (t.uraian LIKE ? OR t.no_bukti LIKE ? OR t.nama_pihak LIKE ?)'; args.push('%' + kw + '%', '%' + kw + '%', '%' + kw + '%'); }
 
-    /* SATU HALAMAN BERURUTAN DI DALAM SCROLLABLE BOX (tanpa pagination):
-       seluruh transaksi sesuai filter dirender berurutan dan digeser di dalam
-       kotak tabel. Modal approval/void dirender hanya saat diminta (?appr=/?void=). */
-    const totalRows = db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id${where}`).get(...args).c;
-    const perPage = 0;
-    const totalPages = 1;
-    const hal = 1;
-    // default: transaksi terbaru di paling atas
+    const totalRows = Number(db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id${where}`).get(...args).c || 0);
+    const perPage = 100;
+    const totalPages = Math.max(1, Math.ceil(totalRows / perPage));
+    const halRaw = Number.parseInt(req.query.get('hal') || '1', 10);
+    const hal = Math.max(1, Math.min(Number.isFinite(halRaw) ? halRaw : 1, totalPages));
+    const offset = (hal - 1) * perPage;
+    // Pencarian/filtering dilakukan di SQL sebelum paginasi agar seluruh hasil ikut dihitung.
     const sql = `SELECT t.*, b.nama bku_nama, b.status bku_status, co.kode coa_kode, co.nama coa_nama, u.nama pembuat, a.nama penyetuju
       FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa co ON co.id=t.coa_id
       LEFT JOIN users u ON u.id=t.created_by LEFT JOIN users a ON a.id=t.approved_by${where}
-      ORDER BY t.tanggal ${sort === 'asc' ? 'ASC' : 'DESC'}, t.id ${sort === 'asc' ? 'ASC' : 'DESC'}`;
-    const rows = db.prepare(sql).all(...args);
+      ORDER BY t.tanggal ${sort === 'asc' ? 'ASC' : 'DESC'}, t.id ${sort === 'asc' ? 'ASC' : 'DESC'}
+      LIMIT ? OFFSET ?`;
+    const rows = db.prepare(sql).all(...args, perPage, offset);
 
     // query filter aktif → dipakai untuk kembali ke posisi semula setelah edit inline
     const keepQs = new URLSearchParams();
@@ -142,9 +142,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (from) keepQs.set('from', from);
     if (to) keepQs.set('to', to);
     if (sort === 'asc') keepQs.set('sort', 'asc');
+    if (hal > 1) keepQs.set('hal', String(hal));
     const keepStr = keepQs.toString();
     const backPath = '/transaksi' + (keepStr ? '?' + keepStr : '');
     const withBack = (extra) => backPath + (keepStr ? '&' : '?') + extra;
+    const pagerQs = new URLSearchParams(keepQs);
+    pagerQs.delete('hal');
+    const transaksiPageHref = p => {
+      const qs = new URLSearchParams(pagerQs);
+      qs.set('hal', String(p));
+      return `${c.base}/transaksi?${qs.toString()}`;
+    };
+    const transaksiPager = `<div class="pager">
+      <span class="small muted">${totalRows ? `${offset + 1}–${Math.min(offset + rows.length, totalRows)}` : '0'} dari ${totalRows} transaksi · halaman ${hal}/${totalPages} · 100 per halaman</span>
+      ${hal > 1 ? `<a class="btn btn-sm" href="${transaksiPageHref(hal - 1)}">‹ Sebelumnya</a>` : ''}
+      ${hal < totalPages ? `<a class="btn btn-sm" href="${transaksiPageHref(hal + 1)}">Berikutnya ›</a>` : ''}
+    </div>`;
     const coaInline = db.prepare('SELECT * FROM coa ORDER BY kategori, kode').all();
     // cache kunci periode per (BKU, bulan) — hindari query berulang saat tabel panjang
     const lockCache = new Map();
@@ -270,8 +283,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     </div>
 
     <div class="card">
-      <div class="card-head"><div><h3>Rekap Transaksi Real-time</h3><div class="sub">Satu halaman berurutan di dalam kotak bergulir · edit inline lewat ikon pensil. Data terbaru tampil paling atas.</div></div>
-        <div class="toolbar"><span class="small muted">${rows.length} transaksi ditampilkan (satu halaman)</span></div></div>
+      <div class="card-head"><div><h3>Rekap Transaksi Real-time</h3><div class="sub">Maksimal 100 transaksi per halaman. Filter pencarian mencakup seluruh data, bukan hanya halaman yang sedang dibuka.</div></div>
+        <div class="toolbar"><span class="small muted">${rows.length} transaksi pada halaman ini</span></div></div>
       <form method="get" action="${c.base}/transaksi" class="flex flex-wrap filter-eq mb-2" style="gap:8px">
         <input name="q" value="${esc(kw)}" placeholder="Cari uraian / no. bukti / nama">
         <select name="bku"><option value="">Semua BKU</option>${bkuAll.map(b => `<option value="${b.id}" ${String(fBku) === String(b.id) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}</select>
@@ -287,6 +300,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <input type="date" name="to" value="${esc(to)}" title="Sampai tanggal">
         <button class="btn">${ui.icon('search')}Filter</button>
       </form>
+      ${transaksiPager}
       ${inlineTrx ? inlineFormHtml(inlineTrx) : ''}
       ${rows.length ? `<form id="fTrxMass" method="post" action="${c.base}/transaksi/hapus-masal">
         <input type="hidden" name="back" value="${esc(backPath)}">
@@ -309,11 +323,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const lockEdit = lockOf(t.bku_id, t.tanggal, 'edit');
       const lockInfo = lockOf(t.bku_id, t.tanggal);
       const perLock = lockEdit || lockInfo;
-      const bisaInline = c.can('transaksi', 'edit') && t.bku_status === 'aktif' && !t.is_penyesuaian;
+      const bisaInline = c.can('transaksi', 'edit') && t.bku_status === 'aktif';
       if (inlineId === t.id && bisaInline) return inlineRowHtml(t);
-      const bisaHapusRow = c.can('transaksi', 'delete') && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian;
+      const bisaHapusRow = c.can('transaksi', 'delete') && t.bku_status === 'aktif' && !lockEdit;
       return `<tr id="trx${t.id}">
-        <td><input type="checkbox" form="fTrxMass" name="id" data-check-item="trxIds" value="${t.id}" ${bisaHapusRow ? '' : 'disabled title="Tidak dapat dihapus (BKU terkunci / opnam)"'}></td>
+        <td><input type="checkbox" form="fTrxMass" name="id" data-check-item="trxIds" value="${t.id}" ${bisaHapusRow ? '' : 'disabled title="Tidak dapat dihapus (BKU terkunci)"'}></td>
         <td class="nowrap">${tglID(t.tanggal)}</td>
         <td class="mono t-sub nowrap">${esc(t.no_bukti || '-')}</td>
         <td>${esc(t.bku_nama)}${t.bku_status !== 'aktif' ? ` <span class="badge gray plain">terkunci</span>` : ''}${lockEdit ? ` <span class="badge red plain" title="${esc(lockEdit)}">periode ditutup</span>` : ''}${!lockEdit && lockInfo ? ` <span class="badge amber plain" title="${esc(lockInfo)}">belum ditutup</span>` : ''}${t.is_penyesuaian ? ` <span class="badge orange plain">opnam</span>` : ''}${t.transfer_group ? ` <span class="badge blue plain">pindah saldo</span>` : ''}${t.void_of ? ` <span class="badge red plain">jurnal pembalik</span>` : ''}${t.void_reversal_id ? ` <span class="badge red plain">di-void</span>` : ''}</td>
@@ -328,9 +342,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           ${bisaInline ? `<a class="btn btn-sm btn-icon" href="${c.base}${withBack('inline=' + t.id)}#trx${t.id}" title="Edit langsung di tabel">${ui.icon('edit')}</a>` : ''}
           ${lockEdit && canUnlock && c.can('transaksi', 'edit') ? unlockBtn(t) : ''}
           ${t.status === 'posted' && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && !t.void_reversal_id && !t.void_of && c.can('transaksi', 'edit') ? `<a class="btn btn-sm btn-warn" href="${c.base}${withBack('void=' + t.id)}#trx${t.id}" title="Batalkan transaksi (void)">${ui.icon('x')}Void</a>` : ''}
-          ${t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && c.can('transaksi', 'delete') ? `<form method="post" action="${c.base}/transaksi/delete" style="display:inline" data-confirm="Hapus transaksi ${esc(t.no_bukti || '')}? Data dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari)."><input type="hidden" name="id" value="${t.id}"><input type="hidden" name="back" value="${esc(backPath)}"><button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>` : ''}
+          ${t.bku_status === 'aktif' && !lockEdit && c.can('transaksi', 'delete') ? `<form method="post" action="${c.base}/transaksi/delete" style="display:inline" data-confirm="Hapus transaksi ${esc(t.no_bukti || '')}? Data dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari)."><input type="hidden" name="id" value="${t.id}"><input type="hidden" name="back" value="${esc(backPath)}"><button class="btn btn-sm btn-danger" title="Hapus transaksi">${ui.icon('trash')}</button></form>` : ''}
         </td></tr>`; }).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada transaksi', 'Gunakan tombol Pemasukan atau Pengeluaran untuk mulai mencatat.')}
+      ${totalRows > perPage ? transaksiPager : ''}
 
       ${voidTrx ? ui.modal('mVoidLazy', {
         title: 'Batalkan Transaksi (Void)',
@@ -480,10 +495,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       if (oldBku && oldBku.status !== 'aktif') return go('Transaksi pada BKU tertutup tidak dapat diedit.', 'err');
       const oldLock = dbm.periodeLockError(old.bku_id, old.tanggal, 'edit');
       if (oldLock) return go(oldLock, 'err');
-      if (old.is_penyesuaian) return go('Transaksi penyesuaian opnam kas tidak dapat diedit manual. Buka kembali BKU bulanan bila perlu koreksi.', 'err');
       const status = perluApproval ? 'pending' : 'posted';
-      db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,nota_url=COALESCE(?,nota_url),status=?,approved_by=NULL,approved_at=NULL WHERE id=?`)
-        .run(bkuTujuan, tanggal, jenis, metode, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, id);
+      const periodePenyesuaian = old.is_penyesuaian ? String(tanggal).slice(0, 7) : old.periode_penyesuaian;
+      if (old.is_penyesuaian &&
+          (Number(old.bku_id) !== Number(bkuTujuan) || String(old.periode_penyesuaian || old.tanggal).slice(0, 7) !== periodePenyesuaian)) {
+        db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(old.id);
+      }
+      db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,
+        nota_url=COALESCE(?,nota_url),status=?,approved_by=NULL,approved_at=NULL,periode_penyesuaian=? WHERE id=?`)
+        .run(bkuTujuan, tanggal, jenis, metode, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, periodePenyesuaian, id);
       dbm.logAudit(req.user, 'EDIT', 'transaksi', `Edit transaksi ${old.no_bukti}: ${uraian} (${rupiah(nom)})`
         + (Number(old.bku_id) !== Number(bkuTujuan) ? ` — dipindahkan ke BKU ${b.nama}` : ''));
     } else {
@@ -659,9 +679,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (b && b.status !== 'aktif') return go('BKU sudah ditutup — transaksi tidak dapat dihapus.', 'err');
     const delLock = dbm.periodeLockError(t.bku_id, t.tanggal, 'edit');
     if (delLock) return go(delLock, 'err');
-    if (t.is_penyesuaian) return go('Transaksi penyesuaian opnam kas tidak dapat dihapus. Buka kembali BKU bulanan bila perlu koreksi.', 'err');
-    dbm.trashAdd('transaksi', t, { user: req.user, alasan: String(req.body.alasan || ''), label: `${t.no_bukti} — ${t.uraian}` });
-    db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+    db.transaction(() => {
+      dbm.trashAdd('transaksi', t, { user: req.user, alasan: String(req.body.alasan || ''), label: `${t.no_bukti} — ${t.uraian}` });
+      db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+      db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(t.id);
+    })();
     // leger honor yang terkunci karena transaksi ini otomatis terbuka kembali (draf bisa diedit)
     let unlocked = [];
     try { unlocked = dbm.payrollUnlockByTrx(t.id) || []; } catch (e) { unlocked = []; }
@@ -687,9 +709,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       if (b && b.status !== 'aktif') { ditolak.push(`${t.no_bukti}: BKU ditutup`); continue; }
       const lock = dbm.periodeLockError(t.bku_id, t.tanggal, 'edit');
       if (lock) { ditolak.push(`${t.no_bukti}: ${lock}`); continue; }
-      if (t.is_penyesuaian) { ditolak.push(`${t.no_bukti}: transaksi opnam`); continue; }
-      dbm.trashAdd('transaksi', t, { user: req.user, label: `${t.no_bukti} — ${t.uraian}` });
-      db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+      db.transaction(() => {
+        dbm.trashAdd('transaksi', t, { user: req.user, label: `${t.no_bukti} — ${t.uraian}` });
+        db.prepare('DELETE FROM transaksi WHERE id=?').run(t.id);
+        db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(t.id);
+      })();
       try { dbm.payrollUnlockByTrx(t.id); } catch (e) { }
       hapus++;
     }

@@ -2,7 +2,7 @@
 /* test berjalan di zona waktu yang sama dengan aplikasi (WIB) */
 process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 /* Test ronde 9: kwitansi per-transaksi, bayar item terpilih (per item + non-BKU), rekap & bayar gabungan
-   piutang sertifikasi, counter transaksi tanpa batas 300, portal publik (autocomplete, datepicker, OTP,
+   piutang sertifikasi, counter transaksi & pagination, portal publik (autocomplete, datepicker, OTP,
    feedback orang tua), beasiswa baru, kertas kwitansi transaksi, bukti piutang, ekskul per jenis,
    grafik SPP Juli–Juni, sidebar collapse & urutan identitas sekolah */
 const { spawn } = require('child_process');
@@ -187,11 +187,15 @@ const periode = today.slice(0, 7);
   const totalTrx = db.prepare('SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE b.tahun_ajaran_id=?').get(ta.id).c;
   r = await req('GET', `/transaksi?ta=${ta.id}`);
   ok('counter transaksi = jumlah aktual (>300)', totalTrx > 300 && new RegExp('Jumlah Transaksi</div><div class="val" style="font-size:19px">' + totalTrx + '<').test(r.text), `total=${totalTrx}`);
-  /* ronde 33: tabel rekap transaksi kini SATU HALAMAN BERURUTAN di dalam scrollable box */
-  ok('tanpa pagination (satu halaman berurutan)', !/class="pager"/.test(r.text) && /class="table-scroll tall" id="rekapTrx"/.test(r.text));
-  r = await req('GET', `/transaksi?ta=${ta.id}`);
+  const rowsPage1 = (r.text.match(/<tr id="trx\d+"/g) || []).length;
+  ok('transaksi dibatasi 100 per halaman', rowsPage1 === 100 && /halaman 1\/\d+ · 100 per halaman/.test(r.text), `baris=${rowsPage1}`);
+  r = await req('GET', `/transaksi?q=${encodeURIComponent('Transaksi uji')}&hal=2`);
+  const rowsPage2 = (r.text.match(/<tr id="trx\d+"/g) || []).length;
+  ok('filter pencarian mencakup hasil di halaman berikutnya', rowsPage2 === 100 &&
+    /Transaksi uji/.test(r.text) && /q=Transaksi\+uji.*hal=3|hal=3.*q=Transaksi\+uji/.test(r.text), `baris=${rowsPage2}`);
+  r = await req('GET', `/transaksi?q=${encodeURIComponent('Transaksi uji')}`);
   const totalLine = /Jumlah Transaksi<\/div><div class="val" style="font-size:19px">(\d+)</.exec(r.text);
-  ok('jumlah transaksi konsisten (seluruh baris dirender)', totalLine && Number(totalLine[1]) === totalTrx, totalLine && totalLine[1]);
+  ok('jumlah transaksi filter dihitung dari semua halaman', totalLine && Number(totalLine[1]) === 310, totalLine && totalLine[1]);
 
   /* ===== 6. portal siswa: autocomplete, datepicker, tanpa login petugas, feedback ===== */
   r = await req('GET', '/portal', null, { public: true });

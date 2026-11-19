@@ -325,10 +325,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!/^\d{4}-\d{2}$/.test(String(periode || ''))) return go('Periode tidak valid.', 'err');
     const row = dbm.periodeRow(Number(bku_id), periode);
     if (!row) return go('Periode belum pernah ditutup — transaksi bulan tersebut tidak terkunci.', 'err');
-    db.prepare("UPDATE bku_periode SET status='dibuka' WHERE id=?").run(row.id);
+    const removed = db.transaction(() => {
+      const count = dbm.removePeriodAdjustment(Number(bku_id), periode, req.user);
+      db.prepare("UPDATE bku_periode SET status='dibuka' WHERE id=?").run(row.id);
+      return count;
+    })();
     dbm.logAudit(req.user, 'BUKA BULAN', 'tutup_bulanan',
-      `Membuka kunci (unlock) periode ${dbm.periodeLabel(periode)} pada BKU ${b.nama} untuk koreksi`);
-    go(`Kunci periode ${dbm.periodeLabel(periode)} dibuka. Transaksi bulan tersebut kini dapat diedit — jangan lupa tutup kembali bila koreksi selesai.`, 'ok');
+      `Membuka kunci (unlock) periode ${dbm.periodeLabel(periode)} pada BKU ${b.nama} untuk koreksi` +
+      (removed ? `; ${removed} transaksi penyesuaian opnam dihapus dan diarsipkan ke Kotak Sampah` : ''));
+    go(`Kunci periode ${dbm.periodeLabel(periode)} dibuka. ` +
+      (removed ? 'Transaksi selisih kas opnam sebelumnya dihapus dan diarsipkan ke Kotak Sampah. ' : '') +
+      'Transaksi bulan tersebut kini dapat diedit — jangan lupa tutup kembali bila koreksi selesai.', 'ok');
   });
 
   /* ================= berita acara ================= */

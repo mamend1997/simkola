@@ -2778,6 +2778,27 @@ function periodePosisi(bkuId, periode) {
   return { saldoAwal, masuk: t.masuk, keluar: t.keluar, saldoBuku: saldoAwal + t.masuk - t.keluar, periode };
 }
 
+function removePeriodAdjustment(bkuId, periode, user, reason) {
+  const closing = periodeRow(bkuId, periode);
+  if (!closing) return 0;
+  const rows = db.prepare(`SELECT * FROM transaksi
+    WHERE bku_id=? AND is_penyesuaian=1 AND status<>'void'
+      AND (periode_penyesuaian=? OR id=?)`)
+    .all(bkuId, periode, closing.transaksi_penyesuaian_id || 0);
+  for (const row of rows) {
+    trashAdd('transaksi', row, {
+      user,
+      alasan: reason || `Penyesuaian opnam periode ${periodeLabel(periode)} dibuka kembali`,
+      label: `${row.no_bukti || 'Penyesuaian opnam'} — ${row.uraian || ''}`
+    });
+    db.prepare('DELETE FROM transaksi WHERE id=?').run(row.id);
+  }
+  if (closing.transaksi_penyesuaian_id || rows.length) {
+    db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE id=?').run(closing.id);
+  }
+  return rows.length;
+}
+
 /** Daftar BKU x periode yang punya transaksi tapi belum ditutup (untuk notifikasi) */
 function unclosedPeriods(tahunId) {
   const cur = currentPeriode();
@@ -2803,6 +2824,8 @@ function closePeriode(bkuId, periode, opts, user) {
   const b = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
   if (!b) throw new Error('BKU tidak ditemukan.');
   if (b.status !== 'aktif') throw new Error(`BKU "${b.nama}" sudah ditutup secara keseluruhan, tidak dapat menutup periode bulanan.`);
+  removePeriodAdjustment(bkuId, periode, user,
+    `Penyesuaian opnam lama diarsipkan saat periode ${periodeLabel(periode)} ditutup ulang`);
   const pos = periodePosisi(bkuId, periode);
   const metode = opts.metode === 'opnam' ? 'opnam' : 'rollover';
   let opnamTunai = null, opnamBank = null, selisih = 0, adjId = null, alasan = '';
@@ -4774,7 +4797,7 @@ module.exports = {
   tingkatAktif, setTingkatAktif, applyJenjangPreset,
   NAMA_BULAN, periodeOf, periodeLabel, periodeStart, periodeEnd, prevPeriode, currentPeriode,
   periodeRow, periodeStatus, periodeLockError, periodeEditable, openingFor, monthTotals,
-  periodePosisi, unclosedPeriods, closePeriode, periodeListOf,
+  periodePosisi, unclosedPeriods, removePeriodAdjustment, closePeriode, periodeListOf,
   // baru: trash, akademik, iuran, ekskul, tahun ajaran otomatis
   taAutoFor, taAutoId, TRASH_DAYS, TRASH_LABEL, trashAdd, trashList, trashPurge, trashRestore,
   SISWA_STATUS, programList, kelasList, kelasById, siswaList,

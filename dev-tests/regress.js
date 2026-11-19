@@ -130,6 +130,66 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   r = await req('POST', '/tutup-bulanan/buka', { bku_id: bku.id, periode, back: '/tutup-bulanan' });
   ok('buka kunci periode', r.status === 303 && db.prepare('SELECT status FROM bku_periode WHERE bku_id=? AND periode=?').get(bku.id, periode).status === 'dibuka');
 
+  // opnam: membuka kembali menghapus penyesuaian lama ke Kotak Sampah
+  const saldoBuku = Number(db.prepare(`SELECT b.saldo_awal + COALESCE(SUM(
+      CASE WHEN t.jenis='pemasukan' THEN t.nominal ELSE -t.nominal END),0) saldo
+    FROM bku b LEFT JOIN transaksi t ON t.bku_id=b.id AND t.status='posted' AND t.tanggal<=?
+    WHERE b.id=?`).get(`${periode}-31`, bku.id).saldo || 0);
+  r = await req('POST', '/tutup-bulanan/tutup', {
+    bku_id: bku.id, periode, metode: 'opnam', opnam_tunai: String(saldoBuku + 1000000),
+    opnam_bank: '0', alasan: 'uji selisih kas', metode_penyesuaian: 'tunai'
+  });
+  let opnam = db.prepare('SELECT * FROM transaksi WHERE bku_id=? AND periode_penyesuaian=? AND is_penyesuaian=1').get(bku.id, periode);
+  ok('opnam membuat transaksi selisih', r.status === 303 && !!opnam);
+  r = await req('POST', '/tutup-bulanan/buka', { bku_id: bku.id, periode, back: '/tutup-bulanan' });
+  ok('buka kembali menghapus transaksi selisih', r.status === 303 &&
+    !db.prepare('SELECT 1 FROM transaksi WHERE id=?').get(opnam.id) &&
+    !!db.prepare("SELECT 1 FROM trash WHERE tabel='transaksi' AND row_id=?").get(opnam.id));
+
+  // penutupan ulang tidak menggandakan penyesuaian; transaksi opnam dapat diedit/dihapus
+  r = await req('POST', '/tutup-bulanan/tutup', {
+    bku_id: bku.id, periode, metode: 'opnam', opnam_tunai: String(saldoBuku + 800000),
+    opnam_bank: '0', alasan: 'uji selisih kas kedua', metode_penyesuaian: 'tunai'
+  });
+  opnam = db.prepare('SELECT * FROM transaksi WHERE bku_id=? AND periode_penyesuaian=? AND is_penyesuaian=1').get(bku.id, periode);
+  ok('tutup ulang hanya punya satu transaksi selisih', r.status === 303 &&
+    db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=? AND periode_penyesuaian=? AND is_penyesuaian=1').get(bku.id, periode).c === 1);
+  db.prepare("UPDATE bku_periode SET status='dibuka' WHERE bku_id=? AND periode=?").run(bku.id, periode);
+  const opnamPage = await req('GET', `/transaksi?bku=${bku.id}`);
+  const opnamRow = opnamPage.text.split(`id="trx${opnam.id}"`)[1] || '';
+  ok('aksi edit dan hapus transaksi opnam tampil', opnamPage.status === 200 &&
+    opnamRow.includes(`inline=${opnam.id}`) && opnamRow.includes('/transaksi/delete'));
+  r = await req('POST', '/transaksi/save', {
+    id: opnam.id, bku_id: bku.id, tanggal: opnam.tanggal, jenis: opnam.jenis, metode: 'transfer',
+    coa_id: opnam.coa_id, nominal: String(opnam.nominal + 500), uraian: 'Selisih kas hasil edit',
+    nama_pihak: opnam.nama_pihak, back: `/transaksi?bku=${bku.id}`
+  });
+  ok('transaksi opnam bisa diedit', r.status === 303 &&
+    db.prepare('SELECT nominal,metode FROM transaksi WHERE id=?').get(opnam.id).nominal === opnam.nominal + 500);
+  r = await req('POST', '/transaksi/delete', { id: opnam.id, back: `/transaksi?bku=${bku.id}` });
+  ok('transaksi opnam bisa dihapus', r.status === 303 &&
+    !db.prepare('SELECT 1 FROM transaksi WHERE id=?').get(opnam.id));
+
+  // daftar transaksi memuat 100 baris, filter tetap berlaku pada halaman selanjutnya
+  db.transaction(() => {
+    const ins = db.prepare(`INSERT INTO transaksi
+      (bku_id,tanggal,jenis,metode,no_bukti,nominal,uraian,status,created_at)
+      VALUES (?,?,'pemasukan','tunai',?,1,?,'pending',?)`);
+    for (let i = 1; i <= 205; i++) {
+      ins.run(bku.id, today, `PAGE/${i}`, `ROUND-PAGE-${String(i).padStart(3, '0')}`, new Date().toISOString());
+    }
+  })();
+  r = await req('GET', `/transaksi?q=ROUND-PAGE&bku=${bku.id}`);
+  const page1Rows = (r.text.match(/<tr id="trx\d+"/g) || []).length;
+  ok('paginasi transaksi membatasi 100 baris dan menghitung semua hasil filter', page1Rows === 100 &&
+    /dari 205 transaksi · halaman 1\/3/.test(r.text));
+  r = await req('GET', `/transaksi?q=ROUND-PAGE&bku=${bku.id}&hal=2`);
+  const page2Rows = (r.text.match(/<tr id="trx\d+"/g) || []).length;
+  const nextFilterLink = r.text.includes(`q=ROUND-PAGE&bku=${bku.id}&hal=3`);
+  const hasPage2Record = r.text.includes('ROUND-PAGE-105');
+  ok('filter pencarian terbawa ke halaman transaksi berikutnya', page2Rows === 100 && nextFilterLink && hasPage2Record,
+    `baris=${page2Rows}, link=${nextFilterLink}, row=${hasPage2Record}`);
+
   // backup zip
   r = await req('GET', '/backup/download-zip', null, { binary: true });
   ok('backup zip', r.status === 200 && r.text.length > 2000);
