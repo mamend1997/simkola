@@ -374,7 +374,6 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     let items = [];
     try { items = JSON.parse(row.items || '[]'); } catch (e) { }
     const qr = row.qr_string || '';
-    const qrImg = qr ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(qr)}` : '';
     const alasan = String(row.alasan || '').trim()
       .replace(/\[object Object\]/gi, 'Respons payment gateway tidak dapat dibaca.');
     return `<div class="portal-card">
@@ -393,8 +392,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
       </tbody></table></div>
       ${row.status === 'menunggu' && row.metode === 'gateway' ? `
         <div class="qris-box mt-2">
-          ${qr ? `<img src="${esc(qrImg)}" alt="QRIS pembayaran" width="240" height="240" loading="lazy"
-            onerror="this.style.display='none'">`
+          ${qr ? `<div class="help">Kode pembayaran tersedia pada halaman checkout.</div>`
         : '<div class="help">QR statis tidak dikembalikan gateway. Gunakan tautan halaman pembayaran.</div>'}
           <div style="flex:1;min-width:200px">
             <b>Pindai QRIS untuk membayar</b>
