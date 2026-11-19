@@ -1005,6 +1005,9 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
               </div>
               <div class="field"><label>URL Callback (daftarkan di dashboard provider)</label>
                 <input type="text" readonly value="${esc(absBase)}/pay/callback"></div>
+              <button class="btn btn-block mt-2" type="submit" formmethod="post"
+                formaction="${req.BASE}/super-admin/qris/test"
+                style="margin-bottom:10px">${ui.icon('shield')}Uji Koneksi Kasera (tanpa membuat tagihan)</button>
               <div class="alert info">${ui.icon('info')}<div>${pay.provider === 'sandbox'
               ? 'Provider <b>Simulasi</b> tidak menghubungi jaringan: QR dibuat lokal & dapat disimulasikan lunas untuk pengujian.'
               : 'Pastikan URL callback di atas terdaftar pada dashboard provider agar pembayaran terverifikasi real-time.'}</div></div>
@@ -1057,6 +1060,28 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   });
 
   /* ---------------- metode pembayaran hybrid (sakelar + kredensial) ---------------- */
+  post('/super-admin/qris/test', async (req, res) => {
+    const u = requireAdmin(req, res); if (!u) return;
+    const b = req.body || {};
+    const cfg = saas.gatewayCfg();
+    const key = String(b.pay_gateway_key || '').trim() || cfg.key;
+    const mode = ['sandbox', 'production'].includes(String(b.pay_gateway_mode || ''))
+      ? String(b.pay_gateway_mode) : cfg.mode;
+    const base = String(b.pay_gateway_base || '').trim() || cfg.base;
+    try {
+      if (!key) throw new Error('API Key belum diisi. Tempel Server Key / API Key lalu coba lagi.');
+      const result = await saas.paygw.kaseraTestConnection({
+        key, mode, base,
+        merchant: String(b.pay_gateway_merchant || '').trim() || cfg.merchant,
+        kasera_api: String(b.pay_gateway_kasera_api || cfg.kasera_api || 'auto')
+      });
+      if (!result.ok) throw new Error(result.error);
+      res.redirect(req.BASE + flash('/super-admin/qris', 'ok', 'Koneksi Kasera terverifikasi. Endpoint: ' + (result.base || base)));
+    } catch (e) {
+      res.redirect(req.BASE + flash('/super-admin/qris', 'err', 'Uji Kasera gagal: ' + e.message));
+    }
+  });
+
   post('/super-admin/qris/pay', async (req, res) => {
     const u = requireAdmin(req, res); if (!u) return;
     const b = req.body || {};

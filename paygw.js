@@ -256,6 +256,43 @@ async function kaseraCheckTransaction(cfg, order_id) {
   }
 }
 
+/**
+ * Uji koneksi Kasera tanpa membuat tagihan atau QR baru.
+ * GET /v1/transactions/<tes>:
+ *   401 = API key salah
+ *   404 = endpoint tidak tersedia / kunci valid tetapi tidak memiliki akses
+ *   2xx = endpoint & kunci dapat diakses
+ */
+async function kaseraTestConnection(cfg = {}) {
+  const k = kaseraCfg(cfg);
+  if (!k.key) return { ok: false, code: 'NO_KEY', error: 'API Key Kasera belum diisi.' };
+  try {
+    const r = await fetch(`${k.base}/v1/transactions/__simkeu_connection_test__`, {
+      headers: kaseraHeaders(k.key, k.merchant),
+      signal: AbortSignal.timeout(15000)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) return {
+      ok: false, code: 'UNAUTHORIZED', http: 401,
+      error: 'API Key ditolak Kasera (401). Periksa key, prefix kp_live_/kp_test_, dan mode akun.'
+    };
+    if (r.status === 403) return {
+      ok: false, code: 'FORBIDDEN', http: 403,
+      error: 'Kasera menolak izin akun (403). Aktifkan akses API/Transactions untuk akun ini.'
+    };
+    if ([404, 405, 501].includes(r.status)) return {
+      ok: false, code: 'ENDPOINT_NOT_AVAILABLE', http: r.status,
+      error: `Endpoint transaksi tidak tersedia pada Base URL ${k.base} (HTTP ${r.status}). `
+        + 'Gunakan akun/fitur Kasera yang mendukung /v1/transactions atau pilih mode QRIS lama.'
+    };
+    if (r.ok) return { ok: true, code: 'CONNECTED', http: r.status, error: '', base: k.base };
+    return { ok: false, code: 'HTTP_ERROR', http: r.status,
+      error: responseError(j, `Kasera menjawab HTTP ${r.status}.`) };
+  } catch (e) {
+    return { ok: false, code: 'NETWORK', error: 'Tidak dapat menghubungi Kasera: ' + responseError(e) };
+  }
+}
+
 /** HMAC-SHA256 tanda tangan webhook Kasera (hex huruf kecil). */
 function kaseraSignature(rawBody, secret) {
   const raw = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody === undefined || rawBody === null ? '' : rawBody), 'utf8');
@@ -580,6 +617,6 @@ function parseCallback(cfg, body = {}) {
 module.exports = {
   PROVIDERS, PROVIDER_KEYS, DEF, publicConfig, orderNo, createCharge, checkStatus, verifyCallback, parseCallback,
   kaseraBase, kaseraHeaders, kaseraPaid, kaseraCfg, kaseraSecrets, kaseraCreateTransaction,
-  kaseraCheckTransaction, kaseraSignature, kaseraVerifySignature, kaseraEvent, kaseraPayload, kaseraUsable, responseError,
+  kaseraCheckTransaction, kaseraTestConnection, kaseraSignature, kaseraVerifySignature, kaseraEvent, kaseraPayload, kaseraUsable, responseError,
   KASERA, KASERA_API_MODES, clean
 };
