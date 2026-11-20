@@ -2,7 +2,7 @@
 const QRCode = require('qrcode');
 /* ==========================================================================
    DOMAIN PUBLIK (tanpa login) — tautan acak untuk transparansi:
-     · /<nama-sekolah>/publik/bku/<token>    → rincian satu BKU + transaksi
+     · /<nama-sekolah>/publik/bku/<token>    → rincian BKU, transaksi + penerimaan Grup Iuran terhubung
      · /<nama-sekolah>/publik/iuran/<token>  → rekap satu Grup Iuran + siswa
    Halaman hanya dilayani bila sakelar `is_public` = 1 DAN token persis sama
    dengan yang tersimpan (dbm.publicFind). Token tidak dapat ditebak
@@ -66,7 +66,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
   </header>
   ${content}
   <footer class="portal-foot">© ${new Date().getFullYear()} ${esc(st.sekolah_nama || '')}${footer ? ' · ' + esc(footer) : ''}<br>
-    Halaman ini dibagikan sekolah melalui tautan acak. Hanya menampilkan data yang sudah dibukukan (tidak dapat diubah dari sini).</footer>
+    Halaman ini dibagikan sekolah melalui tautan acak untuk transparansi dan tidak dapat diubah dari sini.</footer>
 </div>
 <script src="${base}/assets/app.js?v=${ui.ASSET_V}" defer></script>
 </body></html>`;
@@ -131,6 +131,15 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       taNotice = `BKU <b>${esc(b.nama)}</b> belum dibagikan publik pada Tahun Pelajaran ${esc(tNama || '-')}.`;
     }
     const ta = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(b.tahun_ajaran_id) || {};
+    const linkedIuran = dbm.bkuIuranGroups(b.id);
+    const linkedIuranRows = linkedIuran.length
+      ? dbm.iuranTagihanRows({ grupId: linkedIuran.map(g => Number(g.id)) }) : [];
+    const linkedIuranReceipts = new Map(linkedIuran.map(g => [Number(g.id), 0]));
+    for (const row of linkedIuranRows) {
+      const gid = Number(row.grup_id);
+      linkedIuranReceipts.set(gid, (linkedIuranReceipts.get(gid) || 0) + Number(row.kas_diterima || 0));
+    }
+    const linkedIuranReceiptTotal = [...linkedIuranReceipts.values()].reduce((sum, amount) => sum + amount, 0);
 
     /* ---------- filter periode (bulan / rentang tanggal) ---------- */
     const bulan = isYm(qp('bulan')) ? qp('bulan') : '';
@@ -211,6 +220,20 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <div class="kpi"><div class="lbl">${filterAktif ? 'Saldo Akhir Periode' : 'Saldo Buku'}</div><div class="val">${rupiah(saldoAkhirPeriode)}</div></div>
       </div>
     </div>
+    ${linkedIuran.length ? `<div class="portal-card">
+      <h3>Penerimaan Grup Iuran Terhubung</h3>
+      <p class="help">Akumulasi pembayaran tercatat (non-void) pada semua tahun ajaran; angka ini tidak mengikuti filter tanggal transaksi BKU.</p>
+      <div class="kpi-grid" style="gap:14px">
+        <div class="kpi"><div class="lbl">Total Penerimaan Grup Iuran</div><div class="val" style="color:var(--green)">${rupiah(linkedIuranReceiptTotal)}</div>
+          <div class="meta">${linkedIuran.length} grup terhubung</div></div>
+      </div>
+      <div class="table-wrap sticky-head mt-2"><table>
+        <thead><tr><th>Grup Iuran</th><th>Tahun Ajaran</th><th class="num">Total Penerimaan</th></tr></thead>
+        <tbody>${linkedIuran.map(g => `<tr><td class="t-strong">${esc(g.nama)}</td><td>${esc(g.ta_nama || '-')}</td>
+          <td class="num">${rupiah(linkedIuranReceipts.get(Number(g.id)) || 0)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="2">GRAND TOTAL PENERIMAAN</td><td class="num"><b>${rupiah(linkedIuranReceiptTotal)}</b></td></tr></tfoot>
+      </table></div>
+    </div>` : ''}
 
     <div class="portal-card">
       ${filterBar}
@@ -462,6 +485,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
 
     const totalTagihan = rows.reduce((s, r) => s + Number(r.nominal || 0), 0);
     const totalDibayar = rows.reduce((s, r) => s + Number(r.terbayar || 0), 0);
+    const totalPenerimaan = rows.reduce((s, r) => s + Number(r.kas_diterima || 0), 0);
     const totalSisa = rows.reduce((s, r) => s + Number(r.sisa || 0), 0);
     const lunas = rows.filter(r => r.status === 'lunas' || r.status === 'pemutihan').length;
     const jenisLabel = g.jenis === 'bulanan' ? 'Iuran Bulanan' : 'Iuran Non-Bulanan';
@@ -496,7 +520,8 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       <div class="kpi-grid" style="gap:14px">
         <div class="kpi"><div class="lbl">Total Tagihan</div><div class="val">${rupiah(totalTagihan)}</div>
           <div class="meta">${rows.length}${filterAktif ? ` dari ${siswaBertagihan}` : ''} siswa</div></div>
-        <div class="kpi"><div class="lbl">Grand Total Dibayar</div><div class="val" style="color:var(--green)">${rupiah(totalDibayar)}</div></div>
+        <div class="kpi"><div class="lbl">Tagihan Terpenuhi (termasuk potongan)</div><div class="val" style="color:var(--green)">${rupiah(totalDibayar)}</div></div>
+        <div class="kpi"><div class="lbl">Total Dana Diterima</div><div class="val" style="color:var(--green)">${rupiah(totalPenerimaan)}</div></div>
         <div class="kpi"><div class="lbl">Sisa Tagihan</div><div class="val" style="color:var(--red)">${rupiah(totalSisa)}</div></div>
         <div class="kpi"><div class="lbl">Sudah Lunas</div><div class="val">${lunas}<span style="font-size:13px;color:var(--muted)"> / ${rows.length}</span></div></div>
       </div>
@@ -528,7 +553,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <tfoot>
           <tr><td colspan="4">TOTAL TAGIHAN${filterAktif ? ' (HASIL FILTER)' : ''}</td><td class="num">${rupiah(totalTagihan)}</td>
             <td class="num">${rupiah(totalDibayar)}</td><td class="num">${rupiah(totalSisa)}</td><td></td></tr>
-          <tr><td colspan="4">GRAND TOTAL DANA DITERIMA</td><td colspan="4" class="num"><b>${rupiah(totalDibayar)}</b></td></tr>
+          <tr><td colspan="4">GRAND TOTAL DANA DITERIMA</td><td colspan="4" class="num"><b>${rupiah(totalPenerimaan)}</b></td></tr>
         </tfoot></table></div>`
         : ui.emptyState(filterAktif ? 'Siswa tidak ditemukan' : 'Belum ada siswa',
           filterAktif ? 'Coba ubah kata kunci nama/NISN atau pilih kelas lain.' : 'Belum ada siswa yang ditetapkan pada grup iuran ini.')}

@@ -277,7 +277,7 @@ async function follow(url, depth = 0) {
   const grup = one("SELECT * FROM iuran_grup WHERE nama='Iuran SPP Uji Publik' ORDER BY id DESC LIMIT 1");
   ok('grup iuran tersimpan', !!grup);
 
-  /* kelas + 3 siswa + tagihan + satu pembayaran sebagian */
+  /* kelas + 3 siswa + tagihan + pembayaran; satu pembayaran memiliki potongan */
   run('INSERT INTO kelas (nama,nama_kelas,tingkat,tahun_ajaran_id,aktif,created_at) VALUES (?,?,?,?,1,?)',
     'X TKJ 1', 'X TKJ 1', 'X', ta.id, '2026-07-01 08:00:00');
   const kelas = one("SELECT * FROM kelas WHERE nama='X TKJ 1' ORDER BY id DESC LIMIT 1");
@@ -296,6 +296,9 @@ async function follow(url, depth = 0) {
   const tag1 = one('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?', grup.id, ids[0]);
   run(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,status,created_at)
        VALUES (?,?,?,?,0,?,?,?,?)`, tag1.id, ids[0], '2026-08-05', 900000, 900000, 'tunai', 'posted', '2026-08-05 09:00:00');
+  const tag2 = one('SELECT * FROM iuran_tagihan WHERE grup_id=? AND siswa_id=?', grup.id, ids[1]);
+  run(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,status,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`, tag2.id, ids[1], '2026-08-06', 100000, 25000, 75000, 'tunai', 'posted', '2026-08-06 09:00:00');
 
   r = await req('GET', '/iuran?ta=' + ta.id);
   ok('halaman Grup Iuran punya tombol Publik per grup', r.status === 200 && r.text.includes('data-open="mPubG' + grup.id + '"'));
@@ -325,8 +328,19 @@ async function follow(url, depth = 0) {
   ok('status pembayaran per siswa tampil', /Sebagian/.test(r.text) && /Belum Bayar/.test(r.text));
   ok('rekapitulasi Total Tagihan tampil', /TOTAL TAGIHAN/.test(r.text));
   ok('Grand Total dana diterima tampil', /GRAND TOTAL DANA DITERIMA/.test(r.text));
+  ok('total penerimaan kas grup ditampilkan terpisah', /Total Dana Diterima/.test(r.text));
+  ok('penerimaan kas memperhitungkan potongan dan berbeda dari tagihan terbayar',
+    /Total Dana Diterima[\s\S]{0,180}975\.000/.test(r.text)
+      && /Tagihan Terpenuhi \(termasuk potongan\)[\s\S]{0,180}1\.000\.000/.test(r.text));
   ok('total tagihan = 3 × 1.800.000 (Rp 5.400.000)', /5\.400\.000/.test(r.text));
-  ok('grand total diterima = Rp 900.000', /GRAND TOTAL DANA DITERIMA[\s\S]{0,240}900\.000/.test(r.text));
+  ok('grand total diterima = Rp 975.000', /GRAND TOTAL DANA DITERIMA[\s\S]{0,240}975\.000/.test(r.text));
+
+  run('INSERT INTO bku_iuran_grup (bku_id,grup_id) VALUES (?,?)', bku.id, grup.id);
+  r = await pub(urlBku2);
+  ok('BKU portal publik menampilkan penerimaan total dari grup yang dipilih',
+    r.status === 200 && /Penerimaan Grup Iuran Terhubung/.test(r.text)
+      && /Iuran SPP Uji Publik/.test(r.text)
+      && /GRAND TOTAL PENERIMAAN[\s\S]{0,120}975\.000/.test(r.text));
 
   /* toggle nonaktif */
   r = await req('POST', '/iuran/publik', { id: grup.id, aksi: 'toggle', aktif: '0', ta: ta.id });
