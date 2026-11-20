@@ -5,10 +5,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
 
   /* ---------- helper ---------- */
-  function ledger(bkuId, from, to, q, jenis, sort, usesIuranSaldo, hideActivityIncomes) {
+  function ledger(bkuId, from, to, q, jenis, sort, usesIuranSaldo) {
     const b = db.prepare('SELECT b.*, t.nama ta_nama FROM bku b LEFT JOIN tahun_ajaran t ON t.id=b.tahun_ajaran_id WHERE b.id=?').get(bkuId);
     if (!b) return null;
-    let q2 = `SELECT t.*, co.kode coa_kode, co.nama coa_nama, u.nama pembuat, a.nama penyetuju
+    const includeActivityIncomes = usesIuranSaldo && Number(b.pemasukan_saldo) === 1;
+    let q2 = `SELECT t.*, co.kode coa_kode, co.nama coa_nama, u.nama pembuat, a.nama penyetuju,
+      CASE WHEN EXISTS (SELECT 1 FROM iuran_bayar p WHERE p.transaksi_id=t.id) THEN 1 ELSE 0 END iuran_source
       FROM transaksi t LEFT JOIN coa co ON co.id=t.coa_id LEFT JOIN users u ON u.id=t.created_by
       LEFT JOIN users a ON a.id=t.approved_by WHERE t.bku_id=? AND t.status='posted'`;
     const args = [bkuId];
@@ -19,27 +21,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     q2 += ' ORDER BY t.tanggal, t.id';
     const allRows = db.prepare(q2).all(...args);
 
-    // BKU kegiatan memakai penerimaan grup iuran sebagai saldo sumber; pemasukan BKU tidak dihitung ulang.
-    let opening = usesIuranSaldo
-      ? dbm.bkuIuranReceived(bkuId) : Number(b.saldo_awal || 0);
+    // BKU Kegiatan memakai penerimaan grup iuran; pemasukan biasa tidak dihitung ulang.
+    let opening = Number(b.saldo_awal || 0)
+      + (usesIuranSaldo ? dbm.bkuIuranReceived(bkuId) : 0);
     if (from) {
       const pre = db.prepare(`SELECT COALESCE(SUM(CASE WHEN jenis='pengeluaran' THEN -nominal
           WHEN ?=1 AND COALESCE(is_penyesuaian,0)<>1 THEN 0 ELSE nominal END),0) d
         FROM transaksi WHERE bku_id=? AND status='posted' AND tanggal<?`).get(usesIuranSaldo ? 1 : 0, bkuId, from).d;
       opening += pre;
+      if (includeActivityIncomes) opening += dbm.bkuRegularIncome(bkuId, { before: from });
     }
     let run = opening;
     let list = allRows.map((t, i) => {
       if (t.jenis === 'pengeluaran') run -= t.nominal;
-      else if (!usesIuranSaldo || Number(t.is_penyesuaian) === 1) run += t.nominal;
+      else if (!usesIuranSaldo || Number(t.is_penyesuaian) === 1
+        || (includeActivityIncomes && Number(t.iuran_source) !== 1)) run += t.nominal;
       return { ...t, no: i + 1, saldo: run };
     });
-    if (hideActivityIncomes) list = list.filter(t => t.jenis !== 'pemasukan' || Number(t.is_penyesuaian) === 1);
+    if (usesIuranSaldo) list = list.filter(t => t.jenis !== 'pemasukan'
+      || Number(t.is_penyesuaian) === 1
+      || (includeActivityIncomes && Number(t.iuran_source) !== 1));
     list = list.map((t, i) => ({ ...t, no: i + 1 }));
     if (sort === 'desc') list = list.slice().reverse().map((t, i) => ({ ...t, no: i + 1 }));
     return {
       b, opening, rows: list, closing: run,
-      totalIn: list.filter(r => r.jenis === 'pemasukan' && (!usesIuranSaldo || Number(r.is_penyesuaian) !== 1))
+      totalIn: list.filter(r => r.jenis === 'pemasukan' && Number(r.is_penyesuaian) !== 1
+        && (!usesIuranSaldo || (includeActivityIncomes && Number(r.iuran_source) !== 1)))
         .reduce((s, r) => s + r.nominal, 0),
       totalAdjIn: list.filter(r => r.jenis === 'pemasukan' && Number(r.is_penyesuaian) === 1)
         .reduce((s, r) => s + r.nominal, 0),
@@ -77,9 +84,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const jenis = req.query.get('jenis') || '';
     const sort = req.query.get('sort') === 'desc' ? 'desc' : 'asc';
     const linkedIuran = dbm.bkuIuranGroups(b.id);
-    const usesIuranSaldo = b.jenis === 'kegiatan' || linkedIuran.length > 0;
-    const hideActivityIncomes = b.jenis === 'kegiatan';
-    const d = ledger(b.id, from, to, q, jenis, sort, usesIuranSaldo, hideActivityIncomes);
+    const usesIuranSaldo = b.jenis === 'kegiatan';
+    const includeActivityIncomes = usesIuranSaldo && Number(b.pemasukan_saldo) === 1;
+    const hideActivityIncomes = usesIuranSaldo && !includeActivityIncomes;
+    const d = ledger(b.id, from, to, q, jenis, sort, usesIuranSaldo);
     const ta = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(b.tahun_ajaran_id) || {};
     const linkedIuranIds = linkedIuran.map(g => Number(g.id));
     const linkedIuranRows = linkedIuranIds.length ? dbm.iuranTagihanRows({ grupId: linkedIuranIds }) : [];
@@ -87,7 +95,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const iuranReceived = linkedIuranRows.reduce((sum, r) => sum + Number(r.kas_diterima || 0), 0);
     const iuranRemaining = linkedIuranRows.reduce((sum, r) => sum + Number(r.sisa || 0), 0);
     const bkuAllTotals = dbm.bkuTotals(b.id);
-    const saldoAwalTampil = usesIuranSaldo ? iuranReceived : Number(b.saldo_awal || 0);
+    const saldoAwalTampil = Number(b.saldo_awal || 0) + (usesIuranSaldo ? iuranReceived : 0);
     const rabSummary = b.jenis === 'kegiatan' ? dbm.bkuRabSummary(b.id) : null;
     const rab = rabSummary ? rabSummary.totalPagu : 0;
     const rabSpent = Number(bkuAllTotals.keluar || 0);
@@ -238,7 +246,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <td><div class="mono t-sub">${esc(t.no_bukti || '-')}</div>${t.coa_nama ? `<div class="t-sub">${esc(t.coa_nama)}</div>` : ''}</td>
         <td><div class="t-strong">${esc(t.uraian)}</div>
           <div class="t-sub">${esc(t.nama_pihak || '')}${t.metode === 'transfer' ? ' · transfer' : ''}
-          ${usesIuranSaldo && t.jenis === 'pemasukan' && Number(t.is_penyesuaian) !== 1 ? ' · <span class="badge gray plain">informasi, tidak menambah saldo</span>' : ''}
+          ${usesIuranSaldo && !includeActivityIncomes && t.jenis === 'pemasukan' && Number(t.is_penyesuaian) !== 1 ? ' · <span class="badge gray plain">informasi, tidak menambah saldo</span>' : ''}
           ${t.is_penyesuaian ? ' · <span class="badge orange plain">opnam</span>' : ''}${lockedInfo ? ' · <span class="badge amber plain">periode terkunci</span>' : ''}</div></td>
         <td class="num" style="color:var(--green)">${t.jenis === 'pemasukan' ? rupiah(t.nominal) : '—'}</td>
         <td class="num" style="color:var(--red)">${t.jenis === 'pengeluaran' ? rupiah(t.nominal) : '—'}</td>
@@ -301,13 +309,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </div>
       </div>
       <div class="kpi-grid mt-3" style="grid-template-columns:repeat(${hideActivityIncomes ? 3 : 4},minmax(0,1fr))">
-        <div class="kpi ic-orange"><div class="ico">${ui.icon('wallet')}</div><div class="lbl">${usesIuranSaldo ? 'Penerimaan Grup Iuran' : 'Saldo Awal'}</div>
+        <div class="kpi ic-orange"><div class="ico">${ui.icon('wallet')}</div><div class="lbl">${usesIuranSaldo ? 'Saldo Awal Keseluruhan' : 'Saldo Awal'}</div>
           <div class="val" style="font-size:18px">${rupiah(saldoAwalTampil)}</div>
-          ${usesIuranSaldo ? '<div class="meta">Sumber saldo otomatis dari grup terhubung</div>'
+          ${usesIuranSaldo ? `<div class="meta">Manual ${rupiah(b.saldo_awal)} + penerimaan grup ${rupiah(iuranReceived)}</div>`
           : from ? `<div class="meta">+ mutasi sebelum ${tglID(from)} = ${rupiah(d.opening)}</div>` : '<div class="meta">Saldo pembuka BKU</div>'}</div>
-        ${hideActivityIncomes ? '' : `<div class="kpi ic-green"><div class="ico">${ui.icon('up')}</div><div class="lbl">${usesIuranSaldo ? 'Pemasukan BKU (Informasi)' : 'Total Masuk'}</div>
+        ${hideActivityIncomes ? '' : `<div class="kpi ic-green"><div class="ico">${ui.icon('up')}</div><div class="lbl">${usesIuranSaldo ? 'Pemasukan Transaksi BKU' : 'Total Masuk'}</div>
           <div class="val" style="font-size:18px">${rupiah(d.totalIn)}</div>
-          <div class="meta">${d.rows.filter(r => r.jenis === 'pemasukan').length} transaksi${usesIuranSaldo ? ' · tidak menambah saldo' : ''}</div></div>`}
+          <div class="meta">${d.rows.filter(r => r.jenis === 'pemasukan').length} transaksi${usesIuranSaldo ? ' · menambah saldo, kecuali posting grup iuran' : ''}</div></div>`}
         <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Total Keluar</div>
           <div class="val" style="font-size:18px">${rupiah(d.totalOut)}</div><div class="meta">${d.rows.filter(r => r.jenis === 'pengeluaran').length} transaksi</div></div>
         <div class="kpi ic-blue"><div class="ico">${ui.icon('bank')}</div><div class="lbl">Saldo Akhir</div>
@@ -317,7 +325,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="card-head"><div><h3>Ringkasan Grup Iuran Terhubung</h3>
           <div class="sub">${linkedIuran.length} grup · ${linkedIuranRows.length} tagihan · semua tahun ajaran pada grup terpilih</div></div>
           ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('link')}Atur Grup Iuran</a>` : ''}</div>
-        ${usesIuranSaldo ? `<div class="alert info mt-2">${ui.icon('info')}<div>Saldo BKU bersumber langsung dari total <b>Sudah Diterima</b> pada grup iuran terhubung, dikurangi pengeluaran BKU. Pemasukan yang diposting ke BKU tetap tercatat, tetapi tidak menambah saldo lagi.</div></div>` : ''}
+        ${usesIuranSaldo ? `<div class="alert info mt-2">${ui.icon('info')}<div>Saldo Awal Keseluruhan adalah saldo awal manual ditambah total <b>Sudah Diterima</b> pada grup iuran terhubung. ${includeActivityIncomes ? 'Pemasukan transaksi non-iuran juga menambah saldo; transaksi hasil posting grup iuran tidak dihitung dua kali.' : 'Pemasukan transaksi biasa disembunyikan dari rincian dan tidak menambah saldo.'} Pengeluaran mengurangi saldo tersebut.</div></div>` : ''}
         <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
           <div class="kpi ic-orange"><div class="lbl">Total Seharusnya Diterima (Tagihan)</div><div class="val" style="font-size:18px">${rupiah(iuranExpected)}</div></div>
           <div class="kpi ic-green"><div class="lbl">Sudah Diterima</div><div class="val" style="font-size:18px">${rupiah(iuranReceived)}</div></div>
@@ -325,7 +333,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </div>
         <div class="toolbar mt-2">${linkedIuran.map(g => `<span class="badge blue">${esc(g.nama)} · TA ${esc(g.ta_nama || '-')}</span>
           ${c.can('iuran', 'view') ? `<a class="btn btn-sm" href="${c.base}/iuran/grup/${g.id}">${ui.icon('eye')}Lihat Rincian Grup</a>` : ''}`).join('')}</div>
-      </div>` : `<div class="alert ${b.jenis === 'kegiatan' ? 'warn' : 'info'} mt-3">${ui.icon(b.jenis === 'kegiatan' ? 'alert' : 'info')}<div>Belum ada Grup Iuran terhubung. ${b.jenis === 'kegiatan' ? 'Saldo sumber BKU Kegiatan saat ini Rp0; pengeluaran akan membuat saldo negatif.' : ''} Hubungkan grup melalui tombol <b>Grup Iuran</b> di Master BKU agar total seharusnya diterima, penerimaan, dan sisa tagihan tampil di sini.
+      </div>` : `<div class="alert ${b.jenis === 'kegiatan' ? 'warn' : 'info'} mt-3">${ui.icon(b.jenis === 'kegiatan' ? 'alert' : 'info')}<div>Belum ada Grup Iuran terhubung. ${b.jenis === 'kegiatan' ? `Saldo awal keseluruhan saat ini ${rupiah(Number(b.saldo_awal || 0))} dari saldo awal manual; ${includeActivityIncomes ? 'pemasukan transaksi biasa menambah saldo.' : 'pemasukan transaksi biasa disembunyikan dan tidak menambah saldo.'} Pengeluaran menguranginya.` : ''} Hubungkan grup melalui tombol <b>Grup Iuran</b> di Master BKU agar total seharusnya diterima, penerimaan, dan sisa tagihan tampil di sini.
         ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('link')}Buka Master BKU</a>` : ''}</div></div>`}
       ${b.jenis === 'kegiatan' ? `<div class="card mt-3">
         <div class="card-head"><div><h3>Pemantauan RAB Pengeluaran</h3>
@@ -378,19 +386,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <th style="width:44px">No</th><th style="width:110px">Tanggal</th><th>No. Bukti / Kategori</th><th>Keterangan / Uraian</th>
         <th class="num">Pemasukan (D)</th><th class="num">Pengeluaran (K)</th><th class="num">Saldo Berjalan</th><th class="right">Aksi</th>
       </tr></thead><tbody>
-        <tr data-opening-row style="background:#FFF8F2"><td></td><td colspan="3" class="t-strong">${usesIuranSaldo ? 'PENERIMAAN GRUP IURAN' : 'SALDO AWAL'} ${from ? 'per ' + tglID(from) : ''}</td>
+        <tr data-opening-row style="background:#FFF8F2"><td></td><td colspan="3" class="t-strong">${usesIuranSaldo ? 'SALDO AWAL KESELURUHAN' : 'SALDO AWAL'} ${from ? 'per ' + tglID(from) : ''}</td>
           <td class="num t-strong">${rupiah(d.opening)}</td><td></td><td class="num t-strong">${rupiah(d.opening)}</td><td></td></tr>
         ${tableRows}
       </tbody><tfoot><tr>
         <td colspan="4">${usesIuranSaldo ? 'SUMBER SALDO / PENGELUARAN' : 'JUMLAH'}</td>
-        <td class="num">${rupiah(d.opening + (usesIuranSaldo ? d.totalAdjIn : d.totalIn))}</td><td class="num">${rupiah(d.totalOut)}</td>
+        <td class="num">${rupiah(d.opening + d.totalAdjIn + d.totalIn)}</td><td class="num">${rupiah(d.totalOut)}</td>
         <td class="num">${rupiah(d.closing)}</td><td></td>
       </tr></tfoot></table></div>` : ui.emptyState('Belum ada transaksi pada filter ini', 'Ubah filter tanggal atau import data dari Excel.')}
       ${d.rows.length ? `<div class="small muted" style="margin-top:8px">${d.rows.length} baris ditampilkan berurutan dalam satu kotak — geser ke atas/bawah dan ke samping untuk melihat seluruh kolom.</div>` : ''}
       <p class="help mt-2">${hideActivityIncomes
-        ? 'Rincian pemasukan transaksi disembunyikan pada BKU Kegiatan, sedangkan saldo tetap bersumber dari penerimaan grup iuran dan dikurangi pengeluaran.'
+        ? 'Rincian pemasukan transaksi disembunyikan pada BKU Kegiatan. Saldo dihitung dari saldo awal manual + penerimaan grup iuran, lalu dikurangi pengeluaran.'
         : usesIuranSaldo
-        ? 'Kolom <b>Saldo Berjalan</b> memakai penerimaan grup iuran sebagai saldo sumber dan mengurangi pengeluaran. Pemasukan BKU tetap tercatat, tetapi tidak menambah saldo karena sudah tercermin pada grup iuran.'
+        ? 'Kolom <b>Saldo Berjalan</b> memakai saldo awal manual + penerimaan grup iuran + pemasukan transaksi non-iuran, lalu dikurangi pengeluaran.'
         : 'Kolom <b>Saldo Berjalan</b> dihitung dari Saldo Awal + akumulasi Pemasukan − Pengeluaran secara berurutan (tanggal, lalu urutan input).'} Setiap koreksi/hapus langsung menghitung ulang seluruh baris setelahnya.</p>
     </div>
 
@@ -406,7 +414,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     ${b.status === 'aktif' && c.can('bku', 'edit') ? ui.modal('mTutupBku', {
       title: 'Tutup BKU — ' + b.nama,
       body: `<div class="alert info">${ui.icon('info')}<div>Setelah ditutup, BKU terkunci: transaksi tidak dapat ditambah, diedit, atau dihapus.</div></div>
-        <div class="kv"><dt>${usesIuranSaldo ? 'Penerimaan grup iuran' : 'Saldo awal'}</dt><dd>${rupiah(usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : b.saldo_awal)}</dd>
+        <div class="kv"><dt>Saldo awal manual</dt><dd>${rupiah(b.saldo_awal)}</dd>
+          ${usesIuranSaldo ? `<dt>Penerimaan grup iuran</dt><dd>${rupiah(dbm.bkuIuranReceived(b.id))}</dd>` : ''}
+          <dt>Saldo awal keseluruhan</dt><dd>${rupiah(Number(b.saldo_awal || 0) + (usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0))}</dd>
           <dt>${usesIuranSaldo ? 'Pemasukan BKU (informasi)' : 'Total masuk'}</dt><dd>${rupiah(dbm.bkuTotals(b.id).masuk)}</dd>
         <dt>Total keluar</dt><dd>${rupiah(dbm.bkuTotals(b.id).keluar)}</dd><dt>Saldo akhir</dt><dd style="color:var(--o-700);font-size:15px">${rupiah(d.saldoAkhirTotal)}</dd></div>
         <form method="post" action="${c.base}/bku/tutup" id="fTutupBku">

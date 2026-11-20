@@ -134,19 +134,19 @@ async function follow(url, depth = 0) {
   ok('halaman publik menampilkan kolom Penerimaan & Pengeluaran', /Penerimaan/.test(r.text) && /Pengeluaran/.test(r.text));
   const publicOpeningRow = (r.text.match(/<tr data-opening-row[\s\S]*?<\/tr>/) || [''])[0];
   const publicTotalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
-  ok('BKU kegiatan tanpa grup memakai saldo sumber Rp0, bukan saldo awal manual',
-    /PENERIMAAN GRUP IURAN[\s\S]*?<td class="num t-strong">Rp 0<\/td>\s*<td><\/td><td class="num t-strong">Rp 0/.test(publicOpeningRow));
-  ok('pemasukan BKU Kegiatan disembunyikan tanpa menghapus transaksi',
-    publicTotalRow.includes('Rp 0') && publicTotalRow.includes('Rp 250.000') && publicTotalRow.includes('-Rp 250.000'));
-  ok('halaman publik menampilkan saldo negatif tanpa grup terhubung',
-    /Saldo Buku/.test(r.text) && /-Rp 250\.000/.test(r.text), 'pengeluaran mengurangi saldo sumber Rp0');
+  ok('BKU Kegiatan tanpa grup tetap memakai saldo awal manual',
+    /SALDO AWAL KESELURUHAN[\s\S]*?<td class="num t-strong">Rp 1\.500\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 1\.500\.000/.test(publicOpeningRow));
+  ok('saldo awal manual ditambah pengeluaran dan pemasukan biasa tidak dihitung ulang',
+    publicTotalRow.includes('Rp 1.500.000') && publicTotalRow.includes('Rp 250.000') && publicTotalRow.includes('Rp 1.250.000'));
+  ok('halaman publik menampilkan saldo awal manual setelah dikurangi pengeluaran',
+    /Saldo Buku/.test(r.text) && /Rp 1\.250\.000/.test(r.text));
   ok('transaksi pemasukan BKU Kegiatan tidak ditampilkan',
     !/Iuran UKK Kelas X/.test(r.text) && !!one("SELECT id FROM transaksi WHERE bku_id=? AND uraian='Iuran UKK Kelas X'", bku.id));
   ok('transaksi pengeluaran posted tampil', /Konsumsi rapat panitia UKK/.test(r.text));
   ok('transaksi PENDING tidak ditampilkan', !/Draf belum disetujui/.test(r.text));
   ok('halaman publik tidak dapat diindeks mesin pencari', /noindex/.test(r.text));
   ok('saldo berjalan tetap dihitung tanpa menampilkan pemasukan BKU',
-    !/Informasi · tidak menambah saldo/.test(r.text) && /-Rp 250\.000/.test(r.text));
+    !/Informasi · tidak menambah saldo/.test(r.text) && /Rp 1\.250\.000/.test(r.text));
 
   /* toggle nonaktif → 404 */
   r = await req('POST', '/bku/publik', { id: bku.id, aksi: 'toggle', aktif: '0', ta: ta.id });
@@ -221,14 +221,14 @@ async function follow(url, depth = 0) {
   ok('filter bulan menyembunyikan transaksi bulan lain',
     !/Penerimaan UKK September/.test(r.text) && !/Iuran UKK Kelas X/.test(r.text) && !/Pembelian ATK Oktober/.test(r.text));
   ok('filter bulan menampilkan ringkasan filter aktif', /Filter aktif: Bulan/.test(r.text) && /September 2026/.test(r.text));
-  ok('saldo awal periode September memasukkan pengeluaran sebelum periode (-Rp 250.000)',
-    /Saldo Sumber Grup Iuran/.test(r.text) && /-Rp 250\.000/.test(r.text));
+  ok('saldo awal periode September memasukkan saldo manual dan pengeluaran sebelumnya',
+    /Saldo Awal Periode/.test(r.text) && /Rp 1\.250\.000/.test(r.text));
   ok('pemasukan BKU tidak ditampilkan pada ringkasan filter',
     !/Penerimaan <b>Rp 500\.000<\/b>/.test(r.text) && /Pengeluaran <b>Rp 0<\/b>/.test(r.text));
-  ok('saldo akhir periode September tetap -Rp 250.000', /-Rp 250\.000/.test(r.text));
+  ok('saldo akhir periode September tetap Rp 1.250.000', /Rp 1\.250\.000/.test(r.text));
   const septemberTotalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
   ok('footer bulan September menampilkan sumber saldo dan saldo akhir sesuai filter',
-    septemberTotalRow.includes('-Rp 250.000') && septemberTotalRow.includes('Rp 0'));
+    septemberTotalRow.includes('Rp 1.250.000') && septemberTotalRow.includes('Rp 0'));
 
   /* ---- filter rentang tanggal ---- */
   r = await pub(urlBku2 + '?from=2026-09-01&to=2026-10-31');
@@ -237,8 +237,8 @@ async function follow(url, depth = 0) {
   ok('rentang tanggal memuat transaksi September & Oktober',
     !/Penerimaan UKK September/.test(r.text) && /Pembelian ATK Oktober/.test(r.text) && !/Iuran UKK Kelas X/.test(r.text));
   ok('rentang tanggal menampilkan keterangan Tanggal', /Filter aktif: Tanggal/.test(r.text));
-  ok('saldo awal rentang tetap menghitung pengeluaran sebelum filter', /-Rp 250\.000/.test(r.text));
-  ok('saldo akhir rentang mengurangi pengeluaran Oktober dari saldo sumber', /-Rp 350\.000/.test(r.text));
+  ok('saldo awal rentang tetap menghitung saldo manual dan pengeluaran sebelum filter', /Rp 1\.250\.000/.test(r.text));
+  ok('saldo akhir rentang mengurangi pengeluaran Oktober dari saldo awal', /Rp 1\.150\.000/.test(r.text));
   ok('total kaki tabel memakai hasil filter', /TOTAL PERIODE FILTER/.test(r.text));
 
   /* ---- filter hanya satu sisi (dari / sampai) ---- */
@@ -253,8 +253,9 @@ async function follow(url, depth = 0) {
   r = await pub(urlBku2 + '?from=2026-10-31&to=2026-09-01');
   ok('rentang tanggal terbalik dibetulkan otomatis', /\(1 dari 2 transaksi\)/.test(r.text));
   r = await pub(urlBku2 + '?from=2026-01-01&to=2026-01-31');
-  ok('rentang tanpa transaksi → empty state khusus filter', /Tidak ada transaksi pada periode ini/.test(r.text));
-  ok('saldo awal/akhir tetap konsisten saat hasil filter kosong', /Saldo Sumber Grup Iuran/.test(r.text));
+  ok('rentang tanpa transaksi tetap menyajikan saldo awal manual', /Saldo Awal Periode/.test(r.text)
+    && !/Tidak ada transaksi pada periode ini/.test(r.text));
+  ok('saldo awal/akhir tetap konsisten saat hasil filter kosong', /Rp 1\.500\.000/.test(r.text));
 
   /* ---- filter tahun pelajaran (hanya BKU bernama sama yang JUGA publik) ---- */
   run('INSERT INTO tahun_ajaran (nama,tanggal_mulai,tanggal_selesai,aktif) VALUES (?,?,?,0)',
@@ -269,14 +270,15 @@ async function follow(url, depth = 0) {
   r = await pub(urlBku2 + '?ta=' + taLain.id);
   ok('pilih TA lain → dialihkan ke token BKU tahun tsb (302)', r.status === 302 && r.loc.includes(tokenTa), r.status + ' ' + r.loc);
   const rTa = await pub(r.loc);
-  ok('BKU tahun pelajaran lain terbuka dengan tokennya sendiri', rTa.status === 200 && /Tahun Pelajaran 2097\/2098/.test(rTa.text));
+  ok('BKU tahun pelajaran lain terbuka dengan tokennya sendiri tanpa menampilkan pemasukan biasa',
+    rTa.status === 200 && /Tahun Pelajaran 2097\/2098/.test(rTa.text) && !/Iuran UKK Kelas X/.test(rTa.text));
 
   run('INSERT INTO tahun_ajaran (nama,tanggal_mulai,tanggal_selesai,aktif) VALUES (?,?,?,0)',
     '2096/2097', '2096-07-01', '2097-06-30');
   const taKosong = one("SELECT * FROM tahun_ajaran WHERE nama='2096/2097'");
   r = await pub(urlBku2 + '?ta=' + taKosong.id);
   ok('TA tanpa BKU publik → pesan jelas, data BKU aktif tetap tampil',
-    r.status === 200 && /belum dibagikan publik/.test(r.text) && /Iuran UKK Kelas X/.test(r.text));
+    r.status === 200 && /belum dibagikan publik/.test(r.text) && !/Iuran UKK Kelas X/.test(r.text));
 
   /* ==================================================================
      2. GRUP IURAN — TOGGLE, GENERATE, REKAP SISWA

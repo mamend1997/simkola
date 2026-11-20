@@ -1139,8 +1139,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <div class="hint">Terisi otomatis mengikuti urutan kode terakhir (U01, U02, … / K01, K02, …).</div></div>
       </div>
       <div class="field"><label>Tahun Ajaran</label><select name="tahun_ajaran_id">${ui.selectOptions(taList, b ? b.tahun_ajaran_id : taId)}</select></div>
-      <div class="field"><label>Saldo Awal</label>${ui.moneyInput('saldo_awal', b ? b.saldo_awal : 0)}
-        <div class="hint">Saldo BKU Kegiatan, serta BKU yang memiliki grup iuran sasaran, otomatis berasal dari penerimaan grup dikurangi pengeluaran. Saldo awal manual hanya dipakai jika tidak menggunakan sumber grup iuran.</div></div>
+      <div class="field"><label>Saldo Awal Manual</label>${ui.moneyInput('saldo_awal', b ? b.saldo_awal : 0)}
+        <div class="hint">Khusus BKU Kegiatan, saldo awal keseluruhan = saldo awal manual + penerimaan grup iuran sasaran. BKU Umum memakai saldo awal manual dan tetap menghitung setiap pemasukan transaksi.</div></div>
+      <div class="field"><label>Pemasukan BKU Kegiatan</label>
+        <input type="hidden" name="pemasukan_saldo" value="0">
+        <label class="check"><input type="checkbox" name="pemasukan_saldo" value="1" ${b && Number(b.pemasukan_saldo) === 1 ? 'checked' : ''}>
+          Pemasukan transaksi biasa menambah saldo</label>
+        <div class="hint">Khusus BKU Kegiatan. Pemasukan yang berasal dari pembayaran Grup Iuran tidak dihitung dua kali. BKU Umum selalu menghitung pemasukan transaksi.</div></div>
       <div class="alert info">${ui.icon('info')}<div>RAB BKU Kegiatan diisi sebagai rincian transaksi per Kode Rekening Belanja melalui tombol <b>RAB</b> pada daftar BKU.</div></div>
     </form>`;
 
@@ -1154,12 +1159,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           ${c.can('bku', 'create') ? ui.openModalBtn('mAdd', 'Tambah BKU') : ''}
         </div>
       </div>
-      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num">Saldo Awal</th><th class="num">Saldo Akhir</th><th class="num">RAB / Pengeluaran</th><th>Status</th><th>Publik</th><th class="right">Aksi</th></tr></thead><tbody>
+      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num">Saldo Awal Manual</th><th class="num">Penerimaan Grup Iuran</th><th class="num">Saldo Awal Keseluruhan</th><th>Pemasukan Menambah Saldo</th><th class="num">Saldo Akhir</th><th class="num">RAB / Pengeluaran</th><th>Status</th><th>Publik</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(b => {
       const saldo = dbm.bkuSaldo(b.id);
       const bkuTotals = dbm.bkuTotals(b.id);
       const linkedGroups = dbm.bkuIuranGroups(b.id);
-      const usesIuranSaldo = b.jenis === 'kegiatan' || linkedGroups.length > 0;
+      const usesIuranSaldo = b.jenis === 'kegiatan';
+      const saldoManual = Number(b.saldo_awal || 0);
+      const penerimaanGrup = usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0;
+      const saldoAwalKeseluruhan = saldoManual + penerimaanGrup;
       const rabSummary = b.jenis === 'kegiatan' ? dbm.bkuRabSummary(b.id) : null;
       const rab = rabSummary ? rabSummary.totalPagu : 0;
       const rabExceeded = rabSummary ? rabSummary.overCount > 0 : false;
@@ -1167,8 +1175,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <td class="t-sub mono">${esc(b.kode || '-')}</td>
           <td class="t-strong">${esc(b.nama)}</td>
           <td>${b.jenis === 'umum' ? ui.badge('Umum', 'blue') : ui.badge('Kegiatan', 'orange')}</td>
-          <td class="num">${rupiah(usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : b.saldo_awal)}
-            ${usesIuranSaldo ? '<div class="t-sub">dari grup iuran</div>' : ''}</td>
+          <td class="num">${rupiah(saldoManual)}</td>
+          <td class="num">${usesIuranSaldo ? rupiah(penerimaanGrup) : '—'}
+            ${usesIuranSaldo ? '<div class="t-sub">sudah diterima siswa</div>' : ''}</td>
+          <td class="num t-strong">${rupiah(saldoAwalKeseluruhan)}</td>
+          <td>${b.jenis === 'kegiatan'
+            ? Number(b.pemasukan_saldo) === 1 ? ui.badge('Ya', 'green') : ui.badge('Tidak', 'gray')
+            : ui.badge('Ya · BKU Umum', 'blue')}</td>
           <td class="num t-strong" style="color:${saldo === 0 ? 'var(--muted)' : 'var(--ink)'}">${rupiah(saldo)}</td>
           <td class="num">${b.jenis === 'kegiatan'
           ? `<span class="badge ${rabExceeded ? 'red' : rab > 0 ? 'green' : 'gray'}">${rab > 0 ? (rabExceeded ? 'Melebihi RAB' : 'Dalam RAB') : 'RAB belum diatur'}</span>
@@ -1216,12 +1229,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             title: 'Tutup BKU — ' + b.nama,
             body: `<div class="alert info">${ui.icon('info')}<div>Setelah ditutup, BKU <b>terkunci</b>: transaksi tidak dapat ditambah, diedit, atau dihapus. Super Admin/Bendahara masih dapat membuka kembali bila diperlukan.</div></div>
               <div class="kv">
-                <dt>${usesIuranSaldo ? 'Penerimaan grup iuran' : 'Saldo awal'}</dt>
-                <dd>${rupiah(usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : b.saldo_awal)}</dd>
-                <dt>${usesIuranSaldo ? 'Pemasukan BKU (informasi)' : 'Total pemasukan'}</dt><dd>${rupiah(dbm.bkuTotals(b.id).masuk)}</dd>
+                <dt>Saldo awal manual</dt><dd>${rupiah(b.saldo_awal)}</dd>
+                ${usesIuranSaldo ? `<dt>Penerimaan grup iuran</dt><dd>${rupiah(dbm.bkuIuranReceived(b.id))}</dd>` : ''}
+                <dt>Saldo awal keseluruhan</dt><dd>${rupiah(Number(b.saldo_awal || 0) + (usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0))}</dd>
+                <dt>${usesIuranSaldo ? 'Rincian Pemasukan Transaksi' : 'Total pemasukan'}</dt><dd>${rupiah(dbm.bkuTotals(b.id).masuk)}</dd>
                 <dt>Total pengeluaran</dt><dd>${rupiah(dbm.bkuTotals(b.id).keluar)}</dd>
                 <dt>Saldo akhir</dt><dd style="color:var(--o-700);font-size:15px">${rupiah(saldo)}</dd>
               </div>
+              ${usesIuranSaldo ? `<div class="hint mt-2">${Number(b.pemasukan_saldo) === 1
+                ? 'Pemasukan transaksi biasa menambah saldo; transaksi hasil posting Grup Iuran tidak dihitung dua kali.'
+                : 'Pemasukan transaksi biasa disembunyikan dari rincian BKU dan tidak menambah saldo; penerimaan grup iuran dihitung melalui sumber saldo.'}</div>` : ''}
               ${saldo !== 0 ? `<div class="alert warn mt-2">${ui.icon('alert')}<div>Saldo akhir belum Rp 0. Idealnya BKU ditutup saat saldo sudah nol, namun Anda tetap boleh menutup sekarang.</div></div>`
                 : `<div class="alert ok mt-2">${ui.icon('check')}<div>Saldo akhir sudah Rp 0 — BKU siap ditutup.</div></div>`}
               <form method="post" action="${c.base}/bku/tutup" id="fTutup${b.id}">
@@ -1251,6 +1268,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const isEdit = !!req.body.id;
     if (!guard(req, res, 'bku', isEdit ? 'edit' : 'create')) return;
     const { id, nama, jenis, kode, tahun_ajaran_id, saldo_awal } = req.body;
+    const incomeModeValues = [].concat(req.body.pemasukan_saldo || []);
+    const pemasukanSaldo = jenis === 'kegiatan'
+      ? (String(incomeModeValues[incomeModeValues.length - 1] || '0') === '1' ? 1 : 0)
+      : 1;
     if (!nama || !tahun_ajaran_id) return res.redirect(req.BASE + '/bku?err=' + encodeURIComponent('Nama dan tahun ajaran wajib diisi.'));
     // kode BKU otomatis bila kosong (U01, U02, … / K01, K02, …)
     const kodeFinal = String(kode || '').trim() || dbm.nextBkuKode(jenis);
@@ -1265,12 +1286,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         : req.body.rab !== undefined ? Math.max(0, lib.parseMoney(req.body.rab))
           : Math.max(0, Number(existing && existing.rab || 0));
     if (isEdit) {
-      db.prepare('UPDATE bku SET nama=?,jenis=?,kode=?,tahun_ajaran_id=?,saldo_awal=?,rab=? WHERE id=?')
-        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), rab, id);
+      db.prepare('UPDATE bku SET nama=?,jenis=?,kode=?,tahun_ajaran_id=?,saldo_awal=?,pemasukan_saldo=?,rab=? WHERE id=?')
+        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), pemasukanSaldo, rab, id);
     } else {
       const urut = db.prepare('SELECT COALESCE(MAX(urutan),0)+1 u FROM bku').get().u;
-      db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,rab,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,?,?,'aktif',?,?,?)")
-        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), rab, urut, nowStamp(), dbm.isAutoBkuNama(nama) ? 1 : 0);
+      db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,pemasukan_saldo,rab,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,?,?,?,'aktif',?,?,?)")
+        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), pemasukanSaldo, rab, urut, nowStamp(), dbm.isAutoBkuNama(nama) ? 1 : 0);
     }
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'bku', `${isEdit ? 'Edit' : 'Tambah'} BKU ${nama}`);
     res.redirect(req.BASE + '/bku?ta=' + tahun_ajaran_id + '&ok=' + encodeURIComponent('BKU disimpan.'));
@@ -1496,14 +1517,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const t = dbm.bkuTotals(b.id);
     const saldo = dbm.bkuSaldo(b.id);
     const usesIuranSaldo = dbm.bkuUsesIuranSaldo(b.id);
-    const saldoAwal = usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : Number(b.saldo_awal || 0);
+    const saldoManual = Number(b.saldo_awal || 0);
+    const penerimaanGrup = usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0;
+    const saldoAwal = saldoManual + penerimaanGrup;
     const body = `
       <p style="font-size:12.8px;text-align:justify;margin-top:14px">Pada hari ini, ${lib.tglID(b.ditutup_at || todayISO())}, telah dilakukan penutupan <b>${esc(b.nama)}</b>
       ${b.jenis === 'umum' ? '(Buku Kas Umum)' : '(Buku Kas Kegiatan Khusus)'} untuk Tahun Ajaran <b>${esc(ta.nama || '-')}</b> oleh Bendahara sekolah, dengan rincian sebagai berikut:</p>
       <table class="doc-tbl">
         <tbody>
-          <tr><td style="width:46%">${usesIuranSaldo ? 'Penerimaan Grup Iuran' : 'Saldo Awal'}</td><td class="num">${rupiah(saldoAwal)}</td></tr>
-          <tr><td>${usesIuranSaldo ? 'Pemasukan BKU (Informasi)' : 'Total Penerimaan / Pemasukan'}</td><td class="num">${rupiah(t.masuk)}</td></tr>
+          <tr><td style="width:46%">Saldo Awal Manual</td><td class="num">${rupiah(saldoManual)}</td></tr>
+          ${usesIuranSaldo ? `<tr><td>Penerimaan Grup Iuran</td><td class="num">${rupiah(penerimaanGrup)}</td></tr>` : ''}
+          <tr><td><b>Saldo Awal Keseluruhan</b></td><td class="num"><b>${rupiah(saldoAwal)}</b></td></tr>
+          <tr><td>${usesIuranSaldo ? 'Rincian Pemasukan Transaksi' : 'Total Penerimaan / Pemasukan'}</td><td class="num">${rupiah(t.masuk)}</td></tr>
           <tr><td>Total Pengeluaran</td><td class="num">${rupiah(t.keluar)}</td></tr>
           <tr><td><b>Saldo Akhir Buku Kas</b></td><td class="num"><b>${rupiah(b.saldo_akhir_tutup ?? saldo)}</b></td></tr>
         </tbody>
@@ -1512,6 +1537,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         ? 'adalah <b>Rp 0 (nol rupiah)</b> sehingga seluruh dana telah dipertanggungjawabkan dan buku kas dinyatakan <b>ditutup</b>.'
         : 'sesuai dengan catatan pembukuan dan dinyatakan <b>ditutup</b>. Sisa saldo diteruskan menjadi saldo awal periode berikutnya.'}</p>
       <p style="font-size:12.8px">Buku kas yang telah ditutup tidak dapat diubah kembali kecuali dibuka oleh Super Admin/Bendahara Utama.</p>
+      ${usesIuranSaldo ? `<p style="font-size:11px">${Number(b.pemasukan_saldo) === 1
+        ? 'Pemasukan transaksi biasa menambah saldo, sedangkan transaksi hasil posting Grup Iuran tidak dihitung dua kali.'
+        : 'Pemasukan transaksi biasa tidak menambah saldo; penerimaan grup iuran telah masuk pada saldo awal keseluruhan.'}</p>` : ''}
       ${ui.signBlock(c.settings, { tempat: '', tanggal: lib.tglID(b.ditutup_at || todayISO()) }).replace('<div class="sig"><div>Mengetahui,</div>', '<div class="sig"><div>Mengetahui,</div>')}`;
     res.html(ui.docPage({
       settings: c.settings, base: c.base,
@@ -1706,16 +1734,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       </div>
       ${rows.length ? `<form method="post" action="${c.base}/saldo-awal/save">
         <input type="hidden" name="ta" value="${taId}">
-        <div class="table-wrap"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num" style="width:200px">Saldo Awal (Rp)</th><th class="num">Saldo Saat Ini</th><th>Status</th></tr></thead><tbody>
+        <div class="table-wrap"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num" style="width:200px">Saldo Awal Manual (Rp)</th><th class="num">Penerimaan Grup Iuran</th><th class="num">Saldo Awal Keseluruhan</th><th class="num">Saldo Saat Ini</th><th>Status</th></tr></thead><tbody>
         ${rows.map(b => {
       const saldo = dbm.bkuSaldo(b.id);
       const usesIuranSaldo = dbm.bkuUsesIuranSaldo(b.id);
       const locked = b.status !== 'aktif';
       return `<tr><td class="mono">${esc(b.kode || '-')}</td><td class="t-strong">${esc(b.nama)}</td>
         <td>${b.jenis === 'umum' ? ui.badge('Umum', 'blue') : ui.badge('Kegiatan', 'orange')}</td>
-        <td class="num">${usesIuranSaldo
-          ? `${rupiah(dbm.bkuIuranReceived(b.id))}<div class="t-sub">otomatis dari grup iuran</div>`
-          : editable && !locked ? ui.moneyInput('sa_' + b.id, b.saldo_awal) : rupiah(b.saldo_awal)}</td>
+        <td class="num">${editable && !locked ? ui.moneyInput('sa_' + b.id, b.saldo_awal) : rupiah(b.saldo_awal)}</td>
+        <td class="num">${usesIuranSaldo ? rupiah(dbm.bkuIuranReceived(b.id)) : '—'}</td>
+        <td class="num t-strong">${rupiah(Number(b.saldo_awal || 0) + (usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0))}</td>
         <td class="num t-strong">${rupiah(saldo)}</td>
         <td>${ui.bkuStatusBadge(b.status)}</td></tr>`;
     }).join('')}</tbody></table></div>
@@ -1723,7 +1751,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       </form>` : ui.emptyState('Belum ada BKU pada tahun ajaran ini')}
       <div class="alert info mt-2">${ui.icon('info')}<div><b>Buku Pembantu Bank, Pajak, Tunai, Rekap BHP, dan Barang Modal tidak memiliki saldo awal.</b>
         Akun tersebut hanya menerima rekapitulasi otomatis dari transaksi dan dapat dilihat di menu <a href="${c.base}/laporan?r=pembantu"><b>Laporan → Buku Pembantu</b></a>.</div></div>
-      <div class="alert info mt-2">${ui.icon('info')}<div>Saldo BKU Kegiatan dan BKU yang memiliki grup iuran sasaran otomatis dihitung dari total penerimaan grup dikurangi pengeluaran. Saldo awal manual hanya berlaku pada BKU tanpa sumber grup iuran.</div></div>
+      <div class="alert info mt-2">${ui.icon('info')}<div>Khusus BKU Kegiatan, saldo awal keseluruhan adalah saldo awal manual ditambah penerimaan grup iuran. Anda dapat mengatur pada tiap BKU Kegiatan apakah pemasukan transaksi biasa di luar posting Grup Iuran ikut menambah saldo. Pada BKU Umum, setiap transaksi pemasukan tetap menambah saldo.</div></div>
       <p class="help mt-2">Saldo awal BKU yang sudah ditutup terkunci. Buka kembali BKU di menu Master BKU bila perlu penyesuaian.</p>
     </div>`;
     page(req, res, { title: 'Saldo Awal', sub: 'Saldo pembuka tiap buku kas', active: 'saldo_awal', content });
@@ -1738,7 +1766,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         if (!k.startsWith('sa_')) continue;
         const id = k.slice(3);
         const b = db.prepare('SELECT * FROM bku WHERE id=?').get(id);
-        if (!b || b.status !== 'aktif' || dbm.bkuUsesIuranSaldo(b.id)) continue;
+        if (!b || b.status !== 'aktif') continue;
         db.prepare('UPDATE bku SET saldo_awal=? WHERE id=?').run(lib.parseMoney(v), id);
         n++;
       }

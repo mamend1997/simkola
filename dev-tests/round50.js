@@ -89,6 +89,11 @@ async function req(method, url, body, noCookie = false) {
   run(`INSERT INTO transaksi (bku_id,tanggal,jenis,nominal,uraian,status,created_at)
     VALUES (?,?,'pemasukan',300000,'Pemasukan Informasional R50','posted',?)`,
     bkuId, '2026-08-03', '2026-08-03 08:00:00');
+  run(`INSERT INTO transaksi (bku_id,tanggal,jenis,nominal,uraian,status,created_at)
+    VALUES (?,?,'pemasukan',125000,'Posting Grup Iuran R50','posted',?)`,
+    bkuId, '2026-08-03', '2026-08-03 08:30:00');
+  const iuranTrxId = Number(one('SELECT last_insert_rowid() id').id);
+  run('UPDATE iuran_bayar SET transaksi_id=?,bku_id=? WHERE tagihan_id=?', iuranTrxId, bkuId, tagihanId);
   run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
     VALUES (?,?,?,'pengeluaran',?,'Belanja RAB R50','posted',?)`, bkuId, coaId, '2026-08-01', 700000, '2026-08-01 09:00:00');
   run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
@@ -99,13 +104,13 @@ async function req(method, url, body, noCookie = false) {
   const openingRow = (r.text.match(/<tr data-opening-row[\s\S]*?<\/tr>/) || [''])[0];
   const trxRows = Array.from(r.text.matchAll(/<tr id="trx\d+">[\s\S]*?<\/tr>/g), m => m[0]);
   const totalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
-  ok('saldo sumber BKU kegiatan berasal dari penerimaan grup, bukan saldo awal manual',
-    /PENERIMAAN GRUP IURAN[\s\S]*?<td class="num t-strong">Rp 125\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 125\.000/.test(openingRow));
+  ok('Saldo Awal Keseluruhan menjumlah saldo manual dan penerimaan grup',
+    /SALDO AWAL KESELURUHAN[\s\S]*?<td class="num t-strong">Rp 3\.275\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 3\.275\.000/.test(openingRow));
   ok('Detail BKU default menempatkan transaksi terbaru di paling bawah',
     trxRows.findIndex(x => x.includes('>Belanja RAB R50</div>'))
       < trxRows.findIndex(x => x.includes('>Belanja RAB R50 kedua</div>')));
-  ok('saldo akhir mengurangi pengeluaran dari penerimaan grup',
-    totalRow.includes('Rp 125.000') && totalRow.includes('Rp 1.200.000') && totalRow.includes('-Rp 1.075.000'));
+  ok('saldo akhir menghitung saldo manual + penerimaan grup - pengeluaran',
+    totalRow.includes('Rp 3.275.000') && totalRow.includes('Rp 1.200.000') && totalRow.includes('Rp 2.075.000'));
   ok('Detail BKU merangkum tagihan lintas tahun ajaran', r.status === 200
     && r.text.includes('Ringkasan Grup Iuran Terhubung')
     && r.text.includes('TA Historis R50')
@@ -115,15 +120,70 @@ async function req(method, url, body, noCookie = false) {
     && r.text.includes(`/iuran/grup/${grupId}`)
     && r.text.includes('Lihat Rincian Grup'));
   ok('detail menjelaskan sumber saldo grup dan tidak lagi menampilkan peringatan selisih',
-    r.text.includes('Saldo BKU bersumber langsung dari total')
+    r.text.includes('saldo awal manual ditambah total')
       && !r.text.includes('Peringatan: saldo BKU tidak sama dengan penerimaan grup iuran'));
   ok('pemasukan BKU Kegiatan tersembunyi di rincian tetapi tetap tersimpan',
     !r.text.includes('Pemasukan Informasional R50')
+      && !r.text.includes('Posting Grup Iuran R50')
       && !!one("SELECT id FROM transaksi WHERE bku_id=? AND uraian='Pemasukan Informasional R50'", bkuId));
+  run(`INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at)
+    VALUES ('BKU Umum R50','umum','U50',?,100000,'aktif',91,'2026-07-01 08:00:00')`, activeTa.id);
+  const bkuUmumId = Number(one('SELECT last_insert_rowid() id').id);
+  run(`INSERT INTO transaksi (bku_id,tanggal,jenis,nominal,uraian,status,created_at)
+    VALUES (?,?,'pemasukan',400000,'Penerimaan BKU Umum R50','posted',?)`,
+    bkuUmumId, activeTa.tanggal_mulai, `${activeTa.tanggal_mulai} 09:00:00`);
+  const umum = await req('GET', `/bku/${bkuUmumId}`);
+  const umumTotalRow = (umum.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('pemasukan pada BKU Umum tetap tampil dan menambah saldo awal manual',
+    umum.text.includes('Penerimaan BKU Umum R50')
+      && umumTotalRow.includes('Rp 500.000')
+      && /Saldo Akhir/.test(umum.text));
+  const masterBku = await req('GET', '/bku');
+  ok('Master BKU menampilkan saldo manual, penerimaan grup, dan saldo awal keseluruhan',
+    masterBku.text.includes('Saldo Awal Manual')
+      && masterBku.text.includes('Penerimaan Grup Iuran')
+      && masterBku.text.includes('Saldo Awal Keseluruhan')
+      && masterBku.text.includes('Pemasukan Menambah Saldo'));
+  r = await req('POST', '/bku/save', {
+    id: bkuId, nama: 'BKU RAB R50', jenis: 'kegiatan', kode: 'K50',
+    tahun_ajaran_id: activeTa.id, saldo_awal: '3150000', rab: '1000000', pemasukan_saldo: '1'
+  });
+  ok('pengecualian pemasukan transaksi BKU Kegiatan bisa diaktifkan per BKU',
+    r.status === 303 && Number(one('SELECT pemasukan_saldo FROM bku WHERE id=?', bkuId).pemasukan_saldo) === 1);
+  r = await req('GET', `/bku/${bkuId}`);
+  const enabledIncomeTotal = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('pemasukan BKU biasa terpilih tampil dan menambah saldo; posting iuran tidak dihitung dua kali',
+    r.text.includes('Pemasukan Informasional R50')
+      && !r.text.includes('Posting Grup Iuran R50')
+      && enabledIncomeTotal.includes('Rp 3.575.000')
+      && enabledIncomeTotal.includes('Rp 2.375.000'));
+  r = await req('POST', '/bku/publik', { id: String(bkuId), aksi: 'generate', ta: String(activeTa.id) });
+  const bkuPublicToken = String(one('SELECT public_token FROM bku WHERE id=?', bkuId).public_token || '');
+  r = await req('GET', `/publik/bku/${bkuPublicToken}`);
+  const publicEnabledTotal = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('pemasukan biasa BKU Kegiatan tampil di portal saat pengecualian aktif, tanpa dobel posting iuran',
+    r.status === 200 && r.text.includes('Pemasukan Informasional R50')
+      && !r.text.includes('Posting Grup Iuran R50')
+      && publicEnabledTotal.includes('Rp 3.575.000')
+      && publicEnabledTotal.includes('Rp 2.375.000'));
+  r = await req('POST', '/bku/save', {
+    id: bkuId, nama: 'BKU RAB R50', jenis: 'kegiatan', kode: 'K50',
+    tahun_ajaran_id: activeTa.id, saldo_awal: '3150000', rab: '1000000', pemasukan_saldo: '0'
+  });
+  ok('pengecualian pemasukan BKU Kegiatan dapat dimatikan kembali',
+    r.status === 303 && Number(one('SELECT pemasukan_saldo FROM bku WHERE id=?', bkuId).pemasukan_saldo) === 0);
+  r = await req('GET', `/publik/bku/${bkuPublicToken}`);
+  const publicDisabledTotal = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('portal menyembunyikan pemasukan biasa tetapi tetap menampilkan pengeluaran setelah pengecualian dimatikan',
+    r.status === 200 && !r.text.includes('Pemasukan Informasional R50')
+      && r.text.includes('Belanja RAB R50')
+      && publicDisabledTotal.includes('Rp 2.075.000'));
   r = await req('GET', `/bku/${bkuId}/berita-acara`);
-  ok('berita acara tutup BKU membedakan penerimaan grup dari pemasukan informasional',
-    r.status === 200 && r.text.includes('Penerimaan Grup Iuran')
-      && r.text.includes('Pemasukan BKU (Informasi)'));
+  ok('berita acara merinci saldo manual, penerimaan grup, dan saldo keseluruhan',
+    r.status === 200 && r.text.includes('Saldo Awal Manual')
+      && r.text.includes('Penerimaan Grup Iuran')
+      && r.text.includes('Saldo Awal Keseluruhan')
+      && r.text.includes('Rincian Pemasukan Transaksi'));
   ok('RAB lama tetap dibandingkan dengan total pengeluaran', r.text.includes('Melebihi RAB')
     && r.text.includes('Rp 200.000'));
   r = await req('GET', `/bku/${bkuId}/rab`);

@@ -65,6 +65,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       const sourceSaldo = dbm.bkuUsesIuranSaldo(b.id);
       const masuk = sourceSaldo
         ? dbm.bkuIuranReceived(b.id) + Number(b.masuk_penyesuaian || 0)
+          + (dbm.bkuIncomeEnabled(b.id) ? dbm.bkuRegularIncome(b.id) : 0)
         : Number(b.masuk || 0);
       return {
         nama: b.nama, masuk, keluar: Number(b.keluar || 0),
@@ -89,8 +90,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       let run = bkus.reduce((sum, b) => {
         const tx = beforeMap.get(Number(b.id)) || {};
         const dynamic = dbm.bkuUsesIuranSaldo(b.id);
-        const source = dynamic ? dbm.bkuIuranReceived(b.id, { before: startDate }) : Number(b.saldo_awal || 0);
-        return sum + source + Number(dynamic ? tx.masuk_penyesuaian || 0 : tx.masuk || 0) - Number(tx.keluar || 0);
+        const source = Number(b.saldo_awal || 0)
+          + (dynamic ? dbm.bkuIuranReceived(b.id, { before: startDate }) : 0);
+        const txIncomeBefore = dynamic && dbm.bkuIncomeEnabled(b.id)
+          ? dbm.bkuRegularIncome(b.id, { before: startDate }) : 0;
+        return sum + source + Number(dynamic ? tx.masuk_penyesuaian || 0 : tx.masuk || 0)
+          + txIncomeBefore - Number(tx.keluar || 0);
       }, 0);
       for (let i = 0; i < 12; i++) {
         const d = new Date(Date.UTC(sy, sm - 1 + i, 1));
@@ -112,6 +117,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
           const dynamic = dbm.bkuUsesIuranSaldo(b.id);
           const received = dynamic
             ? dbm.bkuIuranReceived(b.id, { from, to }) + Number(tx.masuk_penyesuaian || 0)
+              + (dbm.bkuIncomeEnabled(b.id) ? dbm.bkuRegularIncome(b.id, { from, to }) : 0)
             : Number(tx.masuk || 0);
           masuk += received;
           keluar += Number(tx.keluar || 0);
