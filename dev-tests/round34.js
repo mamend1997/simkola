@@ -191,10 +191,10 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   r = await req('POST', '/aset/pinjaman/tambah', { nama: 'Pinjaman Kegiatan Uji', saldo: '5000000', keterangan: 'Uji ronde 34' });
   ok('akun pinjaman kegiatan dibuat', r.status === 303 && /\/aset\/akun\//.test(r.loc), r.loc);
   const akun = db.prepare("SELECT * FROM aset WHERE nama='Pinjaman Kegiatan Uji'").get();
-  ok('akun pinjaman tersimpan di database', !!akun && akun.jenis === 'pinjaman');
+  ok('akun pinjaman tersimpan tanpa saldo awal', !!akun && akun.jenis === 'pinjaman' && Number(akun.saldo) === 0);
 
   await req('POST', `/aset/akun/${akun.id}/mutasi`, {
-    jenis: 'masuk', tanggal: today, nominal: '1500000', keterangan: 'Penerimaan pinjaman uji',
+    jenis: 'keluar', tanggal: today, nominal: '1500000', keterangan: 'Pencairan pinjaman uji',
     metode: 'transfer', nama_pihak: 'Koperasi Sekolah', no_bukti: 'AS/UJI/001'
   });
   const mutasi = db.prepare('SELECT * FROM pinjaman_mutasi WHERE aset_id=? ORDER BY id DESC LIMIT 1').get(akun.id);
@@ -202,6 +202,15 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
 
   r = await req('GET', `/aset/akun/${akun.id}`);
   ok('ledger pinjaman 200', r.status === 200);
+  ok('pencairan Keluar menghasilkan saldo positif tanpa saldo awal',
+    /Rp\s?1\.500\.000/.test(r.text) && !/Saldo Awal/.test(r.text));
+  const beforeOverpay = db.prepare('SELECT COUNT(*) c FROM pinjaman_mutasi WHERE aset_id=?').get(akun.id).c;
+  r = await req('POST', `/aset/akun/${akun.id}/mutasi`, {
+    jenis: 'masuk', tanggal: today, nominal: '2000000', keterangan: 'Pengembalian melebihi pencairan'
+  });
+  ok('pengembalian yang membuat saldo minus ditolak',
+    r.status === 303 && /err=/.test(r.loc)
+    && db.prepare('SELECT COUNT(*) c FROM pinjaman_mutasi WHERE aset_id=?').get(akun.id).c === beforeOverpay);
   ok('baris ledger punya tombol Cetak Kwitansi', /Cetak Kwitansi/.test(r.text)
     && new RegExp(`/aset/akun/${akun.id}/mutasi/${mutasi.id}/kwitansi`).test(r.text));
 

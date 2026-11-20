@@ -1596,7 +1596,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             <input type="hidden" name="id" value="${k.id}">
             <label class="toggle-switch" title="Tampilkan di Akun Aset Riil"><input type="checkbox" name="tampil_aset" value="1" ${k.tampil ? 'checked' : ''} onchange="this.form.submit()"><i></i></label>
           </form>` : ''))).join('')}
-          ${rowAset('Pinjaman Kegiatan', 'Saldo awal + mutasi pinjaman', null, null, pinjTotal,
+          ${rowAset('Pinjaman Kegiatan', 'Pencairan (keluar) − pengembalian (masuk) pada TA ini', null, null, pinjTotal,
       pinjamList.length ? `<span class="badge gray plain">${pinjamList.length} akun</span>` : '')}
           ${pinjamList.map(p => rowAset(esc(p.akun.nama) + (Number(p.akun.tampil) === 0 ? ' <span class="badge gray plain">disembunyikan</span>' : ''),
           `Buku bantu pinjaman · ${p.rows.length} transaksi`, null, null, p.saldo,
@@ -1705,7 +1705,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             ${editable ? ui.openModalBtn('mPinjamanBaru', 'Tambah Akun Pinjaman', 'btn btn-sm btn-primary') : ''}</div>
           ${pinjamList.length ? `<div class="list">${pinjamList.map(p => `<div class="list-row">
             <div style="min-width:0"><div class="nm">${esc(p.akun.nama)}</div>
-              <div class="mt">Saldo awal ${rupiah(p.awal)} · masuk ${rupiah(p.masuk)} · keluar ${rupiah(p.keluar)}</div></div>
+              <div class="mt">Pencairan / keluar ${rupiah(p.keluar)} · pengembalian / masuk ${rupiah(p.masuk)}</div></div>
             <div class="right nowrap" style="text-align:right">
               <div style="font-weight:800">${rupiah(p.saldo)}</div>
               <div class="toolbar" style="margin-top:6px">
@@ -1715,7 +1715,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
               </div>
             </div></div>`).join('')}</div>`
         : `<div class="help">Belum ada akun pinjaman kegiatan. Tambahkan akun seperti "Pinjaman Kegiatan Renovasi Lab".</div>`}
-          <div class="alert info mt-2">${ui.icon('info')}<div>Saldo akun pinjaman &amp; aset lain dihitung otomatis dari <b>saldo awal + transaksi masuk − transaksi keluar</b>, lalu langsung memperbarui Total Aset Riil pada dashboard &amp; laporan posisi keuangan.</div></div>
+          <div class="alert info mt-2">${ui.icon('info')}<div>Saldo Pinjaman Kegiatan dimulai dari <b>Rp0 pada setiap tahun ajaran</b>. Catat pencairan sebagai <b>Transaksi Keluar</b> (menambah saldo piutang) dan pengembalian sebagai <b>Transaksi Masuk</b> (mengurangi saldo). Saldo awal tahun sebelumnya tidak dibawa. Rumus Akun Aset Lainnya tetap saldo awal + masuk − keluar.</div></div>
         </div>
       </div>
     </div>
@@ -1733,8 +1733,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       body: `<form method="post" action="${c.base}/aset/pinjaman/tambah" id="fPinjamanBaru">
         <div class="field"><label>Nama Akun / Kegiatan Pinjaman</label>
           <input name="nama" required placeholder="Contoh: Pinjaman Kegiatan Renovasi Lab"></div>
-        <div class="field"><label>Saldo Awal (Rp)</label>${ui.moneyInput('saldo', '', 'placeholder="0"')}
-          <div class="hint">Boleh dikosongkan bila seluruh dana dicatat lewat transaksi masuk/keluar.</div></div>
+        <div class="alert info">${ui.icon('info')}<div>Saldo awal selalu Rp0. Catat pencairan pinjaman sebagai transaksi Keluar dan pengembalian sebagai transaksi Masuk.</div></div>
         <div class="field"><label>Keterangan</label><input name="keterangan" placeholder="Tujuan / penanggung jawab kegiatan"></div>
       </form>`,
       footer: `<button class="btn" data-close="mPinjamanBaru">Batal</button><button class="btn btn-primary" form="fPinjamanBaru">${ui.icon('save')}Simpan Akun Pinjaman</button>`
@@ -1744,9 +1743,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         title: 'Edit Nama Akun ' + (a.jenis === 'pinjaman' ? 'Pinjaman Kegiatan' : 'Aset'),
         body: `<form method="post" action="${c.base}/aset/akun/${a.id}/ubah" id="fAkun${a.id}">
           <div class="field"><label>Nama Akun</label><input name="nama" value="${esc(a.nama)}" required></div>
-          <div class="field"><label>Saldo Awal (Rp)</label>${ui.moneyInput('saldo_awal', a.awal)}</div>
+          ${a.jenis === 'pinjaman' ? `<div class="alert info">${ui.icon('info')}<div>Saldo awal Pinjaman Kegiatan tidak digunakan. Saldo dimulai dari Rp0 untuk tahun ajaran yang dipilih.</div></div>` :
+          `<div class="field"><label>Saldo Awal (Rp)</label>${ui.moneyInput('saldo_awal', a.awal)}</div>`}
           <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(a.keterangan)}"></div>
-          <div class="hint">Mengubah saldo awal akan menggeser saldo akhir akun ini. Riwayat transaksi tidak berubah.</div>
+          ${a.jenis === 'pinjaman' ? '' : '<div class="hint">Mengubah saldo awal akan menggeser saldo akhir akun ini. Riwayat transaksi tidak berubah.</div>'}
         </form>`,
         footer: `<button class="btn" data-close="mAkun${a.id}">Batal</button><button class="btn btn-primary" form="fAkun${a.id}">Simpan Perubahan</button>`
       })).join('') : ''}`;
@@ -1776,16 +1776,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     res.redirect(req.BASE + '/aset?ok=' + encodeURIComponent('Penyesuaian kas riil disimpan.'));
   });
 
-  /* saldo awal pinjaman kegiatan (manual) */
+  /* kompatibilitas endpoint saldo awal lama: pinjaman selalu mulai dari nol */
   post('/aset/save', (req, res) => {
     if (!guard(req, res, 'aset', 'edit')) return;
-    const val = lib.parseMoney(req.body.pinjaman);
     const ket = req.body.keterangan || '';
     const row = db.prepare("SELECT * FROM aset WHERE jenis='pinjaman' LIMIT 1").get();
-    if (row) db.prepare('UPDATE aset SET saldo=?,keterangan=? WHERE id=?').run(val, ket, row.id);
-    else db.prepare("INSERT INTO aset (nama,jenis,saldo,keterangan) VALUES ('Pinjaman Kegiatan','pinjaman',?,?)").run(val, ket);
-    dbm.logAudit(req.user, 'EDIT', 'aset', `Menyesuaikan saldo awal pinjaman kegiatan menjadi Rp ${lib.num(val)}`);
-    res.redirect(req.BASE + '/aset?ok=' + encodeURIComponent('Saldo awal pinjaman kegiatan diperbarui.'));
+    if (row) db.prepare('UPDATE aset SET saldo=0,keterangan=? WHERE id=?').run(ket, row.id);
+    else db.prepare("INSERT INTO aset (nama,jenis,saldo,keterangan) VALUES ('Pinjaman Kegiatan','pinjaman',0,?)").run(ket);
+    dbm.logAudit(req.user, 'EDIT', 'aset', 'Mengabaikan saldo awal lama pinjaman kegiatan; saldo awal tetap Rp0');
+    res.redirect(req.BASE + '/aset?ok=' + encodeURIComponent('Saldo awal Pinjaman Kegiatan tidak digunakan dan tetap Rp0.'));
   });
 
   /* akun aset riil lainnya */

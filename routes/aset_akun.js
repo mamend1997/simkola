@@ -16,6 +16,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     return db.prepare("SELECT * FROM aset WHERE id=? AND jenis IN ('pinjaman','lain')").get(id);
   }
   const backOf = akun => '/aset/akun/' + akun.id;
+  class PinjamanMutasiValidationError extends Error {}
+  function loanDateError(akun, req, tanggal) {
+    if (akun.jenis !== 'pinjaman') return null;
+    const taId = Number(akun.tahun_ajaran_id || ctx(req).taId || 0);
+    const date = String(tanggal || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Tanggal transaksi pinjaman tidak valid.';
+    if (taId) {
+      const range = dbm.taRange(dbm.tahunById(taId));
+      if (date < range.from || date > range.to) {
+        return `Tanggal transaksi harus berada dalam tahun ajaran ${range.from} sampai ${range.to}.`;
+      }
+    }
+    return null;
+  }
+  function loanBalanceError(akun, req, candidate, excludeId) {
+    if (akun.jenis !== 'pinjaman') return null;
+    const taId = Number(akun.tahun_ajaran_id || ctx(req).taId || 0);
+    const dateError = candidate && loanDateError(akun, req, candidate.tanggal);
+    if (dateError) return dateError;
+    const rows = dbm.asetLedger(akun.id, taId).rows.filter(m => Number(m.id) !== Number(excludeId));
+    if (candidate) rows.push({ ...candidate, id: candidate.id || Number.MAX_SAFE_INTEGER });
+    rows.sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)) || Number(a.id) - Number(b.id));
+    const saldo = rows.reduce((total, m) =>
+      total + (m.jenis === 'keluar' ? Number(m.nominal || 0) : -Number(m.nominal || 0)), 0);
+    return saldo < 0 ? 'Pengembalian tidak boleh melebihi saldo pencairan pinjaman pada tahun ajaran ini.' : null;
+  }
 
   /* ---------- halaman ledger ---------- */
   get('/aset/akun/:id', (req, res) => {
@@ -23,7 +49,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const c = ctx(req);
     const akun = loadAkun(req.params.id);
     if (!akun) return res.notFound();
-    const lg = dbm.asetLedger(akun.id);
+    const lg = dbm.asetLedger(akun.id, akun.tahun_ajaran_id || c.taId);
     const editable = c.can('aset', 'edit');
     const isPinjam = akun.jenis === 'pinjaman';
     const late = modalCollector();
@@ -37,7 +63,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const mutForm = (jenis, idForm) => `<form method="post" action="${back}/mutasi" id="${idForm}">
       <input type="hidden" name="jenis" value="${jenis}">
       <div class="alert ${jenis === 'masuk' ? 'ok' : 'warn'}" style="margin-bottom:14px">${ui.icon(jenis === 'masuk' ? 'up' : 'down')}
-        <div><b>Transaksi ${jenis === 'masuk' ? 'Masuk / Debet' : 'Keluar / Kredit'}</b> — saldo akun langsung diperbarui dan ikut mengubah Total Aset Riil.</div></div>
+        <div><b>Transaksi ${jenis === 'masuk' ? 'Masuk / Debet' : 'Keluar / Kredit'}</b> — ${isPinjam
+        ? (jenis === 'keluar' ? 'pencairan menambah saldo pinjaman; ' : 'pengembalian mengurangi saldo pinjaman; ')
+        : ''}saldo akun langsung diperbarui dan ikut mengubah Total Aset Riil.</div></div>
       <div class="row2">
         <div class="field"><label>Tanggal</label><input type="date" name="tanggal" value="${todayISO()}" required></div>
         <div class="field"><label>Jenis Transaksi</label>
@@ -82,8 +110,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
       <div class="card-head"><div><h3>${esc(akun.nama)}</h3>
         <div class="sub">${isPinjam ? 'Pinjaman Kegiatan' : 'Akun Aset Lainnya'} · buku bantu transaksi &amp; saldo berjalan${akun.keterangan ? ' · ' + esc(akun.keterangan) : ''}</div></div>
         ${ui.badge(isPinjam ? 'Pinjaman Kegiatan' : 'Aset Lain', isPinjam ? 'orange' : 'blue')}</div>
-      <div class="kpi-grid mb-3" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-        <div class="kpi ic-orange"><div class="ico">${ui.icon('wallet')}</div><div class="lbl">Saldo Awal</div><div class="val" style="font-size:18px">${rupiah(lg.awal)}</div></div>
+      <div class="kpi-grid mb-3" style="grid-template-columns:repeat(${isPinjam ? 3 : 4},minmax(0,1fr))">
+        ${isPinjam ? '' : `<div class="kpi ic-orange"><div class="ico">${ui.icon('wallet')}</div><div class="lbl">Saldo Awal</div><div class="val" style="font-size:18px">${rupiah(lg.awal)}</div></div>`}
         <div class="kpi ic-green"><div class="ico">${ui.icon('up')}</div><div class="lbl">Total Masuk (Debet)</div><div class="val" style="font-size:18px">${rupiah(lg.masuk)}</div></div>
         <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Total Keluar (Kredit)</div><div class="val" style="font-size:18px">${rupiah(lg.keluar)}</div></div>
         <div class="kpi ic-blue"><div class="ico">${ui.icon('bank')}</div><div class="lbl">Saldo Akhir</div><div class="val" style="font-size:18px">${rupiah(lg.saldo)}</div></div>
@@ -92,7 +120,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         <th style="width:44px">No</th><th style="width:110px">Tanggal</th><th>No. Bukti</th><th>Keterangan</th>
         <th class="num">Masuk / Debet</th><th class="num">Keluar / Kredit</th><th class="num">Saldo Berjalan</th><th class="right">Aksi</th>
       </tr></thead><tbody>
-        <tr style="background:#FFF8F2"><td></td><td colspan="4" class="t-strong">SALDO AWAL</td><td class="num">—</td><td class="num t-strong">${rupiah(lg.awal)}</td><td></td></tr>
+        ${isPinjam ? '' : `<tr style="background:#FFF8F2"><td></td><td colspan="4" class="t-strong">SALDO AWAL</td><td class="num">—</td><td class="num t-strong">${rupiah(lg.awal)}</td><td></td></tr>`}
         ${lg.rows.map((m, i) => `<tr>
           <td class="num t-sub">${i + 1}</td>
           <td class="nowrap">${tglID(m.tanggal)}</td>
@@ -139,7 +167,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
       footer: `<button class="btn" data-close="mEdit${m.id}">Batal</button><button class="btn btn-primary" form="fm${m.id}">Simpan Perubahan</button>`
     }) : ''}`).join('')}
       </tbody><tfoot><tr><td colspan="4">JUMLAH</td><td class="num">${rupiah(lg.masuk)}</td><td class="num">${rupiah(lg.keluar)}</td><td class="num">${rupiah(lg.saldo)}</td><td></td></tr></tfoot></table></div>`
-        : ui.emptyState('Belum ada transaksi pada akun ini', 'Gunakan tombol Transaksi Masuk / Transaksi Keluar untuk mencatat mutasi pertama.')}
+        : ui.emptyState('Belum ada transaksi pada akun ini', isPinjam
+          ? 'Catat pencairan pinjaman sebagai Transaksi Keluar. Saldo dimulai dari Rp0.'
+          : 'Gunakan tombol Transaksi Masuk / Transaksi Keluar untuk mencatat mutasi pertama.')}
       ${late.html()}
     </div>
     ${editable ? ui.modal('mImportMutasi', {
@@ -147,13 +177,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
       wide: true,
       body: `<form method="post" action="${back}/import" id="fImportMutasi">
         <div class="alert info">${ui.icon('info')}<div><b>Format kolom:</b> <code>TANGGAL | URAIAN | MASUK | KELUAR | NO BUKTI | KODE REKENING</code><br>
-          <b>MASUK</b> menambah saldo akun, <b>KELUAR</b> mengurangi. Kolom NO BUKTI, KODE REKENING, NAMA PIHAK, dan METODE opsional.
+          ${isPinjam
+          ? '<b>KELUAR</b> mencatat pencairan dan menambah saldo pinjaman; <b>MASUK</b> mencatat pengembalian dan mengurangi saldo. Saldo awal tahun ajaran selalu Rp0.'
+          : '<b>MASUK</b> menambah saldo akun, <b>KELUAR</b> mengurangi.'}
+          Kolom NO BUKTI, KODE REKENING, NAMA PIHAK, dan METODE opsional.
           Gunakan <a href="${back}/template"><b>Template Excel</b></a> agar nama kolom sesuai.</div></div>
         <div class="field"><label>Berkas (.xlsx / .csv, maks 10 MB)</label>
           <input type="hidden" name="file_b64" id="mutasi_b64">
           <input type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" data-b64="mutasi_b64" data-max="10">
           <div class="hint" id="mutasi_b64-info">Header baris dicari otomatis.</div></div>
-        <label class="check"><input type="checkbox" name="set_saldo_awal" value="1"> Baris "SALDO AWAL" pada file dijadikan saldo awal akun</label>
+        ${isPinjam ? '' : '<label class="check"><input type="checkbox" name="set_saldo_awal" value="1"> Baris "SALDO AWAL" pada file dijadikan saldo awal akun</label>'}
       </form>`,
       footer: `<a class="btn" href="${back}/template">${ui.icon('download')}Template</a>
         <button class="btn" data-close="mImportMutasi">Batal</button>
@@ -161,13 +194,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     }) + ui.modal('mMasuk', { title: 'Transaksi Masuk — ' + akun.nama, wide: true, body: mutForm('masuk', 'fMasuk') })
       + ui.modal('mKeluar', { title: 'Transaksi Keluar — ' + akun.nama, wide: true, body: mutForm('keluar', 'fKeluar') })
       + ui.modal('mNamaAkun', {
-        title: 'Edit Nama & Saldo Awal Akun',
+        title: isPinjam ? 'Edit Nama Akun Pinjaman' : 'Edit Nama & Saldo Awal Akun',
         body: `<form method="post" action="${back}/ubah" id="fNamaAkun">
           <div class="field"><label>Nama Akun / Kegiatan</label><input name="nama" value="${esc(akun.nama)}" required
             placeholder="Contoh: Pinjaman Kegiatan Renovasi Lab"></div>
-          <div class="field"><label>Saldo Awal (Rp)</label>${ui.moneyInput('saldo_awal', lg.awal)}</div>
+          ${isPinjam ? '' : `<div class="field"><label>Saldo Awal (Rp)</label>${ui.moneyInput('saldo_awal', lg.awal)}</div>`}
           <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(akun.keterangan || '')}"></div>
-          <div class="hint">Nama akun dapat diubah kapan saja sesuai nama kegiatan riil. Riwayat transaksi tetap utuh.</div>
+          <div class="hint">${isPinjam ? 'Saldo awal tidak digunakan; riwayat transaksi hanya dihitung pada tahun ajaran yang dipilih.' : 'Nama akun dapat diubah kapan saja sesuai nama kegiatan riil. Riwayat transaksi tetap utuh.'}</div>
         </form>`,
         footer: `<button class="btn" data-close="mNamaAkun">Batal</button><button class="btn btn-primary" form="fNamaAkun">${ui.icon('save')}Simpan</button>`
       }) : ''}
@@ -183,11 +216,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     if (!guard(req, res, 'aset', 'edit')) return;
     const nama = String(req.body.nama || '').trim();
     if (!nama) return res.redirect(req.BASE + '/aset?err=' + encodeURIComponent('Nama akun pinjaman wajib diisi.'));
-    const saldo = lib.parseMoney(req.body.saldo);
     const taRow = dbm.taOf(req) || dbm.activeTahun();
     const info = db.prepare("INSERT INTO aset (nama,jenis,saldo,keterangan,tahun_ajaran_id) VALUES (?, 'pinjaman', ?, ?, ?)")
-      .run(nama, saldo, String(req.body.keterangan || '').trim(), taRow ? taRow.id : null);
-    dbm.logAudit(req.user, 'TAMBAH', 'aset', `Menambah akun pinjaman kegiatan "${nama}" dengan saldo awal ${rupiah(saldo)}`);
+      .run(nama, 0, String(req.body.keterangan || '').trim(), taRow ? taRow.id : null);
+    dbm.logAudit(req.user, 'TAMBAH', 'aset', `Menambah akun pinjaman kegiatan "${nama}" dengan saldo awal Rp0`);
     res.redirect(req.BASE + '/aset/akun/' + info.lastInsertRowid + '?ok=' + encodeURIComponent('Akun pinjaman kegiatan dibuat.'));
   });
 
@@ -198,12 +230,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     if (!akun) return res.redirect(req.BASE + '/aset?err=' + encodeURIComponent('Akun aset tidak ditemukan.'));
     const nama = String(req.body.nama || '').trim();
     if (!nama) return res.redirect(req.BASE + backOf(akun) + '?err=' + encodeURIComponent('Nama akun wajib diisi.'));
-    const saldo = lib.parseMoney(req.body.saldo_awal);
+    const saldo = akun.jenis === 'pinjaman' ? 0 : lib.parseMoney(req.body.saldo_awal);
     db.prepare('UPDATE aset SET nama=?,saldo=?,keterangan=? WHERE id=?')
       .run(nama, saldo, String(req.body.keterangan || '').trim(), akun.id);
     dbm.logAudit(req.user, 'EDIT', 'aset',
-      `Mengubah akun aset "${akun.nama}" → "${nama}", saldo awal ${rupiah(akun.saldo)} → ${rupiah(saldo)}`);
-    res.redirect(req.BASE + backOf(akun) + '?ok=' + encodeURIComponent('Nama & saldo awal akun diperbarui.'));
+      `Mengubah akun aset "${akun.nama}" → "${nama}"${akun.jenis === 'pinjaman' ? ', saldo awal pinjaman tetap Rp0' : `, saldo awal ${rupiah(akun.saldo)} → ${rupiah(saldo)}`}`);
+    res.redirect(req.BASE + backOf(akun) + '?ok=' + encodeURIComponent(akun.jenis === 'pinjaman'
+      ? 'Nama akun diperbarui. Saldo awal pinjaman tetap Rp0.'
+      : 'Nama & saldo awal akun diperbarui.'));
   });
 
   /* ---------- tambah transaksi ---------- */
@@ -217,6 +251,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const tanggal = req.body.tanggal || todayISO();
     const jenis = req.body.jenis === 'masuk' ? 'masuk' : 'keluar';
     if (!(nominal > 0) || !ket) return res.redirect(back + '?err=' + encodeURIComponent('Nominal (> 0) dan uraian wajib diisi.'));
+    const saldoError = loanBalanceError(akun, req, { tanggal, jenis, nominal });
+    if (saldoError) return res.redirect(back + '?err=' + encodeURIComponent(saldoError));
 
     let buktiUrl = null;
     if (req.body.bukti_b64) {
@@ -251,6 +287,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const nominal = lib.parseMoney(req.body.nominal);
     const ket = String(req.body.keterangan || '').trim();
     if (!(nominal > 0) || !ket) return res.redirect(back + '?err=' + encodeURIComponent('Nominal (> 0) dan uraian wajib diisi.'));
+    const tanggal = req.body.tanggal || m.tanggal;
+    const jenis = req.body.jenis === 'masuk' ? 'masuk' : 'keluar';
+    const saldoError = loanBalanceError(akun, req, { id: m.id, tanggal, jenis, nominal }, m.id);
+    if (saldoError) return res.redirect(back + '?err=' + encodeURIComponent(saldoError));
     let buktiUrl = m.bukti_url;
     if (req.body.bukti_b64) {
       try {
@@ -262,7 +302,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
       }
     }
     db.prepare(`UPDATE pinjaman_mutasi SET tanggal=?,keterangan=?,jenis=?,nominal=?,no_bukti=?,nama_pihak=?,bukti_url=?,metode=?,coa_id=?,created_at=COALESCE(created_at,?) WHERE id=?`)
-      .run(req.body.tanggal || m.tanggal, ket, req.body.jenis === 'masuk' ? 'masuk' : 'keluar', nominal,
+      .run(tanggal, ket, jenis, nominal,
         String(req.body.no_bukti || '').trim() || m.no_bukti, String(req.body.nama_pihak || '').trim(), buktiUrl,
         req.body.metode === 'transfer' ? 'transfer' : 'tunai',
         req.body.coa_id ? Number(req.body.coa_id) : null, nowStamp(), m.id);
@@ -279,6 +319,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const m = db.prepare('SELECT * FROM pinjaman_mutasi WHERE id=?').get(req.body.id);
     const akun = m ? loadAkun(m.aset_id) : null;
     if (!m || !akun) return res.redirect(req.BASE + '/aset?err=' + encodeURIComponent('Transaksi aset tidak ditemukan.'));
+    const saldoError = loanBalanceError(akun, req, null, m.id);
+    if (saldoError) return res.redirect(req.BASE + backOf(akun) + '?err=' + encodeURIComponent(saldoError));
     dbm.trashAdd('pinjaman_mutasi', m, { user: req.user, label: `Transaksi aset ${akun.nama}: ${m.jenis} ${rupiah(m.nominal)}` });
     db.prepare('DELETE FROM pinjaman_mutasi WHERE id=?').run(m.id);
     dbm.logAudit(req.user, 'HAPUS', 'aset',
@@ -294,11 +336,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     guard(req, res, 'aset', 'view');
     const akun = loadAkun(req.params.id);
     if (!akun) return res.notFound();
+    const isPinjam = akun.jenis === 'pinjaman';
     const rows = [
       [{ v: 'TANGGAL', bold: true }, { v: 'URAIAN', bold: true }, { v: 'MASUK', bold: true }, { v: 'KELUAR', bold: true },
         { v: 'NO BUKTI', bold: true }, { v: 'KODE REKENING', bold: true }, { v: 'NAMA PIHAK', bold: true }, { v: 'METODE', bold: true }],
-      ['2026-07-05', 'Contoh: penerimaan pinjaman kegiatan', 2500000, '', 'AS/001/202607/001', '4.1.03', 'Koperasi Sekolah', 'transfer'],
-      ['2026-07-20', 'Contoh: pengembalian sebagian pinjaman', '', 500000, 'AS/001/202607/002', '9.1.04', 'Bendahara', 'tunai'],
+      ...(isPinjam ? [
+        ['2026-07-05', 'Contoh: pencairan pinjaman kegiatan', '', 2500000, 'AS/001/202607/001', '', 'Koperasi Sekolah', 'transfer'],
+        ['2026-07-20', 'Contoh: pengembalian sebagian pinjaman', 500000, '', 'AS/001/202607/002', '', 'Bendahara', 'tunai']
+      ] : [
+        ['2026-07-05', 'Contoh: penerimaan aset', 2500000, '', 'AS/001/202607/001', '4.1.03', 'Koperasi Sekolah', 'transfer'],
+        ['2026-07-20', 'Contoh: pengeluaran aset', '', 500000, 'AS/001/202607/002', '9.1.04', 'Bendahara', 'tunai']
+      ]),
       []
     ];
     const buf = lib.xlsxBuffer('Mutasi ' + String(akun.nama).slice(0, 20), rows, [14, 40, 14, 14, 22, 18, 24, 12]);
@@ -347,9 +395,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     for (const x of db.prepare('SELECT * FROM coa').all()) coaByKode[String(x.kode).trim()] = x.id;
     const ambil = (cells, key) => header.map[key] === undefined ? null : cells[header.map[key]];
     let masuk = 0, keluar = 0, dilewati = 0, saldoAwal = null;
-    const setSaldo = !!req.body.set_saldo_awal;
+    const isPinjam = akun.jenis === 'pinjaman';
+    const setSaldo = !isPinjam && !!req.body.set_saldo_awal;
 
-    db.transaction(() => {
+    try {
+      db.transaction(() => {
       for (let i = header.row + 1; i < sheet.rows.length; i++) {
         const cells = sheet.rows[i] || [];
         if (!cells.length) continue;
@@ -368,6 +418,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         const jenis = mNom ? 'masuk' : 'keluar';
         const nominal = mNom || kNom;
         const tanggal = X.parseDateCell(ambil(cells, 'tanggal')) || todayISO();
+        const periodError = loanDateError(akun, req, tanggal);
+        if (periodError) throw new PinjamanMutasiValidationError(periodError);
         const kode = String(X.cellText(ambil(cells, 'coa')) || '').trim();
         const coaId = coaByKode[kode] || null;
         const metode = /transfer|bank/i.test(X.cellText(ambil(cells, 'metode'))) ? 'transfer' : 'tunai';
@@ -382,11 +434,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         if (jenis === 'masuk') masuk++; else keluar++;
       }
       if (setSaldo && saldoAwal !== null) db.prepare('UPDATE aset SET saldo=? WHERE id=?').run(saldoAwal, akun.id);
-    })();
+      const saldoError = loanBalanceError(akun, req);
+      if (saldoError) throw new PinjamanMutasiValidationError(saldoError);
+      })();
+    } catch (e) {
+      if (e instanceof PinjamanMutasiValidationError) return res.redirect(back + '?err=' + encodeURIComponent(e.message));
+      throw e;
+    }
+    const saldoIgnored = isPinjam && saldoAwal !== null;
     dbm.logAudit(req.user, 'IMPORT', 'aset',
-      `Import ${masuk + keluar} transaksi (${masuk} masuk / ${keluar} keluar) pada akun ${akun.nama}${setSaldo && saldoAwal !== null ? `, saldo awal ${rupiah(saldoAwal)}` : ''}`);
+      `Import ${masuk + keluar} transaksi (${masuk} masuk / ${keluar} keluar) pada akun ${akun.nama}${setSaldo && saldoAwal !== null ? `, saldo awal ${rupiah(saldoAwal)}` : ''}${saldoIgnored ? ', saldo awal file pinjaman diabaikan' : ''}`);
     res.redirect(back + '?ok=' + encodeURIComponent(
-      `Import selesai: ${masuk} transaksi masuk, ${keluar} transaksi keluar${dilewati ? `, ${dilewati} baris dilewati` : ''}${setSaldo && saldoAwal !== null ? `, saldo awal ${rupiah(saldoAwal)}` : ''}.`));
+      `Import selesai: ${masuk} transaksi masuk, ${keluar} transaksi keluar${dilewati ? `, ${dilewati} baris dilewati` : ''}${setSaldo && saldoAwal !== null ? `, saldo awal ${rupiah(saldoAwal)}` : ''}${saldoIgnored ? ', saldo awal file diabaikan (pinjaman dimulai dari Rp0)' : ''}.`));
   });
 
   /* ---------- kompatibilitas tautan lama ---------- */
@@ -462,7 +521,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
     const c = ctx(req);
     const akun = loadAkun(req.params.id);
     if (!akun) return res.notFound();
-    const lg = dbm.asetLedger(akun.id);
+    const lg = dbm.asetLedger(akun.id, akun.tahun_ajaran_id || c.taId);
     const coaMap = {};
     for (const x of db.prepare('SELECT * FROM coa').all()) coaMap[x.id] = x.kode + ' ' + x.nama;
     const isPinjam = akun.jenis === 'pinjaman';
@@ -472,7 +531,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         <div class="small">${esc(akun.keterangan || '')}</div>
       </div>
       <div class="kv mb-2" style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:8px">
-        <div><b>Saldo Awal</b> ${rupiah(lg.awal)}</div>
+        ${isPinjam ? '' : `<div><b>Saldo Awal</b> ${rupiah(lg.awal)}</div>`}
         <div><b>Total Masuk</b> ${rupiah(lg.masuk)}</div>
         <div><b>Total Keluar</b> ${rupiah(lg.keluar)}</div>
         <div><b>Saldo Akhir</b> ${rupiah(lg.saldo)}</div>
@@ -482,7 +541,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
         <th>Uraian / Keterangan</th><th>Kode Rekening</th><th>Pihak</th><th style="width:60px">Metode</th>
         <th class="num" style="width:88px">Masuk</th><th class="num" style="width:88px">Keluar</th><th class="num" style="width:92px">Saldo</th>
       </tr></thead><tbody>
-        <tr><td></td><td colspan="6"><b>SALDO AWAL</b></td><td class="num">—</td><td class="num">—</td><td class="num"><b>${num(lg.awal)}</b></td></tr>
+        ${isPinjam ? '' : `<tr><td></td><td colspan="6"><b>SALDO AWAL</b></td><td class="num">—</td><td class="num">—</td><td class="num"><b>${num(lg.awal)}</b></td></tr>`}
         ${lg.rows.map((m, i) => `<tr>
           <td class="num">${i + 1}</td>
           <td>${tglID(m.tanggal)}</td>
@@ -506,14 +565,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia 
   /* ---------- export Excel ledger ---------- */
   get('/aset/akun/:id/export', (req, res) => {
     guard(req, res, 'aset', 'view');
+    const c = ctx(req);
     const akun = loadAkun(req.params.id);
     if (!akun) return res.notFound();
-    const lg = dbm.asetLedger(akun.id);
+    const lg = dbm.asetLedger(akun.id, akun.tahun_ajaran_id || c.taId);
     const coaMap = {};
     for (const x of db.prepare('SELECT * FROM coa').all()) coaMap[x.id] = x.kode + ' ' + x.nama;
+    const isPinjam = akun.jenis === 'pinjaman';
     const head = ['NO', 'TANGGAL', 'NO. BUKTI', 'URAIAN', 'KODE REKENING', 'NAMA PIHAK', 'METODE', 'MASUK', 'KELUAR', 'SALDO']
       .map(v => ({ v, bold: true }));
-    const rows = [['', '', '', 'SALDO AWAL', '', '', '', 0, 0, Number(lg.awal)]]
+    const rows = (isPinjam ? [] : [['', '', '', 'SALDO AWAL', '', '', '', 0, 0, Number(lg.awal)]])
       .concat(lg.rows.map((m, i) => [i + 1, m.tanggal, m.no_bukti || '', m.keterangan || '', coaMap[m.coa_id] || '',
         m.nama_pihak || '', m.metode === 'transfer' ? 'Transfer' : 'Tunai',
         m.jenis === 'masuk' ? Number(m.nominal) : 0, m.jenis === 'keluar' ? Number(m.nominal) : 0, Number(m.saldo)]))

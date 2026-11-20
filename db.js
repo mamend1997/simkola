@@ -2095,21 +2095,34 @@ function asetKas(taId) {
   };
 }
 /* ---------- buku bantu akun aset (pinjaman kegiatan & akun aset lainnya) ---------- */
-/** saldo akun aset = saldo awal (aset.saldo) + Σ mutasi masuk − Σ mutasi keluar */
+/** Saldo aset lain memakai saldo awal + masuk − keluar; pinjaman memakai keluar − masuk per TA. */
 function asetMutasi(asetId) {
   return db.prepare('SELECT * FROM pinjaman_mutasi WHERE aset_id=? ORDER BY tanggal, id').all(asetId);
 }
-function asetLedger(asetId) {
+function asetLedger(asetId, taId) {
   const akun = db.prepare("SELECT * FROM aset WHERE id=? AND jenis IN ('pinjaman','lain')").get(asetId);
   if (!akun) return { akun: null, awal: 0, masuk: 0, keluar: 0, saldo: 0, rows: [] };
-  const rows0 = asetMutasi(akun.id);
-  let run = Number(akun.saldo || 0);
+  const isPinjaman = akun.jenis === 'pinjaman';
+  const scopeTaId = Number(taId || akun.tahun_ajaran_id || 0);
+  let rows0 = asetMutasi(akun.id);
+  if (isPinjaman && scopeTaId) {
+    const range = taRange(tahunById(scopeTaId));
+    rows0 = rows0.filter(m => {
+      const tanggal = String(m.tanggal || '').slice(0, 10);
+      return tanggal >= range.from && tanggal <= range.to;
+    });
+  }
+  const awal = isPinjaman ? 0 : Number(akun.saldo || 0);
+  let run = awal;
   const rows = rows0.map(m => {
-    run += m.jenis === 'masuk' ? Number(m.nominal || 0) : -Number(m.nominal || 0);
+    const nominal = Number(m.nominal || 0);
+    run += isPinjaman
+      ? (m.jenis === 'keluar' ? nominal : -nominal)
+      : (m.jenis === 'masuk' ? nominal : -nominal);
     return { ...m, saldo: run };
   });
   return {
-    akun, awal: Number(akun.saldo || 0),
+    akun, awal,
     masuk: rows0.filter(r => r.jenis === 'masuk').reduce((s, r) => s + Number(r.nominal || 0), 0),
     keluar: rows0.filter(r => r.jenis === 'keluar').reduce((s, r) => s + Number(r.nominal || 0), 0),
     saldo: run, rows
@@ -2121,7 +2134,7 @@ function pinjamanList(taId, opts = {}) {
   const rows = taId
     ? db.prepare("SELECT * FROM aset WHERE jenis='pinjaman' AND (tahun_ajaran_id=? OR tahun_ajaran_id IS NULL)" + cond + " ORDER BY id").all(taId)
     : db.prepare("SELECT * FROM aset WHERE jenis='pinjaman'" + cond + " ORDER BY id").all();
-  return rows.map(a => asetLedger(a.id));
+  return rows.map(a => asetLedger(a.id, taId || a.tahun_ajaran_id));
 }
 function asetLain(taId, opts = {}) {
   const cond = opts.all ? '' : ' AND COALESCE(tampil,1)=1';
@@ -2138,19 +2151,21 @@ function asetLain(taId, opts = {}) {
 function asetNonKasTotal(taId) {
   const cond = taId ? ' AND (tahun_ajaran_id=? OR tahun_ajaran_id IS NULL)' : '';
   const args = taId ? [taId] : [];
-  const pinj = db.prepare(`SELECT COALESCE(SUM(saldo),0) s FROM aset WHERE jenis='pinjaman' AND COALESCE(tampil,1)=1${cond}`).get(...args).s;
+  const pinj = pinjamanList(taId).reduce((sum, p) =>
+    sum + (Number(p.akun.tampil === undefined ? 1 : p.akun.tampil) !== 0 ? Number(p.saldo || 0) : 0), 0);
   const lainAwal = db.prepare(`SELECT COALESCE(SUM(saldo),0) s FROM aset WHERE jenis='lain' AND COALESCE(tampil,1)=1${cond}`).get(...args).s;
   const mut = db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN m.jenis='masuk' THEN m.nominal ELSE 0 END),0) masuk,
       COALESCE(SUM(CASE WHEN m.jenis='keluar' THEN m.nominal ELSE 0 END),0) keluar
-    FROM pinjaman_mutasi m JOIN aset a ON a.id=m.aset_id WHERE a.jenis IN ('pinjaman','lain') AND COALESCE(a.tampil,1)=1${cond ? ' AND (a.tahun_ajaran_id=? OR a.tahun_ajaran_id IS NULL)' : ''}`).get(...args);
+    FROM pinjaman_mutasi m JOIN aset a ON a.id=m.aset_id WHERE a.jenis='lain' AND COALESCE(a.tampil,1)=1${cond ? ' AND (a.tahun_ajaran_id=? OR a.tahun_ajaran_id IS NULL)' : ''}`).get(...args);
   return Number(pinj || 0) + Number(lainAwal || 0) + Number(mut.masuk || 0) - Number(mut.keluar || 0);
 }
 /** akun pinjaman pertama (kompatibilitas modul lama) */
 function pinjamanAkun() {
   const acc = db.prepare("SELECT * FROM aset WHERE jenis='pinjaman' ORDER BY id LIMIT 1").get();
   if (!acc) return { akun: null, saldo: 0, awal: 0, masuk: 0, keluar: 0, mutasi: [] };
-  const lg = asetLedger(acc.id);
+  const ta = activeTahun();
+  const lg = asetLedger(acc.id, acc.tahun_ajaran_id || (ta && ta.id));
   return { akun: acc, awal: lg.awal, masuk: lg.masuk, keluar: lg.keluar, saldo: lg.saldo, mutasi: lg.rows };
 }
 function piutangSisa(id) {
@@ -2576,11 +2591,15 @@ function rolloverTa(prevTaId, newTaId, user) {
 
     // ---------- akun pinjaman & aset lain ----------
     for (const a of db.prepare("SELECT * FROM aset WHERE jenis IN ('pinjaman','lain') AND (tahun_ajaran_id=? OR tahun_ajaran_id IS NULL) ORDER BY id").all(prev.id)) {
-      const lg = asetLedger(a.id);
+      const lg = asetLedger(a.id, prev.id);
       const exist = db.prepare('SELECT id FROM aset WHERE jenis=? AND nama=? AND tahun_ajaran_id=?').get(a.jenis, a.nama, next.id);
-      if (exist) continue;
+      if (exist) {
+        if (a.jenis === 'pinjaman') db.prepare('UPDATE aset SET saldo=0 WHERE id=?').run(exist.id);
+        continue;
+      }
       db.prepare('INSERT INTO aset (nama,jenis,saldo,keterangan,tahun_ajaran_id) VALUES (?,?,?,?,?)')
-        .run(a.nama, a.jenis, lg.saldo, 'Saldo awal dari tahun ajaran ' + (prev.nama || '-'), next.id);
+        .run(a.nama, a.jenis, a.jenis === 'pinjaman' ? 0 : lg.saldo,
+          a.jenis === 'pinjaman' ? (a.keterangan || '') : 'Saldo awal dari tahun ajaran ' + (prev.nama || '-'), next.id);
       nAset++;
     }
 
