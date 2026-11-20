@@ -132,6 +132,12 @@ async function follow(url, depth = 0) {
     return nama && r.text.includes(nama);
   })());
   ok('halaman publik menampilkan kolom Penerimaan & Pengeluaran', /Penerimaan/.test(r.text) && /Pengeluaran/.test(r.text));
+  const publicOpeningRow = (r.text.match(/<tr data-opening-row[\s\S]*?<\/tr>/) || [''])[0];
+  const publicTotalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('saldo awal portal tampil di kolom penerimaan dan saldo berjalan',
+    /SALDO AWAL[\s\S]*?<td class="num t-strong">Rp 1\.500\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 1\.500\.000/.test(publicOpeningRow));
+  ok('total pemasukan portal mencakup saldo awal dan cocok dengan saldo akhir',
+    publicTotalRow.includes('Rp 2.250.000') && publicTotalRow.includes('Rp 250.000') && publicTotalRow.includes('Rp 2.000.000'));
   ok('halaman publik menampilkan saldo buku', /Saldo Buku/.test(r.text) && /2\.000\.000/.test(r.text), 'harusnya 1.500.000+750.000-250.000');
   ok('transaksi posted tampil (Iuran UKK Kelas X)', /Iuran UKK Kelas X/.test(r.text));
   ok('transaksi pengeluaran posted tampil', /Konsumsi rapat panitia UKK/.test(r.text));
@@ -216,6 +222,9 @@ async function follow(url, depth = 0) {
     /Saldo Awal Periode/.test(r.text) && /2\.000\.000/.test(r.text));
   ok('penerimaan & pengeluaran periode dihitung ulang (500.000 / 0)', /Penerimaan <b>Rp 500\.000<\/b>/.test(r.text) && /Pengeluaran <b>Rp 0<\/b>/.test(r.text));
   ok('saldo akhir periode September = Rp 2.500.000', /2\.500\.000/.test(r.text));
+  const septemberTotalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('footer bulan September memasukkan saldo awal periode ke penerimaan',
+    septemberTotalRow.includes('Rp 2.500.000') && septemberTotalRow.includes('Rp 0') && septemberTotalRow.includes('Rp 2.500.000'));
 
   /* ---- filter rentang tanggal ---- */
   r = await pub(urlBku2 + '?from=2026-09-01&to=2026-10-31');

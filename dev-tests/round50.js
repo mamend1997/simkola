@@ -91,7 +91,14 @@ async function req(method, url, body, noCookie = false) {
   run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
     VALUES (?,?,?,'pengeluaran',?,'Belanja RAB R50 kedua','posted',?)`, bkuId, coaId, '2026-08-02', 500000, '2026-08-02 09:00:00');
 
+  run('UPDATE bku SET saldo_awal=3150000 WHERE id=?', bkuId);
   r = await req('GET', `/bku/${bkuId}`);
+  const openingRow = (r.text.match(/<tr data-opening-row[\s\S]*?<\/tr>/) || [''])[0];
+  const totalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
+  ok('saldo awal ditampilkan pada kolom pemasukan dan saldo berjalan',
+    /SALDO AWAL[\s\S]*?<td class="num t-strong">Rp 3\.150\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 3\.150\.000/.test(openingRow));
+  ok('total pemasukan sudah mencakup saldo awal sehingga rekonsiliasi tepat',
+    totalRow.includes('Rp 3.150.000') && totalRow.includes('Rp 1.200.000') && totalRow.includes('Rp 1.950.000'));
   ok('Detail BKU merangkum tagihan lintas tahun ajaran', r.status === 200
     && r.text.includes('Ringkasan Grup Iuran Terhubung')
     && r.text.includes('TA Historis R50')

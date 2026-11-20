@@ -171,13 +171,16 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     const hasil = berjalan.filter(cocok);
     const masukPeriode = hasil.filter(t => t.jenis === 'pemasukan').reduce((s, t) => s + Number(t.nominal || 0), 0);
     const keluarPeriode = hasil.filter(t => t.jenis === 'pengeluaran').reduce((s, t) => s + Number(t.nominal || 0), 0);
-    /* saldo awal periode = saldo berjalan tepat sebelum transaksi pertama hasil filter */
-    const saldoAwalPeriode = hasil.length ? hasil[0].saldo - signed(hasil[0]) : (berjalan.length ? berjalan[berjalan.length - 1].saldo : Number(b.saldo_awal || 0));
+    /* saldo awal periode = saldo BKU sebelum tanggal mulai filter */
+    const saldoAwalPeriode = from
+      ? Number(b.saldo_awal || 0) + semua.filter(t => String(t.tanggal) < from).reduce((s, t) => s + signed(t), 0)
+      : Number(b.saldo_awal || 0);
     const saldoAkhirPeriode = saldoAwalPeriode + masukPeriode - keluarPeriode;
 
     const totalHal = Math.max(1, Math.ceil(hasil.length / PER_HAL));
     const hal = Math.min(totalHal, Math.max(1, Number(qp('hal') || 1) || 1));
     const rows = hasil.slice((hal - 1) * PER_HAL, hal * PER_HAL);
+    const showLedger = hasil.length > 0 || saldoAwalPeriode !== 0;
     const linkKe = (row, n) => bkuHref(row, { bulan, from, to, hal: n > 1 ? n : '' });
 
     /* pilihan bulan = bulan yang benar-benar punya transaksi (terbaru di atas) */
@@ -253,11 +256,15 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <span class="t-sub" style="font-weight:600;font-size:12px">(${hasil.length}${filterAktif ? ` dari ${berjalan.length}` : ''} transaksi)</span></h3>
       ${ringkasFilter ? `<div class="alert info" style="margin-bottom:10px">${ui.icon('info')}<div>Filter aktif: ${ringkasFilter}.
         Menampilkan <b>${hasil.length}</b> transaksi · Penerimaan <b>${rupiah(masukPeriode)}</b> · Pengeluaran <b>${rupiah(keluarPeriode)}</b>.</div></div>` : ''}
-      ${rows.length ? `<div class="table-wrap sticky-head"><table>
+      ${showLedger ? `<div class="table-wrap sticky-head"><table>
         <thead><tr>
           <th style="width:38px">No</th><th>Tanggal</th><th>No. Bukti</th><th>Uraian</th>
           <th class="num">Penerimaan</th><th class="num">Pengeluaran</th><th class="num">Saldo</th>
         </tr></thead><tbody>
+        ${hal === 1 ? `<tr data-opening-row style="background:#FFF8F2">
+          <td></td><td colspan="3" class="t-strong">SALDO AWAL ${from ? 'per ' + tglID(from) : ''}</td>
+          <td class="num t-strong">${rupiah(saldoAwalPeriode)}</td><td></td><td class="num t-strong">${rupiah(saldoAwalPeriode)}</td>
+        </tr>` : ''}
         ${rows.map((t, i) => `<tr>
           <td class="num">${(hal - 1) * PER_HAL + i + 1}</td>
           <td class="nowrap">${esc(tglID(t.tanggal))}</td>
@@ -270,7 +277,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         </tbody>
         <tfoot><tr>
           <td colspan="4">TOTAL${filterAktif ? ' PERIODE FILTER' : ''}</td>
-          <td class="num">${rupiah(masukPeriode)}</td><td class="num">${rupiah(keluarPeriode)}</td>
+          <td class="num">${rupiah(saldoAwalPeriode + masukPeriode)}</td><td class="num">${rupiah(keluarPeriode)}</td>
           <td class="num">${rupiah(saldoAkhirPeriode)}</td>
         </tr></tfoot></table></div>
         ${totalHal > 1 ? `<div class="toolbar mt-2" style="justify-content:center;flex-wrap:wrap">

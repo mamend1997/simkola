@@ -111,6 +111,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const totalHal = 1;
     const hal = 1;
     const pageRows = d.rows;
+    const showLedger = d.rows.length > 0 || Number(d.opening || 0) !== 0;
     const keepQs = new URLSearchParams();
     if (from) keepQs.set('from', from);
     if (to) keepQs.set('to', to);
@@ -357,16 +358,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <button class="btn btn-primary">${ui.icon('search')}Terapkan</button>
         ${from || to || q || jenis ? `<a class="btn" href="${c.base}/bku/${b.id}">Reset</a>` : ''}
       </form>
-      ${d.rows.length ? `<div class="table-scroll tall"><table><thead><tr>
+      ${showLedger ? `<div class="table-scroll tall"><table><thead><tr>
         <th style="width:44px">No</th><th style="width:110px">Tanggal</th><th>No. Bukti / Kategori</th><th>Keterangan / Uraian</th>
         <th class="num">Pemasukan (D)</th><th class="num">Pengeluaran (K)</th><th class="num">Saldo Berjalan</th><th class="right">Aksi</th>
       </tr></thead><tbody>
-        <tr style="background:#FFF8F2"><td></td><td colspan="4" class="t-strong">SALDO AWAL ${from ? 'per ' + tglID(from) : ''}</td>
-          <td></td><td></td><td class="num t-strong">${rupiah(d.opening)}</td><td></td></tr>
+        <tr data-opening-row style="background:#FFF8F2"><td></td><td colspan="3" class="t-strong">SALDO AWAL ${from ? 'per ' + tglID(from) : ''}</td>
+          <td class="num t-strong">${rupiah(d.opening)}</td><td></td><td class="num t-strong">${rupiah(d.opening)}</td><td></td></tr>
         ${tableRows}
       </tbody><tfoot><tr>
         <td colspan="4">JUMLAH</td>
-        <td class="num">${rupiah(d.totalIn)}</td><td class="num">${rupiah(d.totalOut)}</td>
+        <td class="num">${rupiah(d.opening + d.totalIn)}</td><td class="num">${rupiah(d.totalOut)}</td>
         <td class="num">${rupiah(d.closing)}</td><td></td>
       </tr></tfoot></table></div>` : ui.emptyState('Belum ada transaksi pada filter ini', 'Ubah filter tanggal atau import data dari Excel.')}
       ${d.rows.length ? `<div class="small muted" style="margin-top:8px">${d.rows.length} baris ditampilkan berurutan dalam satu kotak — geser ke atas/bawah dan ke samping untuk melihat seluruh kolom.</div>` : ''}
