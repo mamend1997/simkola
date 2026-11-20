@@ -31,8 +31,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       run += t.jenis === 'pemasukan' ? t.nominal : -t.nominal;
       return { ...t, no: i + 1, saldo: run };
     });
-    // default: transaksi terbaru di paling atas (saldo berjalan tiap baris tetap benar)
-    if (sort !== 'asc') list = list.slice().reverse().map((t, i) => ({ ...t, no: i + 1 }));
+    if (sort === 'desc') list = list.slice().reverse().map((t, i) => ({ ...t, no: i + 1 }));
     return {
       b, opening, rows: list, closing: run,
       totalIn: rows.filter(r => r.jenis === 'pemasukan').reduce((s, r) => s + r.nominal, 0),
@@ -68,7 +67,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const to = req.query.get('to') || '';
     const q = req.query.get('q') || '';
     const jenis = req.query.get('jenis') || '';
-    const sort = req.query.get('sort') === 'asc' ? 'asc' : 'desc';
+    const sort = req.query.get('sort') === 'desc' ? 'desc' : 'asc';
     const d = ledger(b.id, from, to, q, jenis, sort);
     const ta = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(b.tahun_ajaran_id) || {};
     const linkedIuran = dbm.bkuIuranGroups(b.id);

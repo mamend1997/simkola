@@ -94,9 +94,13 @@ async function req(method, url, body, noCookie = false) {
   run('UPDATE bku SET saldo_awal=3150000 WHERE id=?', bkuId);
   r = await req('GET', `/bku/${bkuId}`);
   const openingRow = (r.text.match(/<tr data-opening-row[\s\S]*?<\/tr>/) || [''])[0];
+  const trxRows = Array.from(r.text.matchAll(/<tr id="trx\d+">[\s\S]*?<\/tr>/g), m => m[0]);
   const totalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
   ok('saldo awal ditampilkan pada kolom pemasukan dan saldo berjalan',
     /SALDO AWAL[\s\S]*?<td class="num t-strong">Rp 3\.150\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 3\.150\.000/.test(openingRow));
+  ok('Detail BKU default menempatkan transaksi terbaru di paling bawah',
+    trxRows.findIndex(x => x.includes('>Belanja RAB R50</div>'))
+      < trxRows.findIndex(x => x.includes('>Belanja RAB R50 kedua</div>')));
   ok('total pemasukan sudah mencakup saldo awal sehingga rekonsiliasi tepat',
     totalRow.includes('Rp 3.150.000') && totalRow.includes('Rp 1.200.000') && totalRow.includes('Rp 1.950.000'));
   ok('Detail BKU merangkum tagihan lintas tahun ajaran', r.status === 200
