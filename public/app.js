@@ -480,14 +480,15 @@
     }
 
     const guides = {
-      identitas: { n: 1, title: 'Lengkapi identitas sekolah', text: 'Isi nama dan alamat sekolah. Identitas ini digunakan pada laporan, kuitansi, dan halaman portal publik.' },
-      'tahun-ajaran': { n: 2, title: 'Atur tahun ajaran', text: 'Pilih tahun ajaran yang sedang berjalan. Data kelas, siswa, dan iuran akan mengikuti tahun ajaran yang dipilih.' },
-      kelas: { n: 3, title: 'Siapkan data kelas', text: 'Tambahkan kelas untuk tahun ajaran aktif. Setelah itu, siswa dapat ditempatkan pada kelas yang sesuai.' },
-      siswa: { n: 4, title: 'Masukkan data siswa', text: 'Tambahkan siswa satu per satu atau gunakan fitur impor. Pastikan penempatan tahun ajaran dan kelasnya benar.' },
-      pegawai: { n: 5, title: 'Masukkan data pegawai', text: 'Lengkapi master pegawai untuk menggunakan payroll, honor, serta fitur terkait kepegawaian.' },
-      bku: { n: 6, title: 'Siapkan buku kas', text: 'Periksa atau tambahkan BKU aktif pada tahun ajaran ini sebelum mencatat transaksi.' },
-      coa: { n: 7, title: 'Periksa kode rekening', text: 'Kode rekening membantu mengelompokkan transaksi dan menyusun laporan keuangan.' },
-      iuran: { n: 8, title: 'Buat grup iuran', text: 'Tambahkan grup dan nominal iuran bila sekolah akan mengelola tagihan siswa di SIMKOLA.' }
+      identitas: { n: 1, title: 'Lengkapi identitas sekolah', text: 'Isi nama, alamat, dan kontak sekolah. Identitas ini digunakan pada laporan, kuitansi, dan halaman portal publik.' },
+      'tahun-ajaran': { n: 2, title: 'Atur tahun ajaran', text: 'Pastikan periode dan tanggal tahun ajaran aktif benar sebelum menambahkan kelas, siswa, atau transaksi.' },
+      kelas: { n: 3, title: 'Siapkan kelas dan tingkat', text: 'Tambahkan kelas untuk tahun ajaran aktif. Setelah itu, siswa dapat ditempatkan pada kelas yang sesuai.' },
+      siswa: { n: 4, title: 'Masukkan data siswa', text: 'Tambahkan siswa satu per satu atau gunakan fitur impor. Pastikan status dan penempatan tahun ajaran/kelasnya benar.' },
+      bku: { n: 5, title: 'Siapkan BKU dan saldo awal', text: 'Periksa saldo awal dan aturan pemasukan tiap BKU. Jika penerimaan grup iuran harus menambah saldo BKU tertentu, atur BKU sasaran pada grup iuran.' },
+      coa: { n: 6, title: 'Periksa kode rekening', text: 'Pastikan rekening pemasukan dan pengeluaran tersedia agar transaksi dapat dicatat dan dilaporkan dengan benar.' },
+      iuran: { n: 7, title: 'Buat grup iuran dan tentukan tujuannya', text: 'Atur nominal tagihan, lalu pilih BKU sasaran di pengaturan grup bila penerimaannya harus menambah saldo BKU. Pembayaran akan mengikuti tujuan tersebut.' },
+      pegawai: { n: 8, title: 'Masukkan data pegawai', text: 'Tahap ini opsional untuk pembukuan dasar. Lengkapi master pegawai bila akan menggunakan payroll, honor, atau fitur kepegawaian.' },
+      transaksi: { n: 9, title: 'Catat transaksi pertama', text: 'Setelah BKU dan kode rekening siap, masukkan transaksi pertama untuk memulai pembukuan.' }
     };
     const params = new URLSearchParams(location.search);
     const guideId = params.get('panduan');
@@ -1255,12 +1256,16 @@ function terbilang(n) {
       const picked = $$('input[name="ids"]').filter(b => b.form === src && b.checked && !b.disabled);
       const holder = modal.querySelector('[data-mass-ids]');
       const summary = modal.querySelector('[data-mass-summary]');
+      const bkuWrap = modal.querySelector('[data-mass-bku-wrap]');
+      const nonBkuBtn = modal.querySelector('[data-mass-nonbku]');
       const list = picked.map(b => String(b.value || '')).filter(Boolean);
       const totalIds = list.reduce((n, v) => n + v.split(',').filter(Boolean).length, 0);
       if (!list.length) {
         // modal tetap dibuka agar pengguna tahu harus mencentang kelompok penerimaan lebih dulu
         if (holder) holder.innerHTML = '';
         if (summary) summary.textContent = 'Belum ada kelompok yang dipilih — centang dulu kelompok penerimaan pada tabel, lalu klik lagi.';
+        if (bkuWrap) bkuWrap.hidden = false;
+        if (nonBkuBtn) nonBkuBtn.hidden = false;
         modal.classList.add('show');
         document.body.style.overflow = 'hidden';
         return;
@@ -1272,9 +1277,32 @@ function terbilang(n) {
       if (summary) {
         summary.textContent = `${list.length} kelompok penerimaan terpilih · ${totalIds} pembayaran siswa akan diproses.`;
       }
+      if (bkuWrap) bkuWrap.hidden = picked.length > 0 && picked.every(b => b.dataset.targetBku);
+      if (nonBkuBtn) nonBkuBtn.hidden = picked.length > 0 && picked.every(b => b.dataset.nonbkuAllowed === '0');
       modal.classList.add('show');
       document.body.style.overflow = 'hidden';
     });
+  });
+
+  $$('[data-ta-rollover]').forEach(rollover => {
+    const form = rollover.form;
+    const copy = form && form.querySelector('[data-ta-copy-bku]');
+    const wrap = form && form.querySelector('[data-ta-copy-bku-wrap]');
+    const state = form && form.querySelector('[data-ta-bku-copy-state]');
+    if (!copy || !wrap || !state) return;
+    const sync = () => {
+      copy.disabled = rollover.checked;
+      if (rollover.checked) copy.checked = false;
+      wrap.classList.toggle('is-disabled', rollover.checked);
+      state.textContent = rollover.checked
+        ? 'Daftar BKU otomatis dibuat oleh rollover; opsi salin daftar saja tidak diperlukan.'
+        : (copy.checked
+          ? 'Daftar BKU akan disalin dengan saldo awal Rp0.'
+          : 'BKU tidak disalin; Anda dapat membuatnya sendiri setelah tahun ajaran dibuat.');
+    };
+    rollover.addEventListener('change', sync);
+    copy.addEventListener('change', sync);
+    sync();
   });
 
   /* ===== grup iuran: jenis & mode nominal ===== */
@@ -1735,6 +1763,7 @@ function terbilang(n) {
     const nInput = modal ? modal.querySelector('[data-bulk-n]') : null;
     const defaultDate = modal ? modal.querySelector('[data-bulk-date]') : null;
     const defaultBku = modal ? modal.querySelector('[data-bulk-bku]') : null;
+    const defaultBkuWrap = modal ? modal.querySelector('[data-bulk-bku-wrap]') : null;
     const bkuOptions = defaultBku ? Array.from(defaultBku.options).map(o => `<option value="${o.value}">${o.textContent.replace(/</g, '')}</option>`).join('') : '';
     const thousands = v => (v ? Number(v).toLocaleString('id-ID') : '');
     bulkBtn.addEventListener('click', () => {
@@ -1744,6 +1773,8 @@ function terbilang(n) {
         const sisa = Number(c.dataset.sisa || 0);
         const label = (c.dataset.label || c.value).replace(/&/g, '&amp;').replace(/</g, '&lt;');
         const targetBku = c.dataset.bku || '';
+        const targetBkuLabel = (c.dataset.bkuLabel || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        const nonBkuAllowed = c.dataset.nonbkuAllowed !== '0';
         return `<tr>
           <td><input type="hidden" name="key_${i}" value="${c.value}"><div class="t-strong">${label}</div>
             <div class="t-sub">Sisa ${'Rp ' + thousands(sisa)}</div></td>
@@ -1751,10 +1782,12 @@ function terbilang(n) {
           <td><select name="metode_${i}"><option value="tunai">Tunai</option><option value="transfer">Transfer</option></select></td>
           <td><input type="text" inputmode="numeric" name="jumlah_${i}" value="${thousands(sisa)}" data-money data-bulk-money></td>
           <td><input type="text" inputmode="numeric" name="potongan_${i}" value="" data-money data-bulk-money></td>
-          <td>${targetBku ? `<input type="hidden" name="bku_${i}" value="${targetBku}">` : ''}
-            <select name="bku_${i}" data-bulk-row-bku data-target-bku="${targetBku}" ${targetBku ? 'disabled' : ''}>${bkuOptions}</select>
-            ${targetBku ? '<div class="t-sub">BKU sasaran grup</div>' : ''}</td>
-          <td class="center"><input type="checkbox" name="nonbku_${i}" value="1" data-bulk-nonbku></td>
+          <td>${targetBku
+            ? `<input type="hidden" name="bku_${i}" value="${targetBku}"><span class="t-strong">${targetBkuLabel}</span><div class="t-sub">Tujuan Grup Iuran</div>`
+            : `<select name="bku_${i}" data-bulk-row-bku>${bkuOptions}</select>`}</td>
+          <td class="center">${nonBkuAllowed
+            ? `<input type="checkbox" name="nonbku_${i}" value="1" data-bulk-nonbku>`
+            : '<span class="t-sub" title="Tidak tersedia untuk BKU sasaran ini">—</span>'}</td>
         </tr>`;
       }).join('');
       nInput.value = String(checked.length);
@@ -1762,10 +1795,13 @@ function terbilang(n) {
       if (defaultBku) rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => {
         if (!sel.dataset.targetBku) sel.value = defaultBku.value || '';
       });
+      if (defaultBkuWrap) defaultBkuWrap.hidden = !checked.some(c => !c.dataset.bku);
       rowsHost.querySelectorAll('[data-bulk-nonbku]').forEach(chk => chk.addEventListener('change', () => {
         const sel = chk.closest('tr').querySelector('[data-bulk-row-bku]');
-        sel.disabled = chk.checked;
-        sel.style.opacity = chk.checked ? '.55' : '1';
+        if (sel) {
+          sel.disabled = chk.checked;
+          sel.style.opacity = chk.checked ? '.55' : '1';
+        }
       }));
       if (defaultDate) defaultDate.onchange = () => rowsHost.querySelectorAll('input[type=date]').forEach(d => { d.value = defaultDate.value; });
       if (defaultBku) defaultBku.onchange = () => rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => {

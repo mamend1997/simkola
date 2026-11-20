@@ -91,6 +91,13 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   const openGroups = (r.text.match(/class="nav-group open"/g) || []).length;
   ok('akordeon: hanya SATU grup menu terbuka', openGroups <= 1, 'jumlah=' + openGroups);
   ok('sidebar memuat data-navgroup untuk akordeon', /data-navgroup="/.test(r.text));
+  const setupOrder = ['data-setup-step="identitas"', 'data-setup-step="tahun-ajaran"', 'data-setup-step="kelas"',
+    'data-setup-step="siswa"', 'data-setup-step="bku"', 'data-setup-step="coa"']
+    .map(x => r.text.indexOf(x));
+  ok('dashboard menyajikan urutan setup sekolah yang praktis', setupOrder.every((v, i) => v >= 0 && (!i || v > setupOrder[i - 1])));
+  ok('tahapan iuran dan pegawai dipisahkan sebagai lanjutan opsional',
+    r.text.includes('Tahapan lanjutan (opsional)') && r.text.includes('Grup iuran &amp; BKU sasaran'));
+  ok('panduan dashboard menjelaskan BKU sasaran dan alur transaksi', r.text.includes('BKU sasarannya') && r.text.includes('transaksi pertama'));
 
   /* ================= 2. KODE BKU OTOMATIS ================= */
   const before = all("SELECT kode FROM bku WHERE kode LIKE 'U%'").map(x => Number((/(\d+)$/.exec(x.kode) || [0, 0])[1]) || 0);
@@ -110,7 +117,7 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   const namaBkuTa1 = all('SELECT nama FROM bku WHERE tahun_ajaran_id=? ORDER BY urutan, id', ta.id).map(x => x.nama);
   r = await req('POST', '/tahun-ajaran/save', {
     nama: '2099/2100', tanggal_mulai: '2099-07-01', tanggal_selesai: '2100-06-30',
-    salin_bku: '1', salin_master: '1', rollover: '1'
+    salin_master: '1', rollover: '1'
   });
   ok('tambah tahun ajaran 303', r.status === 303, 'status=' + r.status + ' ' + r.loc);
   const taBaru = one("SELECT * FROM tahun_ajaran WHERE nama='2099/2100'");
@@ -121,7 +128,10 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
     'ta1=' + namaBkuTa1.length + ' baru=' + bkuTaBaru.length);
   r = await req('GET', '/tahun-ajaran');
   ok('form Tambah TA tidak lagi memakai centang 17 BKU standar', !/name="buat_bku"/.test(r.text));
-  ok('form Tambah TA memakai opsi salin BKU', /name="salin_bku"/.test(r.text));
+  ok('rollover menyiapkan BKU tanpa perlu opsi salin daftar yang terpisah',
+    /name="salin_bku"/.test(r.text) && r.text.includes('Daftar BKU otomatis dibuat oleh rollover'));
+  ok('form TA menjelaskan transaksi lama tidak disalin',
+    r.text.includes('Transaksi lama tetap di tahun asal, tidak disalin.'));
 
   /* siapkan data iuran uji pada TA aktif */
   const now = '2026-01-05 09:00:00';

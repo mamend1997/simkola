@@ -212,10 +212,46 @@ async function req(method, url, body, noCookie = false) {
     (await req('GET', '/bku')).text.includes(`/bku/${bkuId}/rab`));
 
   r = await req('GET', `/iuran/data/${siswaId}?ta=${oldTa.id}`);
-  ok('BKU terhubung jadi default pada pembayaran dan pilihan item', r.status === 200
-    && new RegExp(`<option value="${bkuId}" selected>`).test(r.text)
+  ok('BKU sasaran grup ditampilkan sebagai tujuan tetap tanpa dropdown pembayaran', r.status === 200
+    && r.text.includes(`name="bku_id" value="${bkuId}"`)
+    && !r.text.includes('<select name="bku_id"')
     && new RegExp(`data-bku="${bkuId}"`).test(r.text)
-    && r.text.includes('pilihan dikunci'));
+    && /data-nonbku-allowed="0"/.test(r.text)
+    && !r.text.includes('name="nonbku"'));
+  const bayarCountBefore = Number(one('SELECT COUNT(*) c FROM iuran_bayar WHERE tagihan_id=?', tagihanId).c);
+  r = await req('POST', '/iuran/bayar', {
+    tagihan_id: String(tagihanId), tanggal: '2025-08-01', jumlah: '10000', potongan: '0',
+    metode: 'tunai', bku_id: String(bkuId), nonbku: '1', back: `/iuran/data/${siswaId}?ta=${oldTa.id}`
+  });
+  ok('server menolak Non-BKU palsu untuk BKU sasaran yang pemasukan transaksinya nonaktif',
+    r.status === 303 && r.loc.includes('err=') && Number(one('SELECT COUNT(*) c FROM iuran_bayar WHERE tagihan_id=?', tagihanId).c) === bayarCountBefore);
+  r = await req('POST', '/iuran/bayar-item', {
+    n: '1', key_0: `g:${tagihanId}`, tanggal_0: '2025-08-01', jumlah_0: '10000',
+    bku_0: String(bkuId), nonbku_0: '1', back: `/iuran/data/${siswaId}?ta=${oldTa.id}`
+  });
+  ok('server juga menolak Non-BKU pada pembayaran item massal yang dimanipulasi',
+    r.status === 303 && r.loc.includes('err=') && Number(one('SELECT COUNT(*) c FROM iuran_bayar WHERE tagihan_id=?', tagihanId).c) === bayarCountBefore);
+  r = await req('POST', '/iuran/bayar', {
+    tagihan_id: String(tagihanId), tanggal: '2025-08-01', jumlah: '10000', potongan: '0',
+    metode: 'tunai', bku_id: String(secondBkuId), back: `/iuran/data/${siswaId}?ta=${oldTa.id}`
+  });
+  const enforcedTarget = one('SELECT * FROM iuran_bayar WHERE tagihan_id=? ORDER BY id DESC LIMIT 1', tagihanId);
+  ok('server tetap memakai BKU sasaran grup meski POST mengirim BKU lain',
+    r.status === 303 && !!enforcedTarget && enforcedTarget.status === 'pending' && Number(enforcedTarget.bku_id) === bkuId);
+  if (enforcedTarget) run('DELETE FROM iuran_bayar WHERE id=?', enforcedTarget.id);
+  r = await req('POST', '/iuran/bayar-item', {
+    n: '1', key_0: `g:${tagihanId}`, tanggal_0: '2025-08-01', jumlah_0: '10000',
+    bku_0: String(secondBkuId), nonbku_0: '', back: `/iuran/data/${siswaId}?ta=${oldTa.id}`
+  });
+  const enforcedItemTarget = one('SELECT * FROM iuran_bayar WHERE tagihan_id=? ORDER BY id DESC LIMIT 1', tagihanId);
+  ok('pembayaran massal juga tidak dapat mengganti BKU sasaran grup',
+    r.status === 303 && !!enforcedItemTarget && enforcedItemTarget.status === 'pending' && Number(enforcedItemTarget.bku_id) === bkuId);
+  if (enforcedItemTarget) run('DELETE FROM iuran_bayar WHERE id=?', enforcedItemTarget.id);
+  run('UPDATE bku SET pemasukan_saldo=1 WHERE id=?', bkuId);
+  r = await req('GET', `/iuran/data/${siswaId}?ta=${oldTa.id}`);
+  ok('Non-BKU tersedia kembali bila pemasukan transaksi BKU sasaran diaktifkan',
+    r.status === 200 && r.text.includes('name="nonbku"') && !r.text.includes('<select name="bku_id"'));
+  run('UPDATE bku SET pemasukan_saldo=0 WHERE id=?', bkuId);
   r = await req('GET', `/iuran?ta=${activeTa.id}`);
   ok('form grup iuran menyediakan pilihan BKU dan default BKU Umum untuk SPP',
     r.status === 200 && r.text.includes('name="bku_sasaran_id"')
@@ -231,6 +267,9 @@ async function req(method, url, body, noCookie = false) {
   r = await editGroup('');
   ok('edit grup iuran dapat menghapus BKU sasaran', r.status === 303
     && !one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId));
+  r = await req('GET', `/iuran/data/${siswaId}?ta=${oldTa.id}`);
+  ok('dropdown BKU kembali muncul hanya bila grup belum memiliki tujuan',
+    r.status === 200 && r.text.includes('<select name="bku_id"') && r.text.includes('name="nonbku"'));
   r = await req('POST', '/bku/grup-iuran', { bku_id: secondBkuId, grup_id: String(grupId) });
   ok('Menghubungkan ulang grup memindahkannya dari BKU lama', r.status === 303
     && Number(one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId).bku_id) === secondBkuId);

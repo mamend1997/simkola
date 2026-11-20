@@ -1206,6 +1206,10 @@ html[data-mode="dark"] .welcome-ico{background:#14432B;color:#4ADE80}
 
 /* ============ penyiapan awal & panduan sorot SIMKOLA ============ */
 .setup-card{border-color:var(--o-200);background:linear-gradient(145deg,#fff 0%,var(--o-50) 100%)}
+.setup-transfer{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.72)}
+.setup-transfer h4{margin:4px 0 8px;font-size:13px}
+.setup-transfer .check{margin:7px 0}
+.setup-transfer .is-disabled{opacity:.58}
 .setup-progress{display:flex;align-items:center;gap:12px;margin:0 0 14px}
 .setup-progress .prog{flex:1}
 .setup-progress>b{min-width:42px;text-align:right;color:var(--o-700);font-size:13px}
@@ -1231,6 +1235,7 @@ html[data-mode="dark"] .welcome-ico{background:#14432B;color:#4ADE80}
 .guide-tip p{font-size:12.5px;line-height:1.55;margin:9px 0 14px}
 .guide-tip-actions{display:flex;justify-content:flex-end;gap:8px}
 html[data-mode="dark"] .setup-card{background:linear-gradient(145deg,#201B2E 0%,#2A2032 100%);border-color:#5A3D58}
+html[data-mode="dark"] .setup-transfer{background:rgba(36,31,53,.72);border-color:#514568}
 html[data-mode="dark"] .setup-row,html[data-mode="dark"] .guide-tip{background:#241F35;border-color:#514568;color:var(--ink)}
 html[data-mode="dark"] .setup-welcome-icon{background:#3A2946;color:#FDBA74}
 @media(max-width:620px){

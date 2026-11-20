@@ -122,21 +122,39 @@ const today = new Date().toISOString().slice(0, 10);
     ok('baris item mengikuti ceklis', await page.locator('#mBayarItem tbody tr').count() === 2, String(await page.locator('#mBayarItem tbody tr').count()));
     const jumlah = await page.locator('#mBayarItem input[name="jumlah_0"]').inputValue();
     ok('jumlah terisi otomatis dari sisa tagihan', /^\d{1,3}(\.\d{3})*$/.test(jumlah) && Number(jumlah.replace(/\./g, '')) > 0, jumlah);
-    ok('field tanggal/metode/potongan/BKU per item ada',
+    const itemTarget0 = await page.locator('input[name="item"]').nth(8).getAttribute('data-bku');
+    const itemTarget1 = await page.locator('input[name="item"]').nth(9).getAttribute('data-bku');
+    ok('field tanggal/metode/potongan per item ada',
       await page.locator('#mBayarItem input[name="tanggal_0"]').count() === 1 &&
       await page.locator('#mBayarItem select[name="metode_0"]').count() === 1 &&
-      await page.locator('#mBayarItem input[name="potongan_0"]').count() === 1 &&
-      await page.locator('#mBayarItem select[name="bku_0"]').count() === 1);
-    await page.locator('#mBayarItem input[name="nonbku_1"]').check();
-    const disabled = await page.locator('#mBayarItem select[name="bku_1"]').isDisabled();
-    ok('centang Non-BKU menonaktifkan pilihan BKU baris itu', disabled);
+      await page.locator('#mBayarItem input[name="potongan_0"]').count() === 1);
+    ok('BKU sasaran grup dipakai tanpa dropdown, grup lain tetap dapat memilih BKU',
+      itemTarget0
+        ? await page.locator('#mBayarItem input[name="bku_0"]').count() === 1 && await page.locator('#mBayarItem select[name="bku_0"]').count() === 0
+        : await page.locator('#mBayarItem select[name="bku_0"]').count() === 1,
+      `target=${itemTarget0 || 'none'}`);
+    const nonBkuAllowed = (await page.locator('input[name="item"]').nth(9).getAttribute('data-nonbku-allowed')) !== '0';
+    if (nonBkuAllowed) {
+      await page.locator('#mBayarItem input[name="nonbku_1"]').check();
+      const bkuField = page.locator('#mBayarItem select[name="bku_1"]');
+      ok('Non-BKU tersedia; pilihan BKU hanya dinonaktifkan bila berupa dropdown', await bkuField.count() === 0 || await bkuField.isDisabled());
+    } else {
+      ok('Non-BKU disembunyikan sesuai pengaturan BKU sasaran', await page.locator('#mBayarItem input[name="nonbku_1"]').count() === 0);
+    }
     await page.keyboard.press('Escape');
     // toggle non-BKU pada form bayar per item
     const firstBayar = page.locator('button[data-open^="mBayar"]').first();
     await firstBayar.click();
     const modal = page.locator('.modal.show');
-    await modal.locator('[data-nonbku]').first().check();
-    ok('toggle Non-BKU menonaktifkan BKU', await modal.locator('[data-bku-select]').first().isDisabled());
+    const nonBkuToggle = modal.locator('[data-nonbku]').first();
+    if (await nonBkuToggle.count()) {
+      await nonBkuToggle.check();
+      const bkuDropdown = modal.locator('[data-bku-select]');
+      ok('Non-BKU membebaskan dropdown hanya pada grup tanpa tujuan tetap',
+        await bkuDropdown.count() === 0 || await bkuDropdown.first().isDisabled());
+    } else {
+      ok('Non-BKU tidak tersedia untuk BKU sasaran berpengaturan khusus', true);
+    }
   });
 
   /* 4. portal siswa: autocomplete + datepicker + feedback */

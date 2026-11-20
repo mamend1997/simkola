@@ -954,12 +954,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <div class="row2"><div class="field"><label>Tanggal Mulai</label><input type="date" name="tanggal_mulai" value="${todayISO()}"></div>
         <div class="field"><label>Tanggal Selesai</label><input type="date" name="tanggal_selesai"></div></div>
         <label class="check"><input type="checkbox" name="aktif" value="1" checked> Jadikan tahun ajaran aktif</label>
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_bku" value="1" checked> <b>Salin daftar BKU dari tahun ajaran sebelumnya</b> — nama, jenis &amp; kode BKU diambil dari tahun ajaran sebelumnya</label>
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_master" value="1" checked> <b>Ambil / Salin Data dari Tahun Sebelumnya</b> — struktur Grup Iuran (beserta nominal) &amp; Master Beasiswa</label>
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="salin_kelas" value="1" checked> <b>Salin Kelas &amp; Penempatan Siswa</b> (naik kelas otomatis X → XI, XI → XII) — agar Data Siswa &amp; Penetapan Grup Iuran di tahun ajaran baru langsung terisi</label>
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="rollover" value="1" checked> Rollover saldo awal dari tahun ajaran sebelumnya (BKU, kas, akun pinjaman, piutang belum lunas)</label>
-        <div class="alert info" style="margin-top:10px">${ui.icon('info')}<div>Status kelulusan siswa kelas XII diatur manual di menu <a href="${c.base}/siswa"><b>Data Siswa</b></a> (ceklis siswa → Penetapan Status Kelulusan). Semua tagihan iuran tetap bisa dibayar &amp; dikoreksi di tahun pelajaran mana pun.</div></div>
-        <div class="hint">Master pegawai, beasiswa, dan kode rekening tetap dipakai bersama di seluruh tahun ajaran.</div>
+        <div class="setup-transfer">
+          <h4>1. Salin struktur yang akan dipakai kembali</h4>
+          <label class="check"><input type="checkbox" name="salin_master" value="1" checked>
+            <span><b>Grup iuran &amp; master beasiswa</b><br><span class="t-sub">Menyalin struktur grup dan nominal; pembayaran siswa tidak disalin.</span></span></label>
+          <label class="check"><input type="checkbox" name="salin_kelas" value="1" checked>
+            <span><b>Kelas &amp; penempatan siswa</b><br><span class="t-sub">Menyalin kelas dan menempatkan siswa aktif; tingkat kelas dipromosikan bila memungkinkan.</span></span></label>
+          <h4>2. Tentukan BKU dan saldo awal</h4>
+          <label class="check"><input type="checkbox" name="rollover" value="1" checked data-ta-rollover>
+            <span><b>Bawa saldo akhir ke tahun baru (disarankan)</b><br><span class="t-sub">Menyiapkan daftar BKU dan menjadikan saldo akhir sebagai saldo awal, termasuk saldo lain yang didukung seperti aset dan piutang. Transaksi lama tetap di tahun asal, tidak disalin.</span></span></label>
+          <label class="check" data-ta-copy-bku-wrap><input type="checkbox" name="salin_bku" value="1" data-ta-copy-bku>
+            <span><b>Jika tidak membawa saldo, salin daftar BKU saja</b><br><span class="t-sub">Nama, jenis, dan kode disalin; saldo awal menjadi Rp0. Tidak menyalin transaksi.</span></span></label>
+          <div class="hint" data-ta-bku-copy-state>Daftar BKU otomatis dibuat oleh rollover; opsi salin daftar saja tidak diperlukan.</div>
+        </div>
+        <div class="alert info" style="margin-top:10px">${ui.icon('info')}<div>Status kelulusan siswa kelas XII diatur manual di menu <a href="${c.base}/siswa"><b>Data Siswa</b></a> (ceklis siswa → Perubahan Massal → Lulus). Master pegawai dan kode rekening tetap dipakai bersama di seluruh tahun ajaran.</div></div>
+        <div class="help">Alur yang disarankan: buat tahun ajaran → salin kelas/penempatan → periksa BKU dan saldo awal → tinjau grup iuran dan BKU sasarannya. Tidak ada transaksi yang dipindahkan otomatis.</div>
       </form>`,
       footer: `<button class="btn" data-close="mAdd">Batal</button><button class="btn btn-primary" form="fAdd">Simpan</button>`
     })}`;
@@ -984,9 +993,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         prevTa = db.prepare('SELECT * FROM tahun_ajaran WHERE id<>? ORDER BY COALESCE(tanggal_selesai,tanggal_mulai) DESC, id DESC LIMIT 1').get(newId0);
         /* ---- BKU: salin dari tahun ajaran sebelumnya (bukan lagi 17 BKU standar) ---- */
         const mauSalin = req.body.salin_bku !== undefined && req.body.salin_bku !== '';
+        const mauRollover = req.body.rollover !== undefined && req.body.rollover !== '';
         if (prevTa && mauSalin) {
           bkuInfo = dbm.cloneBkuTa(prevTa.id, newId0);
-        } else if (!prevTa && (mauSalin || buat_bku)) {
+        } else if (!prevTa && (mauSalin || buat_bku || mauRollover)) {
           // instalasi baru (belum ada tahun ajaran lain) → siapkan BKU standar agar bisa langsung dipakai
           const ins = db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,0,'aktif',?,?,?)");
           BKU_STD_UMUM.forEach((n, i) => ins.run(n, 'umum', 'U' + String(i + 1).padStart(2, '0'), newId0, i + 1, nowStamp(), dbm.isAutoBkuNama(n) ? 1 : 0));
@@ -1004,7 +1014,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           if (req.body.salin_master !== undefined && req.body.salin_master !== '') {
             cloneInfo = dbm.cloneTaMaster(prevTa.id, newId0, { grup: true, beasiswa: true, user: req.user });
           }
-          if (req.body.rollover !== undefined && req.body.rollover !== '') {
+          if (mauRollover) {
             rolloverInfo = dbm.rolloverTa(prevTa.id, newId0, req.user);
           }
           // salin kelas + naikkan siswa (hanya bila TA baru memang setelah TA sumber)
@@ -1018,9 +1028,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     })();
     dbm.logAudit(req.user, id ? 'EDIT' : 'TAMBAH', 'tahun_ajaran', `${id ? 'Edit' : 'Tambah'} tahun ajaran ${nama}`);
     const extra = (bkuInfo
-      ? ` BKU: ${bkuInfo.bku} buku ${bkuInfo.standar ? '(standar awal)' : 'disalin dari tahun ajaran sebelumnya'}.`
+      ? ` BKU: ${bkuInfo.bku} buku ${bkuInfo.standar ? '(standar awal)' : 'disalin dari tahun ajaran sebelumnya dengan saldo awal Rp0'}. Transaksi tidak disalin.`
       : '') + (rolloverInfo
-      ? ` Rollover saldo awal: ${rolloverInfo.bku} BKU, ${rolloverInfo.aset} akun aset, ${rolloverInfo.piutang} piutang pegawai, ${rolloverInfo.piutangLain} piutang sertifikasi.`
+      ? ` Rollover saldo awal: ${rolloverInfo.bku} BKU, ${rolloverInfo.aset} akun aset, ${rolloverInfo.piutang} piutang pegawai, ${rolloverInfo.piutangLain} piutang sertifikasi. Transaksi tetap berada di tahun ajaran asal dan tidak disalin.`
       : '') + (cloneInfo
         ? ` Salin master: ${cloneInfo.grup} grup iuran (${cloneInfo.nominal} nominal), ${cloneInfo.beasiswa} beasiswa.`
         : '') + (kelasInfo

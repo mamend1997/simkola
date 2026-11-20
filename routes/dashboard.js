@@ -335,15 +335,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const studentCount = taId ? Number(db.prepare(`SELECT COUNT(DISTINCT s.id) c FROM siswa s
       LEFT JOIN siswa_penempatan p ON p.siswa_id=s.id AND p.tahun_ajaran_id=?
       WHERE s.status='aktif' AND (p.id IS NOT NULL OR s.tahun_ajaran_id=?)`).get(taId, taId).c) : 0;
+    const setupBkuRows = taId ? dbm.allBku(taId) : [];
+    const setupIuranGroups = taId ? db.prepare('SELECT id FROM iuran_grup WHERE tahun_ajaran_id=? AND aktif=1').all(taId) : [];
+    const setupIuranTargets = setupIuranGroups.filter(g => !!dbm.bkuForIuranGrup(g.id)).length;
+    const setupCoaReady = Number(db.prepare(`SELECT COUNT(DISTINCT kategori) c FROM coa
+      WHERE aktif=1 AND kategori IN ('pendapatan','pengeluaran')`).get().c) === 2;
     const setupSteps = [
-      { id: 'identitas', module: 'identitas', title: 'Identitas sekolah', detail: 'Lengkapi nama dan alamat sekolah untuk kop laporan, kuitansi, dan portal.', href: '/sekolah', done: !!(String(c.settings.sekolah_nama || '').trim() && String(c.settings.sekolah_alamat || '').trim()) },
-      { id: 'tahun-ajaran', module: 'tahun_ajaran', title: 'Tahun ajaran', detail: 'Tentukan tahun ajaran aktif agar data kelas, siswa, dan iuran tercatat pada periode yang tepat.', href: '/tahun-ajaran', done: !!taId },
-      { id: 'kelas', module: 'kelas', title: 'Data kelas', detail: 'Buat kelas untuk tahun ajaran aktif sebelum menempatkan siswa.', href: '/kelas', done: !!(taId && db.prepare('SELECT COUNT(*) c FROM kelas WHERE tahun_ajaran_id=?').get(taId).c) },
-      { id: 'siswa', module: 'siswa', title: 'Data siswa', detail: 'Tambahkan atau impor siswa aktif agar penempatan kelas dan tagihan dapat dikelola.', href: '/siswa', done: studentCount > 0 },
-      { id: 'pegawai', module: 'pegawai', title: 'Data pegawai', detail: 'Masukkan pegawai untuk menyiapkan leger honor dan pengelolaan kepegawaian.', href: '/pegawai', done: !!db.prepare('SELECT COUNT(*) c FROM pegawai WHERE aktif=1').get().c },
-      { id: 'bku', module: 'bku', title: 'Buku Kas Umum (BKU)', detail: 'Pastikan tersedia minimal satu buku kas aktif pada tahun ajaran ini.', href: '/bku', done: !!(taId && dbm.allBku(taId).length) },
-      { id: 'coa', module: 'coa', title: 'Kode rekening', detail: 'Periksa kode rekening aktif untuk mengelompokkan transaksi pemasukan dan pengeluaran.', href: '/coa', done: !!db.prepare('SELECT COUNT(*) c FROM coa WHERE aktif=1').get().c },
-      { id: 'iuran', module: 'iuran', title: 'Grup iuran', detail: 'Buat grup iuran dan nominalnya bila sekolah mengelola tagihan siswa melalui SIMKOLA.', href: '/iuran', done: !!(taId && db.prepare('SELECT COUNT(*) c FROM iuran_grup WHERE tahun_ajaran_id=?').get(taId).c) }
+      { id: 'identitas', module: 'identitas', title: 'Identitas sekolah', detail: 'Lengkapi nama, alamat, dan kontak agar tampil benar pada laporan, kuitansi, dan portal.', href: '/sekolah', done: !!(String(c.settings.sekolah_nama || '').trim() && String(c.settings.sekolah_alamat || '').trim()) },
+      { id: 'tahun-ajaran', module: 'tahun_ajaran', title: 'Tahun ajaran aktif', detail: 'Pastikan periode dan tanggal tahun ajaran benar sebelum menambah kelas atau transaksi.', href: '/tahun-ajaran', done: !!taId },
+      { id: 'kelas', module: 'kelas', title: 'Kelas & tingkat', detail: 'Buat kelas untuk tahun ajaran aktif agar siswa dapat ditempatkan dengan benar.', href: '/kelas', done: !!(taId && db.prepare('SELECT COUNT(*) c FROM kelas WHERE tahun_ajaran_id=?').get(taId).c) },
+      { id: 'siswa', module: 'siswa', title: 'Data siswa', detail: 'Tambahkan atau impor siswa, lalu pastikan status dan penempatan kelasnya benar.', href: '/siswa', done: studentCount > 0 },
+      { id: 'bku', module: 'bku', title: 'BKU & saldo awal', detail: 'Siapkan minimal satu BKU aktif, periksa saldo awal dan aturan pemasukan. Jika memakai iuran, tujuan BKU diatur pada Grup Iuran.', href: '/bku', done: setupBkuRows.some(b => b.status === 'aktif') },
+      { id: 'coa', module: 'coa', title: 'Kode rekening', detail: 'Pastikan ada rekening pemasukan dan pengeluaran untuk mengelompokkan transaksi dan membuat laporan.', href: '/coa', done: setupCoaReady }
+    ].filter(x => c.can(x.module, 'view') && setupFeatureKeys.has(x.module));
+    const setupOptional = [
+      { id: 'iuran', module: 'iuran', title: 'Grup iuran & BKU sasaran', detail: 'Jika memungut iuran, buat grup dan nominalnya. Atur BKU sasaran di grup bila penerimaannya harus menambah saldo; pembayaran akan mengikuti pengaturan itu.', href: '/iuran', done: !setupIuranGroups.length || setupIuranTargets > 0 },
+      { id: 'pegawai', module: 'pegawai', title: 'Data pegawai', detail: 'Siapkan master pegawai bila akan menggunakan leger honor, payroll, atau portal pegawai.', href: '/pegawai', done: !!db.prepare('SELECT COUNT(*) c FROM pegawai WHERE aktif=1').get().c },
+      { id: 'transaksi', module: 'transaksi', title: 'Catat transaksi pertama', detail: 'Setelah BKU dan kode rekening siap, catat satu transaksi untuk memulai pembukuan.', href: '/transaksi', done: !!(taId && db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id
+        WHERE b.tahun_ajaran_id=? AND t.status<>'void'`).get(taId).c) }
     ].filter(x => c.can(x.module, 'view') && setupFeatureKeys.has(x.module));
     const setupDone = setupSteps.filter(x => x.done).length;
     const setupTotal = setupSteps.length;
@@ -364,8 +373,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         <div class="prog ${setupPct === 100 ? 'g' : ''}"><i style="width:${setupPct}%"></i></div>
         <b>${setupPct}%</b>
       </div>
+      <div class="help mb-2">Alur utama: <b>Identitas → Tahun Ajaran → Kelas → Siswa → BKU &amp; Rekening</b>. Jika sekolah mengelola iuran, lanjutkan dengan membuat grup dan mengatur BKU sasarannya. Transaksi tidak berpindah otomatis antar tahun ajaran.</div>
       <ol class="setup-list">
-        ${setupSteps.map((step, index) => `<li class="setup-row${step.done ? ' is-done' : ''}">
+        ${setupSteps.map((step, index) => `<li class="setup-row${step.done ? ' is-done' : ''}" data-setup-step="${step.id}">
           <span class="setup-num" aria-hidden="true">${step.done ? ui.icon('check') : index + 1}</span>
           <div class="setup-copy"><b>${esc(step.title)}</b><span>${step.done ? 'Selesai' : esc(step.detail)}</span></div>
           <div class="setup-actions">
@@ -374,6 +384,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
           </div>
         </li>`).join('')}
       </ol>
+      ${setupOptional.length ? `<details class="mt-2"><summary class="small"><b>Tahapan lanjutan (opsional)</b> · sesuaikan dengan kebutuhan sekolah</summary>
+        <ol class="setup-list" style="margin-top:8px">
+          ${setupOptional.map((step, index) => `<li class="setup-row${step.done ? ' is-done' : ''}" data-setup-step="${step.id}">
+            <span class="setup-num" aria-hidden="true">${step.done ? ui.icon('check') : index + 1}</span>
+            <div class="setup-copy"><b>${esc(step.title)}</b><span>${step.done ? 'Selesai' : esc(step.detail)}</span></div>
+            <div class="setup-actions">
+              ${step.done ? ui.badge('Selesai', 'green') : `<a class="btn btn-sm" href="${c.base}${step.href}">Buka</a>
+                <a class="btn btn-sm btn-primary" href="${c.base}${step.href}?panduan=${encodeURIComponent(step.id)}">${ui.icon('info')}Pandu Saya</a>`}
+            </div>
+          </li>`).join('')}
+        </ol>
+      </details>` : ''}
     </section>` : '';
 
     /* ---------- sambutan pendaftaran: kredensial login ditampilkan SEKALI ---------- */
