@@ -679,8 +679,10 @@ tr.dragging{opacity:.55}
 .multipick > summary::-webkit-details-marker{display:none}
 .multipick > summary::after{content:'▾';font-size:11px;color:var(--muted)}
 .multipick[open] > summary::after{content:'▴'}
-.multipick-list{max-height:230px;overflow:auto;padding:6px 12px 10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px;min-width:220px}
+.multipick[open]{z-index:20}
+.multipick-list{position:absolute;top:calc(100% + 4px);left:0;z-index:21;box-sizing:border-box;width:max-content;min-width:100%;max-width:min(320px,calc(100vw - 32px));max-height:230px;overflow:auto;padding:6px 12px 10px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 12px 28px rgba(42,26,18,.16);display:flex;flex-direction:column;gap:6px}
 .multipick-list .check{font-size:12.5px;white-space:nowrap}
+html[data-mode="dark"] .multipick-list{background:#1B1730;border-color:var(--line);box-shadow:0 12px 28px rgba(0,0,0,.4)}
 tr.month-row > td{background:#FFFBF6;font-size:12.5px}
 tr.month-row .month-cell{padding-left:26px;color:var(--ink-2)}
 tr.month-row:hover > td{background:#FFF4E9}
