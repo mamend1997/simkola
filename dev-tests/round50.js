@@ -70,7 +70,7 @@ async function req(method, url, body, noCookie = false) {
     id: bkuId, nama: 'BKU RAB R50', jenis: 'kegiatan', kode: 'K50',
     tahun_ajaran_id: activeTa.id, saldo_awal: '0', rab: '1000000'
   });
-  ok('form Master BKU menyimpan pagu RAB', r.status === 303
+  ok('nilai RAB lama tetap tersimpan sebagai fallback sampai rincian dibuat', r.status === 303
     && Number(one('SELECT rab FROM bku WHERE id=?', bkuId).rab) === 1000000);
   run('INSERT INTO siswa (nisn,nama,jenis_kelamin,tahun_ajaran_id,status,created_at) VALUES (?,?,?,?,?,?)',
     '950000001', 'Siswa Uji R50', 'L', oldTa.id, 'aktif', '2025-07-01 08:00:00');
@@ -84,10 +84,12 @@ async function req(method, url, body, noCookie = false) {
   run(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,status,created_at)
     VALUES (?,?,?,?,?,?,?,?,?)`, tagihanId, siswaId, '2025-07-15', 125000, 0, 125000, 'tunai', 'posted', '2025-07-15 09:00:00');
   run('INSERT INTO bku_iuran_grup (bku_id,grup_id) VALUES (?,?)', bkuId, grupId);
-  run(`INSERT INTO transaksi (bku_id,tanggal,jenis,nominal,uraian,status,created_at)
-    VALUES (?,?,'pengeluaran',?,'Belanja RAB R50','posted',?)`, bkuId, '2026-08-01', 700000, '2026-08-01 09:00:00');
-  run(`INSERT INTO transaksi (bku_id,tanggal,jenis,nominal,uraian,status,created_at)
-    VALUES (?,?,'pengeluaran',?,'Belanja RAB R50 kedua','posted',?)`, bkuId, '2026-08-02', 500000, '2026-08-02 09:00:00');
+  run("INSERT INTO coa (kode,nama,kategori,aktif) VALUES ('R50.01','Belanja RAB R50','pengeluaran',1)");
+  const coaId = Number(one("SELECT id FROM coa WHERE kode='R50.01'").id);
+  run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
+    VALUES (?,?,?,'pengeluaran',?,'Belanja RAB R50','posted',?)`, bkuId, coaId, '2026-08-01', 700000, '2026-08-01 09:00:00');
+  run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
+    VALUES (?,?,?,'pengeluaran',?,'Belanja RAB R50 kedua','posted',?)`, bkuId, coaId, '2026-08-02', 500000, '2026-08-02 09:00:00');
 
   r = await req('GET', `/bku/${bkuId}`);
   ok('Detail BKU merangkum tagihan lintas tahun ajaran', r.status === 200
@@ -96,14 +98,32 @@ async function req(method, url, body, noCookie = false) {
     && r.text.includes('Rp 500.000')
     && r.text.includes('Rp 125.000')
     && r.text.includes('Rp 375.000'));
-  ok('RAB menandai pengeluaran terposting yang melampaui pagu', r.text.includes('Melebihi RAB')
+  ok('RAB lama tetap dibandingkan dengan total pengeluaran', r.text.includes('Melebihi RAB')
     && r.text.includes('Rp 200.000'));
-  run('UPDATE transaksi SET nominal=400000 WHERE bku_id=?', bkuId);
+  r = await req('GET', `/bku/${bkuId}/rab`);
+  ok('halaman RAB BKU kegiatan tersedia dan bergaya pagu CoA',
+    r.status === 200 && r.text.includes('RAB — BKU RAB R50') && r.text.includes('Kode Rekening Belanja'));
+  r = await req('POST', `/bku/${bkuId}/rab/save`, { coa_id: String(coaId), pagu: '1000000', keterangan: 'Uji RAB' });
+  ok('menyimpan pagu per CoA menggantikan RAB lama', r.status === 303
+    && Number(one('SELECT rab FROM bku WHERE id=?', bkuId).rab) === 0
+    && Number(one('SELECT pagu FROM bku_rab WHERE bku_id=? AND coa_id=?', bkuId, coaId).pagu) === 1000000);
+  r = await req('GET', `/bku/${bkuId}/rab`);
+  ok('realisasi RAB otomatis dicocokkan berdasarkan coa_id',
+    r.status === 200 && r.text.includes('Rp 1.200.000') && r.text.includes('Melebihi Pagu'));
   r = await req('GET', `/bku/${bkuId}`);
+  ok('Detail BKU menampilkan rincian realisasi per rekening', r.text.includes('Belanja RAB R50')
+    && r.text.includes('Belum Dianggarkan') === false && r.text.includes('Rp 1.200.000'));
+  run('UPDATE transaksi SET nominal=200000 WHERE bku_id=?', bkuId);
+  r = await req('GET', `/bku/${bkuId}/rab`);
   ok('RAB kembali dalam pagu setelah realisasi turun', r.text.includes('Dalam RAB'));
-  run('UPDATE bku SET rab=0 WHERE id=?', bkuId);
+  const rabRow = one('SELECT id FROM bku_rab WHERE bku_id=?', bkuId);
+  r = await req('POST', `/bku/${bkuId}/rab/delete`, { id: String(rabRow.id) });
+  ok('hapus rincian RAB lewat halaman menghapus baris', r.status === 303
+    && !one('SELECT id FROM bku_rab WHERE bku_id=?', bkuId));
   r = await req('GET', `/bku/${bkuId}`);
   ok('RAB nol ditampilkan sebagai belum diatur', r.text.includes('RAB belum diatur'));
+  ok('master BKU menyediakan tombol RAB per BKU kegiatan',
+    (await req('GET', '/bku')).text.includes(`/bku/${bkuId}/rab`));
 
   r = await req('GET', `/iuran/data/${siswaId}?ta=${oldTa.id}`);
   ok('BKU terhubung jadi default pada pembayaran dan pilihan item', r.status === 200
@@ -113,7 +133,8 @@ async function req(method, url, body, noCookie = false) {
   r = await req('POST', '/bku/grup-iuran', { bku_id: secondBkuId, grup_id: String(grupId) });
   ok('Menghubungkan ulang grup memindahkannya dari BKU lama', r.status === 303
     && Number(one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId).bku_id) === secondBkuId);
-  ok('tabel relasi BKU–Grup Iuran masuk daftar backup', require('../backupdata').TABLES.includes('bku_iuran_grup'));
+  ok('tabel relasi BKU–Grup Iuran dan rincian RAB masuk daftar backup',
+    require('../backupdata').TABLES.includes('bku_iuran_grup') && require('../backupdata').TABLES.includes('bku_rab'));
 
   const errors = log.split('\n').filter(line => /Unhandled|TypeError|ReferenceError|SyntaxError/.test(line));
   ok('server tidak mencatat error runtime', errors.length === 0, errors.slice(0, 2).join(' | '));

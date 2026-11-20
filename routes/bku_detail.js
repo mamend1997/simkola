@@ -78,10 +78,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const iuranReceived = linkedIuranRows.reduce((sum, r) => sum + Number(r.kas_diterima || 0), 0);
     const iuranRemaining = linkedIuranRows.reduce((sum, r) => sum + Number(r.sisa || 0), 0);
     const bkuAllTotals = dbm.bkuTotals(b.id);
-    const rab = b.jenis === 'kegiatan' ? Math.max(0, Number(b.rab || 0)) : 0;
+    const rabSummary = b.jenis === 'kegiatan' ? dbm.bkuRabSummary(b.id) : null;
+    const rab = rabSummary ? rabSummary.totalPagu : 0;
     const rabSpent = Number(bkuAllTotals.keluar || 0);
-    const rabExceeded = rab > 0 && rabSpent > rab;
+    const rabExceeded = rabSummary ? rabSummary.overCount > 0 : false;
     const rabPercent = rab > 0 ? Math.min(100, Math.round(rabSpent / rab * 100)) : 0;
+    const rabSpentByCoa = b.jenis === 'kegiatan' ? db.prepare(`SELECT t.coa_id, c.kode, c.nama,
+        COALESCE(SUM(t.nominal),0) realisasi FROM transaksi t LEFT JOIN coa c ON c.id=t.coa_id
+        WHERE t.bku_id=? AND t.status='posted' AND t.jenis='pengeluaran'
+        GROUP BY t.coa_id, c.kode, c.nama ORDER BY c.kode, c.nama`).all(b.id) : [];
+    const rabRowsByCoa = new Map((rabSummary ? rabSummary.rows : []).map(r => [Number(r.coa_id), r]));
+    const rabRowsDisplay = rabSummary ? [
+      ...rabSummary.rows.map(r => ({ ...r, budgeted: true })),
+      ...rabSpentByCoa.filter(r => !rabRowsByCoa.has(Number(r.coa_id))).map(r => ({
+        ...r, pagu: 0, realisasi: Number(r.realisasi || 0), budgeted: false
+      }))
+    ].sort((a, b) => String(a.kode || '').localeCompare(String(b.kode || ''), 'id')) : [];
 
     const terkunci = b.status !== 'aktif';
     // Edit/hapus langsung = Bendahara Utama/Admin (punya hak edit + hapus transaksi).
@@ -301,17 +313,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('link')}Buka Master BKU</a>` : ''}</div></div>`}
       ${b.jenis === 'kegiatan' ? `<div class="card mt-3">
         <div class="card-head"><div><h3>Pemantauan RAB Pengeluaran</h3>
-          <div class="sub">Total pengeluaran terposting dibandingkan dengan RAB BKU</div></div>
+          <div class="sub">Pagu dan realisasi dicocokkan berdasarkan Kode Rekening Belanja</div></div>
+          ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku/${b.id}/rab">${ui.icon('target')}Atur RAB</a>` : ''}
           <span class="badge ${rab === 0 ? 'gray' : rabExceeded ? 'red' : 'green'}">${rab === 0 ? 'RAB belum diatur' : rabExceeded ? 'Melebihi RAB' : 'Dalam RAB'}</span></div>
         ${rab > 0 ? `<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
-          <div class="kpi"><div class="lbl">Pagu RAB</div><div class="val" style="font-size:18px">${rupiah(rab)}</div></div>
-          <div class="kpi"><div class="lbl">Pengeluaran Terposting</div><div class="val" style="font-size:18px">${rupiah(rabSpent)}</div></div>
-          <div class="kpi"><div class="lbl">${rabExceeded ? 'Melebihi RAB' : 'Sisa RAB'}</div><div class="val" style="font-size:18px">${rupiah(Math.abs(rab - rabSpent))}</div></div>
+          <div class="kpi"><div class="lbl">Total Pagu</div><div class="val" style="font-size:18px">${rupiah(rab)}</div></div>
+          <div class="kpi"><div class="lbl">Realisasi Pengeluaran</div><div class="val" style="font-size:18px">${rupiah(rabSpent)}</div></div>
+          <div class="kpi"><div class="lbl">${rabExceeded ? 'Melebihi Pagu' : 'Sisa Pagu'}</div><div class="val" style="font-size:18px">${rupiah(Math.abs(rab - rabSpent))}</div></div>
         </div>
         <div style="height:10px;background:var(--line);border-radius:8px;overflow:hidden;margin-top:12px">
-          <div style="height:100%;width:${rabPercent}%;background:${rabExceeded ? 'var(--red)' : 'var(--green)'}"></div></div>
-        ${rabExceeded ? `<div class="alert warn mt-2">${ui.icon('alert')}<div>Pengeluaran sudah melebihi RAB sebesar <b>${rupiah(rabSpent - rab)}</b>. Transaksi tetap dapat dicatat, tetapi kelebihan ini perlu ditinjau.</div></div>` : ''}
-        ` : `<div class="alert info">${ui.icon('info')}<div>Atur pagu RAB melalui tombol Edit pada Master BKU. Pengeluaran akan tetap bisa dicatat dan ditandai jika melewati RAB.</div></div>`}
+          <div style="height:100%;width:${rabPercent}%;background:${rabExceeded ? 'var(--red)' : 'var(--green)'}"></div></div>` : ''}
+        ${rabSummary.legacy ? `<div class="alert warn mt-2">${ui.icon('alert')}<div>RAB lama belum dirinci per Kode Rekening. Tambahkan baris pertama di halaman RAB untuk beralih ke rincian.</div></div>` : ''}
+        ${rabRowsDisplay.length ? `<div class="table-wrap sticky-head mt-2"><table><thead><tr><th>Kode</th><th>Uraian Belanja</th><th class="num">Pagu</th><th class="num">Realisasi</th><th class="num">Sisa</th></tr></thead>
+          <tbody>${rabRowsDisplay.map(r => {
+        const pagu = Number(r.pagu || 0), realisasi = Number(r.realisasi || 0), over = realisasi > pagu;
+        return `<tr><td class="mono">${esc(r.kode || '—')}</td><td>${esc(r.nama || 'Tanpa Kode Rekening')}${over ? ' ' + ui.badge(pagu ? 'Over' : 'Belum Dianggarkan', 'red') : ''}</td>
+          <td class="num">${pagu ? rupiah(pagu) : '—'}</td><td class="num">${rupiah(realisasi)}</td>
+          <td class="num" style="color:${over ? 'var(--red)' : 'var(--green)'}">${rupiah(pagu - realisasi)}</td></tr>`;
+      }).join('')}</tbody></table></div>` : `<div class="alert info mt-2">${ui.icon('info')}<div>Belum ada rincian RAB. Atur pagu per Kode Rekening melalui tombol <b>Atur RAB</b>.</div></div>`}
+        ${rabExceeded ? `<div class="alert warn mt-2">${ui.icon('alert')}<div>Ada pengeluaran yang melebihi pagu RAB atau belum memiliki pagu. Transaksi tetap dapat dicatat, tetapi perlu ditinjau.</div></div>` : ''}
       </div>` : ''}
       ${terkunci ? `<div class="alert warn mt-2">${ui.icon('lock')}<div><b>BKU ditutup — terkunci.</b> Transaksi tidak dapat diedit/dihapus. Buka kembali BKU di Master BKU bila perlu koreksi.</div></div>` : ''}
     </div>

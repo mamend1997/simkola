@@ -1061,7 +1061,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const id = req.body.id;
     db.transaction(() => {
       const ids = db.prepare('SELECT id FROM bku WHERE tahun_ajaran_id=?').all(id).map(r => r.id);
-      for (const b of ids) db.prepare('DELETE FROM transaksi WHERE bku_id=?').run(b);
+      for (const b of ids) {
+        db.prepare('DELETE FROM transaksi WHERE bku_id=?').run(b);
+        db.prepare('DELETE FROM bku_rab WHERE bku_id=?').run(b);
+      }
       db.prepare('DELETE FROM bku WHERE tahun_ajaran_id=?').run(id);
       db.prepare('DELETE FROM anggaran WHERE tahun_ajaran_id=?').run(id);
       db.prepare('DELETE FROM spp WHERE tahun_ajaran_id=?').run(id);
@@ -1137,8 +1140,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       </div>
       <div class="field"><label>Tahun Ajaran</label><select name="tahun_ajaran_id">${ui.selectOptions(taList, b ? b.tahun_ajaran_id : taId)}</select></div>
       <div class="field"><label>Saldo Awal</label>${ui.moneyInput('saldo_awal', b ? b.saldo_awal : 0)}</div>
-      <div class="field"><label>RAB Pengeluaran BKU Kegiatan (Rp)</label>${ui.moneyInput('rab', b ? b.rab : 0)}
-        <div class="hint">Dipakai hanya untuk BKU Kegiatan. Pengeluaran tetap dapat dicatat bila melampaui RAB, tetapi akan ditandai sebagai melebihi pagu.</div></div>
+      <div class="alert info">${ui.icon('info')}<div>RAB BKU Kegiatan diisi sebagai rincian transaksi per Kode Rekening Belanja melalui tombol <b>RAB</b> pada daftar BKU.</div></div>
     </form>`;
 
     const content = `<div class="card">
@@ -1156,8 +1158,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const saldo = dbm.bkuSaldo(b.id);
       const bkuTotals = dbm.bkuTotals(b.id);
       const linkedGroups = dbm.bkuIuranGroups(b.id);
-      const rab = Number(b.rab || 0);
-      const rabExceeded = rab > 0 && Number(bkuTotals.keluar || 0) > rab;
+      const rabSummary = b.jenis === 'kegiatan' ? dbm.bkuRabSummary(b.id) : null;
+      const rab = rabSummary ? rabSummary.totalPagu : 0;
+      const rabExceeded = rabSummary ? rabSummary.overCount > 0 : false;
       return `<tr>
           <td class="t-sub mono">${esc(b.kode || '-')}</td>
           <td class="t-strong">${esc(b.nama)}</td>
@@ -1166,12 +1169,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <td class="num t-strong" style="color:${saldo === 0 ? 'var(--muted)' : 'var(--ink)'}">${rupiah(saldo)}</td>
           <td class="num">${b.jenis === 'kegiatan'
           ? `<span class="badge ${rabExceeded ? 'red' : rab > 0 ? 'green' : 'gray'}">${rab > 0 ? (rabExceeded ? 'Melebihi RAB' : 'Dalam RAB') : 'RAB belum diatur'}</span>
-              <div class="t-sub">${rupiah(bkuTotals.keluar)} / ${rab > 0 ? rupiah(rab) : '—'}</div>`
+              <div class="t-sub">${rupiah(bkuTotals.keluar)} / ${rab > 0 ? rupiah(rab) : '—'}${rabSummary && rabSummary.rows.length ? ` · ${rabSummary.rows.length} rekening` : ''}</div>`
           : '—'}</td>
           <td>${ui.bkuStatusBadge(b.status)}${b.status !== 'aktif' ? `<div class="t-sub">${esc(b.ditutup_at || '')}</div>` : ''}</td>
           <td class="nowrap">${b.is_public ? ui.badge('Aktif', 'green') : ui.badge('Privat', 'gray')}</td>
           <td class="right nowrap">
             <a class="btn btn-sm btn-primary" href="${c.base}/bku/${b.id}" title="Rincian BKU">${ui.icon('eye')}Detail</a>
+            ${b.jenis === 'kegiatan' ? `<a class="btn btn-sm" href="${c.base}/bku/${b.id}/rab" title="Atur RAB per Kode Rekening">${ui.icon('target')}RAB</a>` : ''}
             ${c.can('bku', 'edit') ? `<button class="btn btn-sm" data-open="mIuranBku${b.id}" title="Hubungkan Grup Iuran (${linkedGroups.length})">${ui.icon('link')}Grup Iuran</button>` : ''}
             ${c.can('bku', 'edit') ? `<button class="btn btn-sm ${b.is_public ? 'btn-soft' : ''}" data-open="mPub${b.id}" title="Pengaturan tautan publik">${ui.icon('link')}Publik</button>` : ''}
             ${b.status === 'aktif'
@@ -1246,7 +1250,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!nama || !tahun_ajaran_id) return res.redirect(req.BASE + '/bku?err=' + encodeURIComponent('Nama dan tahun ajaran wajib diisi.'));
     // kode BKU otomatis bila kosong (U01, U02, … / K01, K02, …)
     const kodeFinal = String(kode || '').trim() || dbm.nextBkuKode(jenis);
-    const rab = jenis === 'kegiatan' ? Math.max(0, lib.parseMoney(req.body.rab)) : 0;
+    const existing = isEdit ? db.prepare('SELECT * FROM bku WHERE id=?').get(id) : null;
+    const detailCount = isEdit
+      ? Number(db.prepare('SELECT COUNT(*) c FROM bku_rab WHERE bku_id=?').get(id).c || 0) : 0;
+    if (existing && jenis !== 'kegiatan' && detailCount) {
+      return res.redirect(req.BASE + `/bku?ta=${existing.tahun_ajaran_id}&err=` + encodeURIComponent('Hapus rincian RAB terlebih dahulu sebelum mengubah jenis BKU Kegiatan.'));
+    }
+    const rab = jenis !== 'kegiatan' ? 0
+      : detailCount ? 0
+        : req.body.rab !== undefined ? Math.max(0, lib.parseMoney(req.body.rab))
+          : Math.max(0, Number(existing && existing.rab || 0));
     if (isEdit) {
       db.prepare('UPDATE bku SET nama=?,jenis=?,kode=?,tahun_ajaran_id=?,saldo_awal=?,rab=? WHERE id=?')
         .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), rab, id);
@@ -1257,6 +1270,132 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     }
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'bku', `${isEdit ? 'Edit' : 'Tambah'} BKU ${nama}`);
     res.redirect(req.BASE + '/bku?ta=' + tahun_ajaran_id + '&ok=' + encodeURIComponent('BKU disimpan.'));
+  });
+
+  get('/bku/:id/rab', (req, res) => {
+    if (!/^\d+$/.test(req.params.id)) return res.notFound();
+    guard(req, res, 'bku', 'view');
+    const c = ctx(req);
+    const b = db.prepare('SELECT * FROM bku WHERE id=?').get(req.params.id);
+    if (!b || b.jenis !== 'kegiatan') return res.notFound();
+    const rows = dbm.bkuRabRows(b.id);
+    const summary = dbm.bkuRabSummary(b.id);
+    const spentByCoa = db.prepare(`SELECT t.coa_id, c.kode, c.nama, SUM(t.nominal) realisasi
+      FROM transaksi t LEFT JOIN coa c ON c.id=t.coa_id
+      WHERE t.bku_id=? AND t.status='posted' AND t.jenis='pengeluaran'
+      GROUP BY t.coa_id, c.kode, c.nama ORDER BY c.kode, c.nama`).all(b.id);
+    const coaList = db.prepare(`SELECT * FROM coa WHERE kategori IN (${dbm.COA_EXPENSE_KATEGORI.map(() => '?').join(',')})
+      AND (aktif=1 OR id IN (SELECT coa_id FROM bku_rab WHERE bku_id=?)) ORDER BY kode`)
+      .all(...dbm.COA_EXPENSE_KATEGORI, b.id);
+    const rowByCoa = new Map(rows.map(r => [Number(r.coa_id), r]));
+    const allRows = [
+      ...rows.map(r => ({ ...r, budgeted: true })),
+      ...spentByCoa.filter(r => !rowByCoa.has(Number(r.coa_id))).map(r => ({
+        ...r, pagu: 0, realisasi: Number(r.realisasi || 0), budgeted: false
+      }))
+    ].sort((a, b) => String(a.kode || '').localeCompare(String(b.kode || ''), 'id'));
+    const totalPagu = summary.totalPagu;
+    const totalReal = Number(dbm.bkuTotals(b.id).keluar || 0);
+    const totalSisa = totalPagu - totalReal;
+    const legacy = summary.legacy;
+    const late = modalCollector();
+    const form = (r, formId) => `<form method="post" action="${c.base}/bku/${b.id}/rab/save" id="${formId}">
+      <input type="hidden" name="id" value="${r ? r.id : ''}">
+      <div class="field"><label>Kode Rekening Belanja</label>
+        <select name="coa_id" required ${r ? 'disabled' : ''}>
+          <option value="">— Pilih —</option>${coaList.map(x => `<option value="${x.id}" ${r && Number(r.coa_id) === Number(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}
+        </select>${r ? `<input type="hidden" name="coa_id" value="${r.coa_id}">` : ''}
+      </div>
+      <div class="field"><label>Pagu (Rp)</label>${ui.moneyInput('pagu', r ? r.pagu : '', 'required placeholder="0"')}</div>
+      <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(r ? r.keterangan || '' : '')}" placeholder="Opsional"></div>
+      <div class="hint">Realisasi dihitung otomatis dari pengeluaran terposting pada BKU ini dengan Kode Rekening yang sama.</div>
+    </form>`;
+    const overCount = allRows.filter(r => Number(r.realisasi || 0) > Number(r.pagu || 0)).length;
+    const overTotal = totalReal > totalPagu;
+    const content = `<div class="card">
+      <div class="card-head"><div><h3>RAB — ${esc(b.nama)}</h3><div class="sub">Tahun ajaran ${esc((db.prepare('SELECT nama FROM tahun_ajaran WHERE id=?').get(b.tahun_ajaran_id) || {}).nama || '-')}</div></div>
+        <div class="toolbar"><a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('arrow-left')}Kembali ke Master BKU</a>
+          <a class="btn btn-sm btn-primary" href="${c.base}/bku/${b.id}">${ui.icon('eye')}Detail BKU</a>
+          ${c.can('bku', 'edit') ? ui.openModalBtn('mRabAdd', 'Tambah Rincian RAB') : ''}
+          ${legacy || rows.length ? ui.badge(overTotal || overCount ? 'Melebihi RAB' : 'Dalam RAB', overTotal || overCount ? 'red' : 'green') : ui.badge('RAB belum diatur', 'gray')}</div></div>
+      ${legacy ? `<div class="alert warn">${ui.icon('alert')}<div>Masih ada RAB lama sebesar <b>${rupiah(summary.totalPagu)}</b> yang belum dirinci per rekening. Tambahkan baris RAB pertama untuk beralih ke rincian per Kode Rekening; nilai lama akan digantikan.</div></div>` : ''}
+      <div class="kpi-grid mb-3">
+        <div class="kpi ic-orange"><div class="ico">${ui.icon('target')}</div><div class="lbl">Total Pagu RAB</div><div class="val">${rupiah(totalPagu)}</div><div class="meta">${legacy ? 'Pagu RAB lama' : `${rows.length} kode rekening`}</div></div>
+        <div class="kpi ic-red"><div class="ico">${ui.icon('down')}</div><div class="lbl">Realisasi Pengeluaran</div><div class="val">${rupiah(totalReal)}</div><div class="meta">Pengeluaran terposting</div></div>
+        <div class="kpi ${overTotal ? 'ic-amber' : 'ic-green'}"><div class="ico">${ui.icon(overTotal ? 'alert' : 'wallet')}</div><div class="lbl">${overTotal ? 'Melebihi Pagu' : 'Sisa Pagu'}</div><div class="val">${rupiah(Math.abs(totalSisa))}</div><div class="meta">${totalPagu ? ((totalReal / totalPagu) * 100).toFixed(1) : 0}% terserap</div></div>
+        <div class="kpi ic-amber"><div class="ico">${ui.icon('alert')}</div><div class="lbl">Rekening Melebihi Pagu</div><div class="val">${overCount}</div><div class="meta">Termasuk rekening tanpa pagu</div></div>
+      </div>
+      <div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Uraian Belanja</th><th class="num">Pagu</th><th class="num">Realisasi</th><th class="num">Sisa</th><th style="width:170px">Serapan</th><th class="right">Aksi</th></tr></thead>
+        <tbody>${allRows.map(r => {
+      const pagu = Number(r.pagu || 0), realisasi = Number(r.realisasi || 0);
+      const pct = pagu > 0 ? (realisasi / pagu) * 100 : (realisasi > 0 ? 100 : 0);
+      const over = realisasi > pagu;
+      return `<tr><td class="mono">${esc(r.kode || '—')}</td><td>${esc(r.nama || 'Tanpa Kode Rekening')}
+          ${over ? ' ' + ui.badge(pagu > 0 ? 'Over' : 'Belum Dianggarkan', 'red') : ''}
+          ${r.keterangan ? `<div class="t-sub">${esc(r.keterangan)}</div>` : ''}</td>
+        <td class="num">${pagu ? rupiah(pagu) : '—'}</td><td class="num">${rupiah(realisasi)}</td>
+        <td class="num" style="color:${over ? 'var(--red)' : 'var(--green)'}">${rupiah(pagu - realisasi)}</td>
+        <td>${ui.prog(pct, over ? 'r' : pct > 85 ? '' : 'g')}<div class="t-sub">${pct.toFixed(0)}%</div></td>
+        <td class="right nowrap">${r.budgeted && c.can('bku', 'edit') ? `<button class="btn btn-sm btn-icon" data-open="mRabE${r.id}" title="Edit RAB">${ui.icon('edit')}</button>` : ''}
+          ${r.budgeted && c.can('bku', 'delete') ? `<form method="post" action="${c.base}/bku/${b.id}/rab/delete" style="display:inline" data-confirm="Hapus pagu RAB ${esc(r.kode)} — ${esc(r.nama)}?"><input type="hidden" name="id" value="${r.id}"><button class="btn btn-sm btn-danger">${ui.icon('trash')}</button></form>` : ''}</td></tr>
+        ${r.budgeted ? late('mRabE' + r.id, {
+        title: 'Edit Rincian RAB',
+        body: form(r, 'fRabE' + r.id),
+        footer: `<button class="btn" data-close="mRabE${r.id}">Batal</button><button class="btn btn-primary" form="fRabE${r.id}">Simpan</button>`
+      }) : ''}`;
+    }).join('')}
+        ${!allRows.length ? `<tr><td colspan="7" class="center muted">Belum ada rincian RAB atau realisasi pengeluaran.</td></tr>` : ''}</tbody>
+        <tfoot><tr><td colspan="2">TOTAL RAB BKU</td><td class="num">${rupiah(totalPagu)}</td><td class="num">${rupiah(totalReal)}</td>
+          <td class="num">${rupiah(totalSisa)}</td><td colspan="2"></td></tr></tfoot>
+      </table></div>
+      ${late.html()}
+      <div class="alert info mt-2">${ui.icon('info')}<div>Realisasi dicocokkan berdasarkan Kode Rekening Belanja (CoA). Baris belanja yang belum memiliki pagu tetap ditampilkan agar pengeluaran tanpa anggaran terlihat.</div></div>
+    </div>
+    ${c.can('bku', 'edit') ? ui.modal('mRabAdd', {
+      title: 'Tambah Rincian RAB',
+      body: form(null, 'fRabAdd'),
+      footer: `<button class="btn" data-close="mRabAdd">Batal</button><button class="btn btn-primary" form="fRabAdd">Simpan</button>`
+    }) : ''}`;
+    page(req, res, { title: 'RAB BKU Kegiatan', sub: 'Pagu & realisasi per Kode Rekening Belanja', active: 'bku', content });
+  });
+
+  post('/bku/:id/rab/save', (req, res) => {
+    const id = Number(req.params.id);
+    const back = req.BASE + `/bku/${id}/rab`;
+    if (!guard(req, res, 'bku', 'edit')) return;
+    const b = db.prepare("SELECT * FROM bku WHERE id=? AND jenis='kegiatan'").get(id);
+    if (!b) return res.notFound();
+    const coaId = Number(req.body.coa_id || 0);
+    const coa = db.prepare(`SELECT * FROM coa WHERE id=? AND kategori IN (${dbm.COA_EXPENSE_KATEGORI.map(() => '?').join(',')})`)
+      .get(coaId, ...dbm.COA_EXPENSE_KATEGORI);
+    if (!coa) return res.redirect(back + '?err=' + encodeURIComponent('Pilih Kode Rekening kategori belanja yang valid.'));
+    if (req.body.pagu === undefined || !String(req.body.pagu).trim()) {
+      return res.redirect(back + '?err=' + encodeURIComponent('Nominal pagu wajib diisi.'));
+    }
+    const pagu = Math.max(0, lib.parseMoney(req.body.pagu));
+    const keterangan = String(req.body.keterangan || '').trim();
+    db.transaction(() => {
+      db.prepare(`INSERT INTO bku_rab (bku_id,coa_id,pagu,keterangan,created_at,updated_at)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(bku_id,coa_id) DO UPDATE SET
+        pagu=excluded.pagu,keterangan=excluded.keterangan,updated_at=excluded.updated_at`)
+        .run(id, coaId, pagu, keterangan, nowStamp(), nowStamp());
+      db.prepare('UPDATE bku SET rab=0 WHERE id=?').run(id);
+    })();
+    dbm.logAudit(req.user, 'EDIT RAB', 'bku', `RAB BKU ${b.nama}: ${coa.kode} ${coa.nama} Rp ${lib.num(pagu)}`);
+    res.redirect(back + '?ok=' + encodeURIComponent('Rincian RAB disimpan.'));
+  });
+
+  post('/bku/:id/rab/delete', (req, res) => {
+    if (!guard(req, res, 'bku', 'delete')) return;
+    const id = Number(req.params.id);
+    const b = db.prepare("SELECT * FROM bku WHERE id=? AND jenis='kegiatan'").get(id);
+    if (!b) return res.notFound();
+    const row = db.prepare(`SELECT r.*, c.kode, c.nama FROM bku_rab r JOIN coa c ON c.id=r.coa_id
+      WHERE r.id=? AND r.bku_id=?`).get(req.body.id, id);
+    if (!row) return res.redirect(req.BASE + `/bku/${id}/rab?err=` + encodeURIComponent('Rincian RAB tidak ditemukan.'));
+    db.prepare('DELETE FROM bku_rab WHERE id=? AND bku_id=?').run(row.id, id);
+    dbm.logAudit(req.user, 'HAPUS RAB', 'bku', `RAB BKU ${b.nama}: ${row.kode} ${row.nama}`);
+    res.redirect(req.BASE + `/bku/${id}/rab?ok=` + encodeURIComponent('Rincian RAB dihapus.'));
   });
 
   post('/bku/grup-iuran', (req, res) => {
@@ -1315,6 +1454,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const b = db.prepare('SELECT * FROM bku WHERE id=?').get(id);
     db.transaction(() => {
       db.prepare('DELETE FROM transaksi WHERE bku_id=?').run(id);
+      db.prepare('DELETE FROM bku_rab WHERE bku_id=?').run(id);
+      db.prepare('DELETE FROM bku_iuran_grup WHERE bku_id=?').run(id);
       db.prepare('DELETE FROM bku WHERE id=?').run(id);
     })();
     dbm.logAudit(req.user, 'HAPUS', 'bku', `Menghapus BKU ${b ? b.nama : id} beserta transaksinya`);
@@ -1437,6 +1578,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!guard(req, res, 'coa', req.body.id ? 'edit' : 'create')) return;
     const { id, kode, nama, kategori } = req.body;
     if (!kode || !nama || !kategori) return res.redirect(req.BASE + '/coa?err=' + encodeURIComponent('Semua kolom wajib diisi.'));
+    if (id && !dbm.COA_EXPENSE_KATEGORI.includes(kategori)) {
+      const usedInRab = db.prepare('SELECT COUNT(*) c FROM bku_rab WHERE coa_id=?').get(id).c;
+      if (usedInRab) return res.redirect(req.BASE + '/coa?err=' + encodeURIComponent('Kategori rekening tidak dapat diubah karena sudah dipakai pada RAB BKU.'));
+    }
     if (id) db.prepare('UPDATE coa SET kode=?,nama=?,kategori=? WHERE id=?').run(kode, nama, kategori, id);
     else db.prepare('INSERT INTO coa (kode,nama,kategori,aktif) VALUES (?,?,?,1)').run(kode, nama, kategori);
     dbm.logAudit(req.user, id ? 'EDIT' : 'TAMBAH', 'coa', `${id ? 'Edit' : 'Tambah'} kode rekening ${kode} ${nama}`);
@@ -1447,6 +1592,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!guard(req, res, 'coa', 'delete')) return;
     const used = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE coa_id=?').get(req.body.id).c;
     if (used) return res.redirect(req.BASE + '/coa?err=' + encodeURIComponent('Kode rekening sudah dipakai transaksi, tidak bisa dihapus.'));
+    const usedInRab = db.prepare('SELECT COUNT(*) c FROM bku_rab WHERE coa_id=?').get(req.body.id).c;
+    if (usedInRab) return res.redirect(req.BASE + '/coa?err=' + encodeURIComponent('Kode rekening sudah dipakai pada RAB BKU, tidak bisa dihapus.'));
     const r = db.prepare('SELECT * FROM coa WHERE id=?').get(req.body.id);
     db.prepare('DELETE FROM coa WHERE id=?').run(req.body.id);
     dbm.logAudit(req.user, 'HAPUS', 'coa', `Menghapus kode rekening ${r ? r.kode + ' ' + r.nama : req.body.id}`);

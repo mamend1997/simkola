@@ -337,10 +337,13 @@ async function follow(url, depth = 0) {
 
   run('INSERT INTO bku_iuran_grup (bku_id,grup_id) VALUES (?,?)', bku.id, grup.id);
   r = await pub(urlBku2);
-  ok('BKU portal publik menampilkan penerimaan total dari grup yang dipilih',
-    r.status === 200 && /Penerimaan Grup Iuran Terhubung/.test(r.text)
+  ok('BKU portal publik menampilkan tiga ringkasan grup yang dipilih',
+    r.status === 200 && /Ringkasan Grup Iuran Terhubung/.test(r.text)
       && /Iuran SPP Uji Publik/.test(r.text)
-      && /GRAND TOTAL PENERIMAAN[\s\S]{0,120}975\.000/.test(r.text));
+      && /Total Seharusnya Diterima \(Tagihan\)/.test(r.text)
+      && /Sudah Diterima/.test(r.text)
+      && /Sisa Tagihan/.test(r.text)
+      && /GRAND TOTAL[\s\S]{0,160}5\.400\.000[\s\S]{0,100}975\.000[\s\S]{0,100}4\.400\.000/.test(r.text));
 
   /* toggle nonaktif */
   r = await req('POST', '/iuran/publik', { id: grup.id, aksi: 'toggle', aktif: '0', ta: ta.id });

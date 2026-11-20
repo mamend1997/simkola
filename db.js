@@ -193,9 +193,15 @@ function openTenantConn(id, file) {
 function ensurePublicColumns(conn) {
   const cols = t => { try { return conn.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
   const bc = cols('bku');
+  const cc = cols('coa');
   if (bc.length && !bc.includes('rab')) conn.exec('ALTER TABLE bku ADD COLUMN rab REAL NOT NULL DEFAULT 0');
   if (bc.length && !bc.includes('public_token')) conn.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
   if (bc.length && !bc.includes('is_public')) conn.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  if (bc.length && cc.length) conn.exec(`CREATE TABLE IF NOT EXISTS bku_rab (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, bku_id INTEGER NOT NULL, coa_id INTEGER NOT NULL,
+    pagu REAL NOT NULL DEFAULT 0, keterangan TEXT, created_at TEXT, updated_at TEXT, tenant_id INTEGER,
+    UNIQUE (bku_id, coa_id)
+  )`);
   const gc = cols('iuran_grup');
   if (gc.length && !gc.includes('public_token')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN public_token TEXT');
   if (gc.length && !gc.includes('is_public')) conn.exec('ALTER TABLE iuran_grup ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
@@ -305,6 +311,11 @@ CREATE TABLE IF NOT EXISTS anggaran (
   id INTEGER PRIMARY KEY AUTOINCREMENT, tahun_ajaran_id INTEGER NOT NULL, coa_id INTEGER NOT NULL,
   pagu REAL NOT NULL DEFAULT 0, keterangan TEXT,
   UNIQUE (tahun_ajaran_id, coa_id)
+);
+CREATE TABLE IF NOT EXISTS bku_rab (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, bku_id INTEGER NOT NULL, coa_id INTEGER NOT NULL,
+  pagu REAL NOT NULL DEFAULT 0, keterangan TEXT, created_at TEXT, updated_at TEXT, tenant_id INTEGER,
+  UNIQUE (bku_id, coa_id)
 );
 CREATE TABLE IF NOT EXISTS transaksi (
   id INTEGER PRIMARY KEY AUTOINCREMENT, bku_id INTEGER NOT NULL, tanggal TEXT NOT NULL,
@@ -1459,6 +1470,11 @@ function bootstrap() {
         bku_id INTEGER NOT NULL, grup_id INTEGER NOT NULL, tenant_id INTEGER,
         PRIMARY KEY (bku_id, grup_id), UNIQUE (grup_id)
       )`);
+      db.exec(`CREATE TABLE IF NOT EXISTS bku_rab (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, bku_id INTEGER NOT NULL, coa_id INTEGER NOT NULL,
+        pagu REAL NOT NULL DEFAULT 0, keterangan TEXT, created_at TEXT, updated_at TEXT, tenant_id INTEGER,
+        UNIQUE (bku_id, coa_id)
+      )`);
     }
 
     // default ukuran kertas & kop (DB lama yang belum punya)
@@ -2027,6 +2043,37 @@ function bkuIuranGroups(bkuId) {
 function bkuForIuranGrup(grupId) {
   return db.prepare(`SELECT b.* FROM bku_iuran_grup m
     JOIN bku b ON b.id=m.bku_id WHERE m.grup_id=?`).get(grupId) || null;
+}
+function bkuRabRows(bkuId) {
+  return db.prepare(`SELECT r.*, c.kode, c.nama,
+      COALESCE((SELECT SUM(t.nominal) FROM transaksi t
+        WHERE t.bku_id=r.bku_id AND t.coa_id=r.coa_id
+          AND t.status='posted' AND t.jenis='pengeluaran'),0) realisasi
+    FROM bku_rab r JOIN coa c ON c.id=r.coa_id
+    WHERE r.bku_id=? ORDER BY c.kode, c.id`).all(bkuId).map(r => ({
+    ...r, pagu: Number(r.pagu || 0), realisasi: Number(r.realisasi || 0)
+  }));
+}
+function bkuRabSummary(bkuId) {
+  const b = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
+  if (!b) return { rows: [], totalPagu: 0, realisasi: 0, sisa: 0, overCount: 0, configured: false, legacy: false };
+  const rows = bkuRabRows(bkuId);
+  const totalPagu = rows.length ? rows.reduce((sum, r) => sum + r.pagu, 0) : Math.max(0, Number(b.rab || 0));
+  const realisasi = Number(db.prepare(`SELECT COALESCE(SUM(nominal),0) total FROM transaksi
+    WHERE bku_id=? AND status='posted' AND jenis='pengeluaran'`).get(bkuId).total || 0);
+  let overCount = totalPagu > 0 && realisasi > totalPagu ? 1 : 0;
+  if (rows.length) {
+    const spent = db.prepare(`SELECT t.coa_id, COALESCE(SUM(t.nominal),0) realisasi
+      FROM transaksi t WHERE t.bku_id=? AND t.status='posted' AND t.jenis='pengeluaran'
+      GROUP BY t.coa_id`).all(bkuId);
+    const paguByCoa = new Map(rows.map(r => [Number(r.coa_id), r.pagu]));
+    overCount = spent.filter(r => Number(r.realisasi || 0) > Number(paguByCoa.get(Number(r.coa_id)) || 0)).length;
+  }
+  return {
+    rows, totalPagu, realisasi, sisa: totalPagu - realisasi, overCount,
+    configured: rows.length > 0 || totalPagu > 0,
+    legacy: rows.length === 0 && totalPagu > 0
+  };
 }
 function autoBku(tahunId) {
   if (tahunId) return db.prepare('SELECT * FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=1 ORDER BY urutan, id').all(tahunId);
@@ -3733,7 +3780,11 @@ function purgeGhostData(user) {
   if (bkuHantu.length) {
     const bid = '(' + bkuHantu.map(r => Number(r.id)).join(',') + ')';
     planDelete('transaksi', grab('transaksi', `SELECT * FROM transaksi WHERE bku_id IN ${bid}`));
+    planDelete('bku_rab', grab('bku_rab', `SELECT * FROM bku_rab WHERE bku_id IN ${bid}`));
   }
+  planDelete('bku_rab', grab('bku_rab', `SELECT r.* FROM bku_rab r
+    LEFT JOIN bku b ON b.id=r.bku_id LEFT JOIN coa c ON c.id=r.coa_id
+    WHERE b.id IS NULL OR c.id IS NULL`));
 
   /* ---- 2. baris yatim karena induknya sudah tidak ada ---- */
   for (const t of grab('iuran_tagihan', `SELECT t.* FROM iuran_tagihan t
@@ -4818,7 +4869,7 @@ module.exports = {
   db, mainDb, DB_PATH, SAAS_DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
   rootDb, controlDb, runWithMeta, currentMeta, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, ensureTenantUniqueIndexes, createTenantDatabase, DATA_DIR, tableNamesOf,
   registerTimeFns, migrateLegacyTimestamps, TZ_LEGACY_SHIFT_HOURS, dateOffsetISO,
-  getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, bkuIuranGroups, bkuForIuranGrup, autoBku,
+  getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, bkuIuranGroups, bkuForIuranGrup, bkuRabRows, bkuRabSummary, autoBku,
   bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
   piutangPegawaiTotal, piutangSisa, sppTunggakan, sppPeriode, sppTerimaMap, sppTampil, sppSeries,

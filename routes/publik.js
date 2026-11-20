@@ -134,12 +134,20 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     const linkedIuran = dbm.bkuIuranGroups(b.id);
     const linkedIuranRows = linkedIuran.length
       ? dbm.iuranTagihanRows({ grupId: linkedIuran.map(g => Number(g.id)) }) : [];
-    const linkedIuranReceipts = new Map(linkedIuran.map(g => [Number(g.id), 0]));
+    const linkedIuranTotals = new Map(linkedIuran.map(g => [Number(g.id), { tagihan: 0, diterima: 0, sisa: 0 }]));
     for (const row of linkedIuranRows) {
       const gid = Number(row.grup_id);
-      linkedIuranReceipts.set(gid, (linkedIuranReceipts.get(gid) || 0) + Number(row.kas_diterima || 0));
+      const total = linkedIuranTotals.get(gid);
+      if (!total) continue;
+      total.tagihan += Number(row.nominal || 0);
+      total.diterima += Number(row.kas_diterima || 0);
+      total.sisa += Number(row.sisa || 0);
     }
-    const linkedIuranReceiptTotal = [...linkedIuranReceipts.values()].reduce((sum, amount) => sum + amount, 0);
+    const linkedIuranSummary = [...linkedIuranTotals.values()].reduce((sum, group) => ({
+      tagihan: sum.tagihan + group.tagihan,
+      diterima: sum.diterima + group.diterima,
+      sisa: sum.sisa + group.sisa
+    }), { tagihan: 0, diterima: 0, sisa: 0 });
 
     /* ---------- filter periode (bulan / rentang tanggal) ---------- */
     const bulan = isYm(qp('bulan')) ? qp('bulan') : '';
@@ -221,17 +229,21 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       </div>
     </div>
     ${linkedIuran.length ? `<div class="portal-card">
-      <h3>Penerimaan Grup Iuran Terhubung</h3>
-      <p class="help">Akumulasi pembayaran tercatat (non-void) pada semua tahun ajaran; angka ini tidak mengikuti filter tanggal transaksi BKU.</p>
-      <div class="kpi-grid" style="gap:14px">
-        <div class="kpi"><div class="lbl">Total Penerimaan Grup Iuran</div><div class="val" style="color:var(--green)">${rupiah(linkedIuranReceiptTotal)}</div>
-          <div class="meta">${linkedIuran.length} grup terhubung</div></div>
+      <h3>Ringkasan Grup Iuran Terhubung</h3>
+      <p class="help">${linkedIuran.length} grup · semua tahun ajaran pada grup terpilih. Penerimaan menjumlahkan pembayaran non-void dan tidak mengikuti filter tanggal transaksi BKU.</p>
+      <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
+        <div class="kpi"><div class="lbl">Total Seharusnya Diterima (Tagihan)</div><div class="val">${rupiah(linkedIuranSummary.tagihan)}</div></div>
+        <div class="kpi"><div class="lbl">Sudah Diterima</div><div class="val" style="color:var(--green)">${rupiah(linkedIuranSummary.diterima)}</div></div>
+        <div class="kpi"><div class="lbl">Sisa Tagihan</div><div class="val" style="color:var(--red)">${rupiah(linkedIuranSummary.sisa)}</div></div>
       </div>
       <div class="table-wrap sticky-head mt-2"><table>
-        <thead><tr><th>Grup Iuran</th><th>Tahun Ajaran</th><th class="num">Total Penerimaan</th></tr></thead>
+        <thead><tr><th>Grup Iuran</th><th>Tahun Ajaran</th><th class="num">Total Seharusnya</th><th class="num">Sudah Diterima</th><th class="num">Sisa Tagihan</th></tr></thead>
         <tbody>${linkedIuran.map(g => `<tr><td class="t-strong">${esc(g.nama)}</td><td>${esc(g.ta_nama || '-')}</td>
-          <td class="num">${rupiah(linkedIuranReceipts.get(Number(g.id)) || 0)}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td colspan="2">GRAND TOTAL PENERIMAAN</td><td class="num"><b>${rupiah(linkedIuranReceiptTotal)}</b></td></tr></tfoot>
+          <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).tagihan)}</td>
+          <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).diterima)}</td>
+          <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).sisa)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="2">GRAND TOTAL</td><td class="num"><b>${rupiah(linkedIuranSummary.tagihan)}</b></td>
+          <td class="num"><b>${rupiah(linkedIuranSummary.diterima)}</b></td><td class="num"><b>${rupiah(linkedIuranSummary.sisa)}</b></td></tr></tfoot>
       </table></div>
     </div>` : ''}
 
