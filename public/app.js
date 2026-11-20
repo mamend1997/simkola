@@ -1741,20 +1741,24 @@ function terbilang(n) {
           <td><select name="metode_${i}"><option value="tunai">Tunai</option><option value="transfer">Transfer</option></select></td>
           <td><input type="text" inputmode="numeric" name="jumlah_${i}" value="${thousands(sisa)}" data-money data-bulk-money></td>
           <td><input type="text" inputmode="numeric" name="potongan_${i}" value="" data-money data-bulk-money></td>
-          <td><select name="bku_${i}" data-bulk-row-bku>${bkuOptions}</select></td>
+          <td><select name="bku_${i}" data-bulk-row-bku data-target-bku="${c.dataset.bku || ''}">${bkuOptions}</select></td>
           <td class="center"><input type="checkbox" name="nonbku_${i}" value="1" data-bulk-nonbku></td>
         </tr>`;
       }).join('');
       nInput.value = String(checked.length);
       rowsHost.querySelectorAll('[data-bulk-money]').forEach(i => window.__simkeu && window.__simkeu.initMoney(i));
-      if (defaultBku && defaultBku.value) rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => { sel.value = defaultBku.value; });
+      if (defaultBku) rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => {
+        sel.value = defaultBku.value || sel.dataset.targetBku || '';
+      });
       rowsHost.querySelectorAll('[data-bulk-nonbku]').forEach(chk => chk.addEventListener('change', () => {
         const sel = chk.closest('tr').querySelector('[data-bulk-row-bku]');
         sel.disabled = chk.checked;
         sel.style.opacity = chk.checked ? '.55' : '1';
       }));
       if (defaultDate) defaultDate.onchange = () => rowsHost.querySelectorAll('input[type=date]').forEach(d => { d.value = defaultDate.value; });
-      if (defaultBku) defaultBku.onchange = () => rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => { sel.value = defaultBku.value; });
+      if (defaultBku) defaultBku.onchange = () => rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => {
+        sel.value = defaultBku.value || sel.dataset.targetBku || '';
+      });
       window.__openModal('mBayarItem');
     });
   }

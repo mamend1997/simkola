@@ -1084,6 +1084,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
 
     const kodeUmum = dbm.nextBkuKode('umum');
     const kodeKegiatan = dbm.nextBkuKode('kegiatan');
+    const allIuranGroups = db.prepare(`SELECT g.*, t.nama ta_nama, m.bku_id, b.nama bku_nama
+      FROM iuran_grup g LEFT JOIN tahun_ajaran t ON t.id=g.tahun_ajaran_id
+      LEFT JOIN bku_iuran_grup m ON m.grup_id=g.id
+      LEFT JOIN bku b ON b.id=m.bku_id
+      ORDER BY t.tanggal_mulai DESC, t.nama DESC, g.nama`).all();
     /* ---- tautan publik BKU (tanpa login) ---- */
     const pubLink = b => (b.public_token
       ? c.publicAbsUrl('/' + dbm.portalSlugs().base + '/publik/bku/' + b.public_token) : '');
@@ -1132,6 +1137,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       </div>
       <div class="field"><label>Tahun Ajaran</label><select name="tahun_ajaran_id">${ui.selectOptions(taList, b ? b.tahun_ajaran_id : taId)}</select></div>
       <div class="field"><label>Saldo Awal</label>${ui.moneyInput('saldo_awal', b ? b.saldo_awal : 0)}</div>
+      <div class="field"><label>RAB Pengeluaran BKU Kegiatan (Rp)</label>${ui.moneyInput('rab', b ? b.rab : 0)}
+        <div class="hint">Dipakai hanya untuk BKU Kegiatan. Pengeluaran tetap dapat dicatat bila melampaui RAB, tetapi akan ditandai sebagai melebihi pagu.</div></div>
     </form>`;
 
     const content = `<div class="card">
@@ -1144,19 +1151,28 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           ${c.can('bku', 'create') ? ui.openModalBtn('mAdd', 'Tambah BKU') : ''}
         </div>
       </div>
-      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num">Saldo Awal</th><th class="num">Saldo Akhir</th><th>Status</th><th>Publik</th><th class="right">Aksi</th></tr></thead><tbody>
+      ${rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th>Kode</th><th>Nama BKU</th><th>Jenis</th><th class="num">Saldo Awal</th><th class="num">Saldo Akhir</th><th class="num">RAB / Pengeluaran</th><th>Status</th><th>Publik</th><th class="right">Aksi</th></tr></thead><tbody>
         ${rows.map(b => {
       const saldo = dbm.bkuSaldo(b.id);
+      const bkuTotals = dbm.bkuTotals(b.id);
+      const linkedGroups = dbm.bkuIuranGroups(b.id);
+      const rab = Number(b.rab || 0);
+      const rabExceeded = rab > 0 && Number(bkuTotals.keluar || 0) > rab;
       return `<tr>
           <td class="t-sub mono">${esc(b.kode || '-')}</td>
           <td class="t-strong">${esc(b.nama)}</td>
           <td>${b.jenis === 'umum' ? ui.badge('Umum', 'blue') : ui.badge('Kegiatan', 'orange')}</td>
           <td class="num">${rupiah(b.saldo_awal)}</td>
           <td class="num t-strong" style="color:${saldo === 0 ? 'var(--muted)' : 'var(--ink)'}">${rupiah(saldo)}</td>
+          <td class="num">${b.jenis === 'kegiatan'
+          ? `<span class="badge ${rabExceeded ? 'red' : rab > 0 ? 'green' : 'gray'}">${rab > 0 ? (rabExceeded ? 'Melebihi RAB' : 'Dalam RAB') : 'RAB belum diatur'}</span>
+              <div class="t-sub">${rupiah(bkuTotals.keluar)} / ${rab > 0 ? rupiah(rab) : '—'}</div>`
+          : '—'}</td>
           <td>${ui.bkuStatusBadge(b.status)}${b.status !== 'aktif' ? `<div class="t-sub">${esc(b.ditutup_at || '')}</div>` : ''}</td>
           <td class="nowrap">${b.is_public ? ui.badge('Aktif', 'green') : ui.badge('Privat', 'gray')}</td>
           <td class="right nowrap">
             <a class="btn btn-sm btn-primary" href="${c.base}/bku/${b.id}" title="Rincian BKU">${ui.icon('eye')}Detail</a>
+            ${c.can('bku', 'edit') ? `<button class="btn btn-sm" data-open="mIuranBku${b.id}" title="Hubungkan Grup Iuran (${linkedGroups.length})">${ui.icon('link')}Grup Iuran</button>` : ''}
             ${c.can('bku', 'edit') ? `<button class="btn btn-sm ${b.is_public ? 'btn-soft' : ''}" data-open="mPub${b.id}" title="Pengaturan tautan publik">${ui.icon('link')}Publik</button>` : ''}
             ${b.status === 'aktif'
           ? (c.can('bku', 'edit') ? `<button class="btn btn-sm" data-open="mTutup${b.id}">${ui.icon('lock')}Tutup BKU</button>` : '')
@@ -1172,6 +1188,22 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           ${c.can('bku', 'edit') ? late('mPub' + b.id, {
             title: 'Tautan Publik — ' + b.nama, body: publiForm(b),
             footer: `<button class="btn" data-close="mPub${b.id}">Tutup</button>`
+          }) : ''}
+          ${c.can('bku', 'edit') ? late('mIuranBku' + b.id, {
+            title: 'Hubungkan Grup Iuran — ' + b.nama, wide: true,
+            body: `<form method="post" action="${c.base}/bku/grup-iuran" id="fIuranBku${b.id}">
+              <input type="hidden" name="bku_id" value="${b.id}">
+              <div class="alert info">${ui.icon('info')}<div>Pilih grup dari tahun ajaran mana pun. Tagihan, pembayaran, dan sisa semua grup terpilih akan diringkas pada Detail BKU.
+                Satu grup hanya dapat memiliki satu BKU tujuan. Jika grup terhubung ke BKU lain, memilihnya di sini akan memindahkan hubungannya.</div></div>
+              ${allIuranGroups.length ? `<div class="list">${allIuranGroups.map(g => {
+                const checked = Number(g.bku_id) === Number(b.id);
+                const pindah = g.bku_id && !checked ? ` · tujuan saat ini: ${g.bku_nama || 'BKU ' + g.bku_id}` : '';
+                return `<label class="check"><input type="checkbox" name="grup_id" value="${g.id}" ${checked ? 'checked' : ''}>
+                  <span><b>${esc(g.nama)}</b><span class="t-sub">TA ${esc(g.ta_nama || '-')} · ${g.jenis === 'bulanan' ? 'Bulanan' : 'Non-Bulanan'}${pindah ? esc(pindah) : ''}</span></span></label>`;
+              }).join('')}</div>` : ui.emptyState('Belum ada Grup Iuran', 'Buat grup iuran terlebih dahulu pada menu Grup Iuran.')}
+            </form>`,
+            footer: `<button class="btn" data-close="mIuranBku${b.id}">Batal</button>
+              <button class="btn btn-primary" form="fIuranBku${b.id}">${ui.icon('save')}Simpan Hubungan</button>`
           }) : ''}
           ${b.status === 'aktif' ? late('mTutup' + b.id, {
             title: 'Tutup BKU — ' + b.nama,
@@ -1214,16 +1246,42 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!nama || !tahun_ajaran_id) return res.redirect(req.BASE + '/bku?err=' + encodeURIComponent('Nama dan tahun ajaran wajib diisi.'));
     // kode BKU otomatis bila kosong (U01, U02, … / K01, K02, …)
     const kodeFinal = String(kode || '').trim() || dbm.nextBkuKode(jenis);
+    const rab = jenis === 'kegiatan' ? Math.max(0, lib.parseMoney(req.body.rab)) : 0;
     if (isEdit) {
-      db.prepare('UPDATE bku SET nama=?,jenis=?,kode=?,tahun_ajaran_id=?,saldo_awal=? WHERE id=?')
-        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), id);
+      db.prepare('UPDATE bku SET nama=?,jenis=?,kode=?,tahun_ajaran_id=?,saldo_awal=?,rab=? WHERE id=?')
+        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), rab, id);
     } else {
       const urut = db.prepare('SELECT COALESCE(MAX(urutan),0)+1 u FROM bku').get().u;
-      db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,?,'aktif',?,?,?)")
-        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), urut, nowStamp(), dbm.isAutoBkuNama(nama) ? 1 : 0);
+      db.prepare("INSERT INTO bku (nama,jenis,kode,tahun_ajaran_id,saldo_awal,rab,status,urutan,created_at,auto_mode) VALUES (?,?,?,?,?,?,'aktif',?,?,?)")
+        .run(nama, jenis, kodeFinal, tahun_ajaran_id, lib.parseMoney(saldo_awal), rab, urut, nowStamp(), dbm.isAutoBkuNama(nama) ? 1 : 0);
     }
     dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'bku', `${isEdit ? 'Edit' : 'Tambah'} BKU ${nama}`);
     res.redirect(req.BASE + '/bku?ta=' + tahun_ajaran_id + '&ok=' + encodeURIComponent('BKU disimpan.'));
+  });
+
+  post('/bku/grup-iuran', (req, res) => {
+    if (!guard(req, res, 'bku', 'edit')) return;
+    const bkuId = Number(req.body.bku_id || 0);
+    const bku = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
+    if (!bku) return res.redirect(req.BASE + '/bku?err=' + encodeURIComponent('BKU tidak ditemukan.'));
+    const ids = [...new Set([].concat(req.body.grup_id || []).map(Number).filter(Number.isInteger).filter(Boolean))];
+    const groups = ids.length
+      ? db.prepare(`SELECT id,nama FROM iuran_grup WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+      : [];
+    if (groups.length !== ids.length) {
+      return res.redirect(req.BASE + `/bku?ta=${bku.tahun_ajaran_id}&err=` + encodeURIComponent('Satu atau beberapa Grup Iuran tidak ditemukan.'));
+    }
+    db.transaction(() => {
+      db.prepare('DELETE FROM bku_iuran_grup WHERE bku_id=?').run(bku.id);
+      const ins = db.prepare('INSERT INTO bku_iuran_grup (bku_id,grup_id) VALUES (?,?)');
+      for (const id of ids) {
+        db.prepare('DELETE FROM bku_iuran_grup WHERE grup_id=?').run(id);
+        ins.run(bku.id, id);
+      }
+    })();
+    const names = groups.map(g => g.nama).join(', ') || 'tidak ada';
+    dbm.logAudit(req.user, 'HUBUNGKAN GRUP IURAN', 'bku', `BKU ${bku.nama} dihubungkan dengan grup: ${names}`);
+    res.redirect(req.BASE + `/bku?ta=${bku.tahun_ajaran_id}&ok=` + encodeURIComponent('Hubungan Grup Iuran diperbarui.'));
   });
 
   /* ---------- domain publik BKU: generate / regenerate / toggle ---------- */

@@ -71,6 +71,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const sort = req.query.get('sort') === 'asc' ? 'asc' : 'desc';
     const d = ledger(b.id, from, to, q, jenis, sort);
     const ta = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(b.tahun_ajaran_id) || {};
+    const linkedIuran = dbm.bkuIuranGroups(b.id);
+    const linkedIuranIds = linkedIuran.map(g => Number(g.id));
+    const linkedIuranRows = linkedIuranIds.length ? dbm.iuranTagihanRows({ grupId: linkedIuranIds }) : [];
+    const iuranExpected = linkedIuranRows.reduce((sum, r) => sum + Number(r.nominal || 0), 0);
+    const iuranReceived = linkedIuranRows.reduce((sum, r) => sum + Number(r.kas_diterima || 0), 0);
+    const iuranRemaining = linkedIuranRows.reduce((sum, r) => sum + Number(r.sisa || 0), 0);
+    const bkuAllTotals = dbm.bkuTotals(b.id);
+    const rab = b.jenis === 'kegiatan' ? Math.max(0, Number(b.rab || 0)) : 0;
+    const rabSpent = Number(bkuAllTotals.keluar || 0);
+    const rabExceeded = rab > 0 && rabSpent > rab;
+    const rabPercent = rab > 0 ? Math.min(100, Math.round(rabSpent / rab * 100)) : 0;
 
     const terkunci = b.status !== 'aktif';
     // Edit/hapus langsung = Bendahara Utama/Admin (punya hak edit + hapus transaksi).
@@ -276,6 +287,32 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="kpi ic-blue"><div class="ico">${ui.icon('bank')}</div><div class="lbl">Saldo Akhir</div>
           <div class="val" style="font-size:18px">${rupiah(d.closing)}</div><div class="meta">${from || to ? 's.d. ' + tglID(to || todayISO()) : 'Total seluruh periode'}</div></div>
       </div>
+      ${linkedIuran.length ? `<div class="card mt-3">
+        <div class="card-head"><div><h3>Ringkasan Grup Iuran Terhubung</h3>
+          <div class="sub">${linkedIuran.length} grup · ${linkedIuranRows.length} tagihan · semua tahun ajaran pada grup terpilih</div></div>
+          ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('link')}Atur Grup Iuran</a>` : ''}</div>
+        <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+          <div class="kpi ic-orange"><div class="lbl">Total Seharusnya Diterima (Tagihan)</div><div class="val" style="font-size:18px">${rupiah(iuranExpected)}</div></div>
+          <div class="kpi ic-green"><div class="lbl">Sudah Diterima</div><div class="val" style="font-size:18px">${rupiah(iuranReceived)}</div></div>
+          <div class="kpi ic-red"><div class="lbl">Sisa Tagihan</div><div class="val" style="font-size:18px">${rupiah(iuranRemaining)}</div></div>
+        </div>
+        <div class="toolbar mt-2">${linkedIuran.map(g => `<span class="badge blue">${esc(g.nama)} · TA ${esc(g.ta_nama || '-')}</span>`).join('')}</div>
+      </div>` : `<div class="alert info mt-3">${ui.icon('info')}<div>Belum ada Grup Iuran terhubung. Hubungkan grup melalui tombol <b>Grup Iuran</b> di Master BKU agar total seharusnya diterima, penerimaan, dan sisa tagihan tampil di sini.
+        ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('link')}Buka Master BKU</a>` : ''}</div></div>`}
+      ${b.jenis === 'kegiatan' ? `<div class="card mt-3">
+        <div class="card-head"><div><h3>Pemantauan RAB Pengeluaran</h3>
+          <div class="sub">Total pengeluaran terposting dibandingkan dengan RAB BKU</div></div>
+          <span class="badge ${rab === 0 ? 'gray' : rabExceeded ? 'red' : 'green'}">${rab === 0 ? 'RAB belum diatur' : rabExceeded ? 'Melebihi RAB' : 'Dalam RAB'}</span></div>
+        ${rab > 0 ? `<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+          <div class="kpi"><div class="lbl">Pagu RAB</div><div class="val" style="font-size:18px">${rupiah(rab)}</div></div>
+          <div class="kpi"><div class="lbl">Pengeluaran Terposting</div><div class="val" style="font-size:18px">${rupiah(rabSpent)}</div></div>
+          <div class="kpi"><div class="lbl">${rabExceeded ? 'Melebihi RAB' : 'Sisa RAB'}</div><div class="val" style="font-size:18px">${rupiah(Math.abs(rab - rabSpent))}</div></div>
+        </div>
+        <div style="height:10px;background:var(--line);border-radius:8px;overflow:hidden;margin-top:12px">
+          <div style="height:100%;width:${rabPercent}%;background:${rabExceeded ? 'var(--red)' : 'var(--green)'}"></div></div>
+        ${rabExceeded ? `<div class="alert warn mt-2">${ui.icon('alert')}<div>Pengeluaran sudah melebihi RAB sebesar <b>${rupiah(rabSpent - rab)}</b>. Transaksi tetap dapat dicatat, tetapi kelebihan ini perlu ditinjau.</div></div>` : ''}
+        ` : `<div class="alert info">${ui.icon('info')}<div>Atur pagu RAB melalui tombol Edit pada Master BKU. Pengeluaran akan tetap bisa dicatat dan ditandai jika melewati RAB.</div></div>`}
+      </div>` : ''}
       ${terkunci ? `<div class="alert warn mt-2">${ui.icon('lock')}<div><b>BKU ditutup — terkunci.</b> Transaksi tidak dapat diedit/dihapus. Buka kembali BKU di Master BKU bila perlu koreksi.</div></div>` : ''}
     </div>
 

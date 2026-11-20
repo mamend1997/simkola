@@ -8,7 +8,7 @@
 const lib = require('./lib');
 const crypto = require('crypto');
 
-const TABLES = ['settings', 'users', 'permissions', 'tahun_ajaran', 'bku', 'bku_periode', 'coa', 'anggaran',
+const TABLES = ['settings', 'users', 'permissions', 'tahun_ajaran', 'bku', 'bku_iuran_grup', 'bku_periode', 'coa', 'anggaran',
   'transaksi', 'piutang', 'piutang_bayar', 'spp', 'aset', 'pinjaman_mutasi', 'rekon_saldo', 'rekon_saldo_global', 'koreksi',
   'bku_import', 'audit', 'pegawai', 'payroll', 'payroll_post', 'payroll_draft', 'beasiswa', 'piutang_lain', 'piutang_lain_bayar',
   'trash', 'program_keahlian', 'kelas', 'siswa', 'siswa_mutasi', 'siswa_penempatan', 'iuran_grup', 'iuran_nominal', 'iuran_tagihan',

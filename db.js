@@ -193,6 +193,7 @@ function openTenantConn(id, file) {
 function ensurePublicColumns(conn) {
   const cols = t => { try { return conn.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
   const bc = cols('bku');
+  if (bc.length && !bc.includes('rab')) conn.exec('ALTER TABLE bku ADD COLUMN rab REAL NOT NULL DEFAULT 0');
   if (bc.length && !bc.includes('public_token')) conn.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
   if (bc.length && !bc.includes('is_public')) conn.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
   const gc = cols('iuran_grup');
@@ -201,6 +202,10 @@ function ensurePublicColumns(conn) {
   const kc = cols('kelas');
   if (kc.length && !kc.includes('public_token')) conn.exec('ALTER TABLE kelas ADD COLUMN public_token TEXT');
   if (kc.length && !kc.includes('is_public')) conn.exec('ALTER TABLE kelas ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  if (bc.length && gc.length) conn.exec(`CREATE TABLE IF NOT EXISTS bku_iuran_grup (
+    bku_id INTEGER NOT NULL, grup_id INTEGER NOT NULL, tenant_id INTEGER,
+    PRIMARY KEY (bku_id, grup_id), UNIQUE (grup_id)
+  )`);
   if (bc.length) conn.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_bku_public_token ON bku(public_token) WHERE public_token IS NOT NULL');
   if (gc.length) conn.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_iuran_grup_public_token ON iuran_grup(public_token) WHERE public_token IS NOT NULL');
   if (kc.length) conn.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_kelas_public_token ON kelas(public_token) WHERE public_token IS NOT NULL');
@@ -288,7 +293,7 @@ CREATE TABLE IF NOT EXISTS tahun_ajaran (
 );
 CREATE TABLE IF NOT EXISTS bku (
   id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT NOT NULL, jenis TEXT NOT NULL DEFAULT 'umum',
-  kode TEXT, tahun_ajaran_id INTEGER, saldo_awal REAL NOT NULL DEFAULT 0,
+  kode TEXT, tahun_ajaran_id INTEGER, saldo_awal REAL NOT NULL DEFAULT 0, rab REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'aktif', ditutup_at TEXT, ditutup_oleh TEXT,
   saldo_akhir_tutup REAL, berita_acara_no TEXT, urutan INTEGER DEFAULT 0, created_at TEXT
 );
@@ -526,6 +531,10 @@ CREATE TABLE IF NOT EXISTS siswa_mutasi (
 CREATE TABLE IF NOT EXISTS iuran_grup (
   id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT NOT NULL, jenis TEXT NOT NULL DEFAULT 'bulanan',
   tahun_ajaran_id INTEGER, keterangan TEXT, aktif INTEGER NOT NULL DEFAULT 1, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS bku_iuran_grup (
+  bku_id INTEGER NOT NULL, grup_id INTEGER NOT NULL, tenant_id INTEGER,
+  PRIMARY KEY (bku_id, grup_id), UNIQUE (grup_id)
 );
 CREATE TABLE IF NOT EXISTS iuran_nominal (
   id INTEGER PRIMARY KEY AUTOINCREMENT, grup_id INTEGER NOT NULL, bulan INTEGER,
@@ -1434,6 +1443,7 @@ function bootstrap() {
     /* ---------- domain publik: tautan acak BKU & Grup Iuran (tanpa login) ---------- */
     {
       const bc = db.prepare('PRAGMA table_info(bku)').all().map(c => c.name);
+      if (!bc.includes('rab')) db.exec('ALTER TABLE bku ADD COLUMN rab REAL NOT NULL DEFAULT 0');
       if (!bc.includes('public_token')) db.exec('ALTER TABLE bku ADD COLUMN public_token TEXT');
       if (!bc.includes('is_public')) db.exec('ALTER TABLE bku ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
       const gc = db.prepare('PRAGMA table_info(iuran_grup)').all().map(c => c.name);
@@ -1445,6 +1455,10 @@ function bootstrap() {
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_bku_public_token ON bku(public_token) WHERE public_token IS NOT NULL');
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_iuran_grup_public_token ON iuran_grup(public_token) WHERE public_token IS NOT NULL');
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_kelas_public_token ON kelas(public_token) WHERE public_token IS NOT NULL');
+      db.exec(`CREATE TABLE IF NOT EXISTS bku_iuran_grup (
+        bku_id INTEGER NOT NULL, grup_id INTEGER NOT NULL, tenant_id INTEGER,
+        PRIMARY KEY (bku_id, grup_id), UNIQUE (grup_id)
+      )`);
     }
 
     // default ukuran kertas & kop (DB lama yang belum punya)
@@ -2003,6 +2017,16 @@ function allBku(tahunId) {
 function allBkuRaw(tahunId) {
   if (tahunId) return db.prepare('SELECT * FROM bku WHERE tahun_ajaran_id=? ORDER BY jenis DESC, urutan, id').all(tahunId);
   return db.prepare('SELECT * FROM bku ORDER BY tahun_ajaran_id DESC, jenis DESC, urutan, id').all();
+}
+function bkuIuranGroups(bkuId) {
+  return db.prepare(`SELECT g.*, t.nama ta_nama FROM bku_iuran_grup m
+    JOIN iuran_grup g ON g.id=m.grup_id
+    LEFT JOIN tahun_ajaran t ON t.id=g.tahun_ajaran_id
+    WHERE m.bku_id=? ORDER BY t.tanggal_mulai, g.nama, g.id`).all(bkuId);
+}
+function bkuForIuranGrup(grupId) {
+  return db.prepare(`SELECT b.* FROM bku_iuran_grup m
+    JOIN bku b ON b.id=m.bku_id WHERE m.grup_id=?`).get(grupId) || null;
 }
 function autoBku(tahunId) {
   if (tahunId) return db.prepare('SELECT * FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=1 ORDER BY urutan, id').all(tahunId);
@@ -4794,7 +4818,7 @@ module.exports = {
   db, mainDb, DB_PATH, SAAS_DB_PATH, DEMO_DB_PATH, runAsDemo, ensureDemoDb, resetDemoDb, isDemoContext,
   rootDb, controlDb, runWithMeta, currentMeta, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, ensureTenantUniqueIndexes, createTenantDatabase, DATA_DIR, tableNamesOf,
   registerTimeFns, migrateLegacyTimestamps, TZ_LEGACY_SHIFT_HOURS, dateOffsetISO,
-  getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, autoBku,
+  getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, bkuIuranGroups, bkuForIuranGrup, autoBku,
   bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
   piutangPegawaiTotal, piutangSisa, sppTunggakan, sppPeriode, sppTerimaMap, sppTampil, sppSeries,

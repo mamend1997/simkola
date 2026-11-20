@@ -1091,12 +1091,21 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const bayar = dbm.iuranBayarRows({ siswaId: s.id, taId: taSel ? taSel.id : undefined });
     const kelasLabel = (tags[0] && tags[0].kelas_nama) || s.kelas_nama;
     const bukuss = db.prepare("SELECT * FROM bku WHERE status='aktif' AND tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY jenis DESC, urutan").all((taSel && taSel.id) || c.taId);
+    const grupIds = [...new Set(tags.map(t => Number(t.grup_id)).filter(Boolean))];
+    const targetRows = grupIds.length ? db.prepare(`SELECT m.grup_id, b.* FROM bku_iuran_grup m
+      JOIN bku b ON b.id=m.bku_id WHERE m.grup_id IN (${grupIds.map(() => '?').join(',')})`).all(...grupIds) : [];
+    const targetBkuByGrup = new Map(targetRows.map(b => [Number(b.grup_id), b]));
+    for (const target of targetRows) {
+      if (target.status === 'aktif' && !bukuss.some(b => Number(b.id) === Number(target.id))) bukuss.push(target);
+    }
     const editable = c.can('iuran', 'edit');
     const late = modalCollector();
 
     const bayarForm = (t, fid, bulan, maxNominal) => {
       const sisa = Math.max(0, maxNominal !== undefined ? Number(maxNominal) : t.sisa);
       const grupObj = db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(t.grup_id);
+      const targetBku = targetBkuByGrup.get(Number(t.grup_id));
+      const targetBkuId = targetBku && targetBku.status === 'aktif' ? targetBku.id : '';
       const judul = bulan ? `${t.grup_nama} — ${bulanTahunLabel(bulan, taOfGrup(grupObj))}` : t.grup_nama;
       return `<form method="post" action="${c.base}/iuran/bayar" id="${fid}">
         <input type="hidden" name="tagihan_id" value="${t.id}">
@@ -1115,8 +1124,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="hint">Otomatis = Jumlah Iuran − Potongan.</div></div>
         <div class="field"><label>Pilih BKU Sasaran</label><select name="bku_id" data-bku-select required>
           <option value="">— Pilih BKU tujuan —</option>
-          ${bukuss.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}
-        </select><div class="hint">Penerimaan masuk <b>antrean posting</b> dahulu, belum langsung ke BKU.</div></div>
+            ${bukuss.map(b => `<option value="${b.id}" ${String(b.id) === String(targetBkuId) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}
+          </select><div class="hint">${targetBkuId ? `Default mengikuti hubungan grup ini ke BKU <b>${esc(targetBku.nama)}</b>; masih bisa diubah.` : 'Penerimaan masuk <b>antrean posting</b> dahulu, belum langsung ke BKU.'}</div></div>
         <label class="check" style="background:var(--o-50);border:1px solid var(--line);border-radius:11px;padding:9px 12px">
           <input type="checkbox" name="nonbku" value="1" data-nonbku>
           <span><b>Hanya Simpan Data Pembayaran (Non-BKU)</b><br>
@@ -1166,12 +1175,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       <div class="card-head"><div><h3>Grup Iuran Ditetapkan</h3><div class="sub">${tags.length} grup · centang item grup atau per bulan untuk membayar, mencetak kwitansi, atau export</div></div></div>
       ${tags.length ? `<form method="post" action="${c.base}/iuran/bayar-item" id="fItems">
         <input type="hidden" name="back" value="/iuran/data/${s.id}?ta=${taSel ? taSel.id : ''}">
-        <div class="row3 mb-2">
+        <div class="row2 mb-2">
           <div class="field"><label>Tanggal Bayar</label><input type="date" name="tanggal" value="${todayISO()}"></div>
           <div class="field"><label>Metode</label><select name="metode"><option value="tunai">Tunai</option><option value="transfer">Transfer</option></select></div>
-          <div class="field"><label>BKU Sasaran</label><select name="bku_id">
-            <option value="">— Pilih BKU —</option>${bukuss.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}</select>
-            <div class="hint">Wajib dipilih bila tombol <b>Bayar Item Terpilih</b> dipakai.</div></div>
         </div>
         <div class="alert info mb-2">${ui.icon('info')}<div><b>Cetak Kwitansi Terpilih</b> hanya memuat item yang <b>sudah dibayar</b> (item belum dibayar otomatis diabaikan).
           <b>Export Excel Terpilih</b> menampilkan rincian vertikal per item, termasuk item yang belum dibayar.</div></div>
@@ -1187,8 +1193,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       const bulanan = t.grup_jenis === 'bulanan';
       const det = bulanan ? monthlyDetail(t, grupObj, payments) : [];
       const lockedTag = isLocked(t);
+      const targetBku = targetBkuByGrup.get(Number(t.grup_id));
+      const targetBkuId = targetBku && targetBku.status === 'aktif' ? targetBku.id : '';
       const rowHtml = `<tr class="${lockedTag ? 'row-locked' : ''}">
-            <td>${bulanan ? '' : `<input type="checkbox" name="item" value="g:${t.id}" data-label="${esc(t.grup_nama)}" data-sisa="${Number(t.sisa) || 0}">`}</td>
+            <td>${bulanan ? '' : `<input type="checkbox" name="item" value="g:${t.id}" data-label="${esc(t.grup_nama)}" data-sisa="${Number(t.sisa) || 0}" data-bku="${targetBkuId}">`}</td>
             <td class="t-strong">${esc(t.grup_nama)}${bulanan ? `<div class="t-sub">${det.filter(m => m.status !== 'lunas').map(m => esc(`${t.grup_nama} - ${bulanTahunLabel(m.bulan, taOfGrup(grupObj))}`)).join(' · ') || 'semua bulan lunas'}</div>` : ''}</td>
             <td>${GROUP_LABEL[t.grup_jenis]}</td>
             <td>${statusBadge(t.status)}${lockedTag ? '<div class="lock-note" style="margin-top:4px">Beasiswa · potongan otomatis</div>' : ''}</td>
@@ -1216,7 +1224,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         const lastM = m.dibayar > 0 ? payments.filter(p => Number(p.bulan) === m.bulan).map(p => p.tanggal).sort().pop()
           || payments.map(p => p.tanggal).sort().pop() : null;
         return `<tr class="month-row${lockedTag ? ' row-locked' : ''}">
-          <td><input type="checkbox" name="item" value="m:${t.id}:${m.bulan}" data-label="${esc(label)}" data-sisa="${Number(m.sisa) || 0}"></td>
+          <td><input type="checkbox" name="item" value="m:${t.id}:${m.bulan}" data-label="${esc(label)}" data-sisa="${Number(m.sisa) || 0}" data-bku="${targetBkuId}"></td>
           <td class="month-cell">↳ <b>${esc(label)}</b></td>
           <td class="t-sub">Bulanan</td>
           <td>${statusBadge(m.status)}</td>
@@ -1261,7 +1269,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="row2 mb-2">
           <div class="field"><label>Tanggal Default</label><input type="date" value="${todayISO()}" data-bulk-date></div>
           <div class="field"><label>BKU Default (diterapkan ke semua baris)</label>
-            <select data-bulk-bku><option value="">— Pilih BKU —</option>${bukuss.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}</select></div>
+            <select data-bulk-bku><option value="">— Ikuti tujuan Grup Iuran —</option>${bukuss.map(b => `<option value="${b.id}">${esc(b.nama)}</option>`).join('')}</select></div>
         </div>
         <div class="table-wrap"><table class="grid-tbl"><thead><tr>
           <th>Item Iuran</th><th style="width:130px">Tanggal</th><th style="width:110px">Metode</th>
