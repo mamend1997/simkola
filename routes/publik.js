@@ -149,6 +149,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       sisa: sum.sisa + group.sisa
     }), { tagihan: 0, diterima: 0, sisa: 0 });
     const usesIuranSaldo = b.jenis === 'kegiatan' || linkedIuran.length > 0;
+    const hideActivityIncomes = b.jenis === 'kegiatan';
 
     /* ---------- filter periode (bulan / rentang tanggal) ---------- */
     const bulan = isYm(qp('bulan')) ? qp('bulan') : '';
@@ -171,7 +172,10 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     });
     const signed = t => (t.jenis === 'pemasukan' ? 1 : -1) * Number(t.nominal || 0);
     const cocok = t => (!from || String(t.tanggal) >= from) && (!to || String(t.tanggal) <= to);
-    const hasil = berjalan.filter(cocok);
+    const visible = hideActivityIncomes
+      ? berjalan.filter(t => t.jenis !== 'pemasukan' || Number(t.is_penyesuaian) === 1)
+      : berjalan;
+    const hasil = visible.filter(cocok);
     const masukPeriode = hasil.filter(t => t.jenis === 'pemasukan').reduce((s, t) => s + Number(t.nominal || 0), 0);
     const masukPenyesuaian = hasil.filter(t => t.jenis === 'pemasukan' && Number(t.is_penyesuaian) === 1)
       .reduce((s, t) => s + Number(t.nominal || 0), 0);
@@ -195,7 +199,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     const linkKe = (row, n) => bkuHref(row, { bulan, from, to, hal: n > 1 ? n : '' });
 
     /* pilihan bulan = bulan yang benar-benar punya transaksi (terbaru di atas) */
-    const bulanOpsi = [...new Set(semua.map(t => String(t.tanggal || '').slice(0, 7)).filter(isYm))].sort().reverse();
+    const bulanOpsi = [...new Set(visible.map(t => String(t.tanggal || '').slice(0, 7)).filter(isYm))].sort().reverse();
     const ringkasFilter = [
       bulan ? `Bulan <b>${esc(labelYm(bulan))}</b>` : '',
       (!bulan && (from || to)) ? `Tanggal <b>${from ? esc(tglID(from)) : '…'} s.d. ${to ? esc(tglID(to)) : '…'}</b>` : ''
@@ -234,12 +238,13 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <div>${b.status === 'aktif' ? ui.badge('Buku Terbuka', 'green') : ui.badge('Buku Ditutup', 'gray')}</div>
       </div>
       ${taNotice ? `<div class="alert warn">${ui.icon('alert')}<div>${taNotice}</div></div>` : ''}
-      ${usesIuranSaldo ? `<div class="alert info">${ui.icon('info')}<div>Saldo BKU bersumber dari total <b>Sudah Diterima</b> pada grup iuran terhubung, dikurangi pengeluaran BKU. Pemasukan yang diposting ke BKU tetap tercatat, tetapi tidak menambah saldo lagi.${linkedIuran.length ? '' : ' Belum ada grup terhubung, sehingga saldo sumber Rp0 dan pengeluaran dapat membuat saldo negatif.'}</div></div>` : ''}
+      ${usesIuranSaldo ? `<div class="alert info">${ui.icon('info')}<div>Saldo BKU bersumber dari total <b>Sudah Diterima</b> pada grup iuran terhubung, dikurangi pengeluaran BKU. ${hideActivityIncomes ? 'Transaksi pemasukan BKU Kegiatan disembunyikan dari rincian; data transaksi tidak dihapus.' : 'Pemasukan yang diposting ke BKU tetap tercatat, tetapi tidak menambah saldo lagi.'}${linkedIuran.length ? '' : ' Belum ada grup terhubung, sehingga saldo sumber Rp0 dan pengeluaran dapat membuat saldo negatif.'}</div></div>` : ''}
       <div class="kpi-grid" style="gap:14px">
         <div class="kpi"><div class="lbl">${usesIuranSaldo ? (filterAktif ? 'Saldo Sumber Grup Iuran' : 'Penerimaan Grup Iuran') : (filterAktif ? 'Saldo Awal Periode' : 'Saldo Awal')}</div><div class="val">${rupiah(saldoAwalPeriode)}</div>
           ${filterAktif ? `<div class="meta">per ${esc(from ? tglID(from) : '…')}</div>` : ''}</div>
-        <div class="kpi"><div class="lbl">${usesIuranSaldo ? 'Pemasukan BKU (Informasi)' : 'Penerimaan'}</div><div class="val" style="color:var(--green)">${rupiah(masukInfoPeriode)}</div>
+        ${hideActivityIncomes ? '' : `<div class="kpi"><div class="lbl">${usesIuranSaldo ? 'Pemasukan BKU (Informasi)' : 'Penerimaan'}</div><div class="val" style="color:var(--green)">${rupiah(masukInfoPeriode)}</div>
           ${usesIuranSaldo ? '<div class="meta">tidak menambah saldo</div>' : ''}</div>
+        `}
         <div class="kpi"><div class="lbl">Pengeluaran</div><div class="val" style="color:var(--red)">${rupiah(keluarPeriode)}</div></div>
         <div class="kpi"><div class="lbl">${filterAktif ? 'Saldo Akhir Periode' : 'Saldo Buku'}</div><div class="val">${rupiah(saldoAkhirPeriode)}</div></div>
       </div>
@@ -269,9 +274,9 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     <div class="portal-card">
       ${filterBar}
       <h3 style="margin-top:16px">Rincian Transaksi
-        <span class="t-sub" style="font-weight:600;font-size:12px">(${hasil.length}${filterAktif ? ` dari ${berjalan.length}` : ''} transaksi)</span></h3>
+        <span class="t-sub" style="font-weight:600;font-size:12px">(${hasil.length}${filterAktif ? ` dari ${visible.length}` : ''} transaksi)</span></h3>
       ${ringkasFilter ? `<div class="alert info" style="margin-bottom:10px">${ui.icon('info')}<div>Filter aktif: ${ringkasFilter}.
-        Menampilkan <b>${hasil.length}</b> transaksi · Penerimaan <b>${rupiah(masukInfoPeriode)}</b> · Pengeluaran <b>${rupiah(keluarPeriode)}</b>.</div></div>` : ''}
+        Menampilkan <b>${hasil.length}</b> transaksi ${hideActivityIncomes ? '' : `· Penerimaan <b>${rupiah(masukInfoPeriode)}</b> `}· Pengeluaran <b>${rupiah(keluarPeriode)}</b>.</div></div>` : ''}
       ${showLedger ? `<div class="table-wrap sticky-head"><table>
         <thead><tr>
           <th style="width:38px">No</th><th>Tanggal</th><th>No. Bukti</th><th>Uraian</th>

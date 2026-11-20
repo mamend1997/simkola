@@ -86,6 +86,9 @@ async function req(method, url, body, noCookie = false) {
   run('INSERT INTO bku_iuran_grup (bku_id,grup_id) VALUES (?,?)', bkuId, grupId);
   run("INSERT INTO coa (kode,nama,kategori,aktif) VALUES ('R50.01','Belanja RAB R50','pengeluaran',1)");
   const coaId = Number(one("SELECT id FROM coa WHERE kode='R50.01'").id);
+  run(`INSERT INTO transaksi (bku_id,tanggal,jenis,nominal,uraian,status,created_at)
+    VALUES (?,?,'pemasukan',300000,'Pemasukan Informasional R50','posted',?)`,
+    bkuId, '2026-08-03', '2026-08-03 08:00:00');
   run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
     VALUES (?,?,?,'pengeluaran',?,'Belanja RAB R50','posted',?)`, bkuId, coaId, '2026-08-01', 700000, '2026-08-01 09:00:00');
   run(`INSERT INTO transaksi (bku_id,coa_id,tanggal,jenis,nominal,uraian,status,created_at)
@@ -114,6 +117,9 @@ async function req(method, url, body, noCookie = false) {
   ok('detail menjelaskan sumber saldo grup dan tidak lagi menampilkan peringatan selisih',
     r.text.includes('Saldo BKU bersumber langsung dari total')
       && !r.text.includes('Peringatan: saldo BKU tidak sama dengan penerimaan grup iuran'));
+  ok('pemasukan BKU Kegiatan tersembunyi di rincian tetapi tetap tersimpan',
+    !r.text.includes('Pemasukan Informasional R50')
+      && !!one("SELECT id FROM transaksi WHERE bku_id=? AND uraian='Pemasukan Informasional R50'", bkuId));
   r = await req('GET', `/bku/${bkuId}/berita-acara`);
   ok('berita acara tutup BKU membedakan penerimaan grup dari pemasukan informasional',
     r.status === 200 && r.text.includes('Penerimaan Grup Iuran')
