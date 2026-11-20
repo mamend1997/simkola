@@ -54,32 +54,72 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       ? Number(req.sessionRow.alert_pending) : 0;
 
     /* ---------- data grafik multi-tipe ---------- */
-    const finBku = ta ? db.prepare(`SELECT b.id, b.nama, b.saldo_awal,
+    const finBkuRows = ta ? db.prepare(`SELECT b.id, b.nama, b.saldo_awal,
         COALESCE(SUM(CASE WHEN t.status='posted' AND t.jenis='pemasukan' THEN t.nominal ELSE 0 END),0) masuk,
+        COALESCE(SUM(CASE WHEN t.status='posted' AND t.jenis='pemasukan' AND COALESCE(t.is_penyesuaian,0)=1 THEN t.nominal ELSE 0 END),0) masuk_penyesuaian,
         COALESCE(SUM(CASE WHEN t.status='posted' AND t.jenis='pengeluaran' THEN t.nominal ELSE 0 END),0) keluar
       FROM bku b LEFT JOIN transaksi t ON t.bku_id=b.id
       WHERE b.tahun_ajaran_id=? AND COALESCE(b.auto_mode,0)=0
-      GROUP BY b.id ORDER BY b.urutan, b.id`).all(ta.id)
-      .map(b => ({ nama: b.nama, masuk: Number(b.masuk), keluar: Number(b.keluar), saldo: Number(b.saldo_awal) + Number(b.masuk) - Number(b.keluar) })) : [];
+      GROUP BY b.id ORDER BY b.urutan, b.id`).all(ta.id) : [];
+    const finBku = finBkuRows.map(b => {
+      const sourceSaldo = dbm.bkuUsesIuranSaldo(b.id);
+      const masuk = sourceSaldo
+        ? dbm.bkuIuranReceived(b.id) + Number(b.masuk_penyesuaian || 0)
+        : Number(b.masuk || 0);
+      return {
+        nama: b.nama, masuk, keluar: Number(b.keluar || 0),
+        saldo: dbm.bkuSaldo(b.id)
+      };
+    });
     // tren bulanan pada tahun ajaran (12 bulan) untuk line chart
     const finBulan = [];
     if (ta) {
       const start = String(ta.tanggal_mulai || '').slice(0, 7) || `${new Date().getFullYear()}-01`;
       const [sy, sm] = start.split('-').map(Number);
-      const saldoAwalTotal = db.prepare('SELECT COALESCE(SUM(saldo_awal),0) s FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0').get(ta.id).s;
-      let run = Number(saldoAwalTotal || 0);
+      const bkus = db.prepare('SELECT id,saldo_awal FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0').all(ta.id);
+      const startDate = `${start}-01`;
+      const before = db.prepare(`SELECT bku_id,
+          COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE 0 END),0) masuk,
+          COALESCE(SUM(CASE WHEN jenis='pemasukan' AND COALESCE(is_penyesuaian,0)=1 THEN nominal ELSE 0 END),0) masuk_penyesuaian,
+          COALESCE(SUM(CASE WHEN jenis='pengeluaran' THEN nominal ELSE 0 END),0) keluar
+        FROM transaksi WHERE status='posted' AND tanggal<? AND bku_id IN
+          (SELECT id FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0)
+        GROUP BY bku_id`).all(startDate, ta.id);
+      const beforeMap = new Map(before.map(x => [Number(x.bku_id), x]));
+      let run = bkus.reduce((sum, b) => {
+        const tx = beforeMap.get(Number(b.id)) || {};
+        const dynamic = dbm.bkuUsesIuranSaldo(b.id);
+        const source = dynamic ? dbm.bkuIuranReceived(b.id, { before: startDate }) : Number(b.saldo_awal || 0);
+        return sum + source + Number(dynamic ? tx.masuk_penyesuaian || 0 : tx.masuk || 0) - Number(tx.keluar || 0);
+      }, 0);
       for (let i = 0; i < 12; i++) {
         const d = new Date(Date.UTC(sy, sm - 1 + i, 1));
         const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-        const t = db.prepare(`SELECT
+        const from = `${ym}-01`;
+        const monthEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+        const to = `${monthEnd.getUTCFullYear()}-${String(monthEnd.getUTCMonth() + 1).padStart(2, '0')}-${String(monthEnd.getUTCDate()).padStart(2, '0')}`;
+        const txRows = db.prepare(`SELECT t.bku_id,
             COALESCE(SUM(CASE WHEN t.jenis='pemasukan' THEN t.nominal ELSE 0 END),0) masuk,
+            COALESCE(SUM(CASE WHEN t.jenis='pemasukan' AND COALESCE(t.is_penyesuaian,0)=1 THEN t.nominal ELSE 0 END),0) masuk_penyesuaian,
             COALESCE(SUM(CASE WHEN t.jenis='pengeluaran' THEN t.nominal ELSE 0 END),0) keluar
           FROM transaksi t JOIN bku b ON b.id=t.bku_id
-          WHERE t.status='posted' AND substr(t.tanggal,1,7)=? AND b.tahun_ajaran_id=? AND COALESCE(b.auto_mode,0)=0`).get(ym, ta.id);
-        run += Number(t.masuk) - Number(t.keluar);
+          WHERE t.status='posted' AND t.tanggal BETWEEN ? AND ? AND b.tahun_ajaran_id=? AND COALESCE(b.auto_mode,0)=0
+          GROUP BY t.bku_id`).all(from, to, ta.id);
+        const txMap = new Map(txRows.map(x => [Number(x.bku_id), x]));
+        let masuk = 0, keluar = 0;
+        for (const b of bkus) {
+          const tx = txMap.get(Number(b.id)) || {};
+          const dynamic = dbm.bkuUsesIuranSaldo(b.id);
+          const received = dynamic
+            ? dbm.bkuIuranReceived(b.id, { from, to }) + Number(tx.masuk_penyesuaian || 0)
+            : Number(tx.masuk || 0);
+          masuk += received;
+          keluar += Number(tx.keluar || 0);
+        }
+        run += masuk - keluar;
         finBulan.push({
           label: `${lib.BULAN[d.getUTCMonth()].slice(0, 3)} ${String(d.getUTCFullYear()).slice(2)}`,
-          masuk: Number(t.masuk), keluar: Number(t.keluar), saldo: run
+          masuk, keluar, saldo: run
         });
       }
     }

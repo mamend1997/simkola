@@ -96,13 +96,13 @@ async function req(method, url, body, noCookie = false) {
   const openingRow = (r.text.match(/<tr data-opening-row[\s\S]*?<\/tr>/) || [''])[0];
   const trxRows = Array.from(r.text.matchAll(/<tr id="trx\d+">[\s\S]*?<\/tr>/g), m => m[0]);
   const totalRow = (r.text.match(/<tfoot>[\s\S]*?<\/tfoot>/) || [''])[0];
-  ok('saldo awal ditampilkan pada kolom pemasukan dan saldo berjalan',
-    /SALDO AWAL[\s\S]*?<td class="num t-strong">Rp 3\.150\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 3\.150\.000/.test(openingRow));
+  ok('saldo sumber BKU kegiatan berasal dari penerimaan grup, bukan saldo awal manual',
+    /PENERIMAAN GRUP IURAN[\s\S]*?<td class="num t-strong">Rp 125\.000<\/td>\s*<td><\/td><td class="num t-strong">Rp 125\.000/.test(openingRow));
   ok('Detail BKU default menempatkan transaksi terbaru di paling bawah',
     trxRows.findIndex(x => x.includes('>Belanja RAB R50</div>'))
       < trxRows.findIndex(x => x.includes('>Belanja RAB R50 kedua</div>')));
-  ok('total pemasukan sudah mencakup saldo awal sehingga rekonsiliasi tepat',
-    totalRow.includes('Rp 3.150.000') && totalRow.includes('Rp 1.200.000') && totalRow.includes('Rp 1.950.000'));
+  ok('saldo akhir mengurangi pengeluaran dari penerimaan grup',
+    totalRow.includes('Rp 125.000') && totalRow.includes('Rp 1.200.000') && totalRow.includes('-Rp 1.075.000'));
   ok('Detail BKU merangkum tagihan lintas tahun ajaran', r.status === 200
     && r.text.includes('Ringkasan Grup Iuran Terhubung')
     && r.text.includes('TA Historis R50')
@@ -111,6 +111,13 @@ async function req(method, url, body, noCookie = false) {
     && r.text.includes('Rp 375.000')
     && r.text.includes(`/iuran/grup/${grupId}`)
     && r.text.includes('Lihat Rincian Grup'));
+  ok('detail menjelaskan sumber saldo grup dan tidak lagi menampilkan peringatan selisih',
+    r.text.includes('Saldo BKU bersumber langsung dari total')
+      && !r.text.includes('Peringatan: saldo BKU tidak sama dengan penerimaan grup iuran'));
+  r = await req('GET', `/bku/${bkuId}/berita-acara`);
+  ok('berita acara tutup BKU membedakan penerimaan grup dari pemasukan informasional',
+    r.status === 200 && r.text.includes('Penerimaan Grup Iuran')
+      && r.text.includes('Pemasukan BKU (Informasi)'));
   ok('RAB lama tetap dibandingkan dengan total pengeluaran', r.text.includes('Melebihi RAB')
     && r.text.includes('Rp 200.000'));
   r = await req('GET', `/bku/${bkuId}/rab`);
@@ -142,7 +149,22 @@ async function req(method, url, body, noCookie = false) {
   ok('BKU terhubung jadi default pada pembayaran dan pilihan item', r.status === 200
     && new RegExp(`<option value="${bkuId}" selected>`).test(r.text)
     && new RegExp(`data-bku="${bkuId}"`).test(r.text)
-    && r.text.includes('masih bisa diubah'));
+    && r.text.includes('pilihan dikunci'));
+  r = await req('GET', `/iuran?ta=${activeTa.id}`);
+  ok('form grup iuran menyediakan pilihan BKU dan default BKU Umum untuk SPP',
+    r.status === 200 && r.text.includes('name="bku_sasaran_id"')
+      && /data-default-bku="[1-9]\d*" data-auto-target="1"/.test(r.text));
+  const editGroup = target => req('POST', '/iuran/save', {
+    id: String(grupId), nama: 'Grup Historis R50', jenis: 'nonbulanan',
+    tahun_ajaran_id: String(oldTa.id), aktif: '1', nominal_tunggal: '500000',
+    bku_sasaran_id: target
+  });
+  r = await editGroup(String(secondBkuId));
+  ok('edit grup iuran dapat mengatur BKU sasaran', r.status === 303
+    && Number(one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId).bku_id) === secondBkuId);
+  r = await editGroup('');
+  ok('edit grup iuran dapat menghapus BKU sasaran', r.status === 303
+    && !one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId));
   r = await req('POST', '/bku/grup-iuran', { bku_id: secondBkuId, grup_id: String(grupId) });
   ok('Menghubungkan ulang grup memindahkannya dari BKU lama', r.status === 303
     && Number(one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId).bku_id) === secondBkuId);

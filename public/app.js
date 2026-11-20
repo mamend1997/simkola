@@ -1282,12 +1282,21 @@ function terbilang(n) {
     const jenis = form.querySelector('[data-iuran-jenis]');
     const wrapBulanan = form.querySelector('[data-jenis="bulanan"]');
     const wrapNon = form.querySelector('[data-jenis="nonbulanan"]');
+    const bkuTarget = form.querySelector('[data-iuran-bku-target]');
+    const namaGrup = form.querySelector('input[name="nama"]');
     function syncJenis() {
       const v = (jenis && jenis.value) || 'bulanan';
       if (wrapBulanan) wrapBulanan.style.display = v === 'bulanan' ? '' : 'none';
       if (wrapNon) wrapNon.style.display = v === 'nonbulanan' ? '' : 'none';
     }
-    if (jenis) jenis.addEventListener('change', syncJenis);
+    function syncBkuTarget() {
+      if (!bkuTarget || bkuTarget.dataset.autoTarget !== '1') return;
+      const isSpp = /(^|[^a-z0-9])spp([^a-z0-9]|$)/i.test((namaGrup && namaGrup.value) || '');
+      bkuTarget.value = jenis && jenis.value === 'bulanan' && isSpp ? (bkuTarget.dataset.defaultBku || '') : '';
+    }
+    if (jenis) jenis.addEventListener('change', () => { syncJenis(); syncBkuTarget(); });
+    if (namaGrup) namaGrup.addEventListener('input', syncBkuTarget);
+    if (bkuTarget) bkuTarget.addEventListener('change', () => { bkuTarget.dataset.autoTarget = '0'; });
     const radios = $$('input[name=mode_nominal]', form);
     const rata = form.querySelector('[data-nominal-rata]');
     const grid = form.querySelector('[data-bulan-grid]');
@@ -1299,7 +1308,7 @@ function terbilang(n) {
       if (grid) grid.querySelectorAll('input').forEach(i => { i.disabled = v === 'rata'; });
     }
     radios.forEach(r => r.addEventListener('change', syncMode));
-    syncJenis(); syncMode();
+    syncJenis(); syncMode(); syncBkuTarget();
   });
 
   /* ===== form bayar iuran: dibayar = jumlah − potongan ===== */
@@ -1734,6 +1743,7 @@ function terbilang(n) {
       rowsHost.innerHTML = checked.map((c, i) => {
         const sisa = Number(c.dataset.sisa || 0);
         const label = (c.dataset.label || c.value).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        const targetBku = c.dataset.bku || '';
         return `<tr>
           <td><input type="hidden" name="key_${i}" value="${c.value}"><div class="t-strong">${label}</div>
             <div class="t-sub">Sisa ${'Rp ' + thousands(sisa)}</div></td>
@@ -1741,14 +1751,16 @@ function terbilang(n) {
           <td><select name="metode_${i}"><option value="tunai">Tunai</option><option value="transfer">Transfer</option></select></td>
           <td><input type="text" inputmode="numeric" name="jumlah_${i}" value="${thousands(sisa)}" data-money data-bulk-money></td>
           <td><input type="text" inputmode="numeric" name="potongan_${i}" value="" data-money data-bulk-money></td>
-          <td><select name="bku_${i}" data-bulk-row-bku data-target-bku="${c.dataset.bku || ''}">${bkuOptions}</select></td>
+          <td>${targetBku ? `<input type="hidden" name="bku_${i}" value="${targetBku}">` : ''}
+            <select name="bku_${i}" data-bulk-row-bku data-target-bku="${targetBku}" ${targetBku ? 'disabled' : ''}>${bkuOptions}</select>
+            ${targetBku ? '<div class="t-sub">BKU sasaran grup</div>' : ''}</td>
           <td class="center"><input type="checkbox" name="nonbku_${i}" value="1" data-bulk-nonbku></td>
         </tr>`;
       }).join('');
       nInput.value = String(checked.length);
       rowsHost.querySelectorAll('[data-bulk-money]').forEach(i => window.__simkeu && window.__simkeu.initMoney(i));
       if (defaultBku) rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => {
-        sel.value = defaultBku.value || sel.dataset.targetBku || '';
+        if (!sel.dataset.targetBku) sel.value = defaultBku.value || '';
       });
       rowsHost.querySelectorAll('[data-bulk-nonbku]').forEach(chk => chk.addEventListener('change', () => {
         const sel = chk.closest('tr').querySelector('[data-bulk-row-bku]');
@@ -1757,7 +1769,7 @@ function terbilang(n) {
       }));
       if (defaultDate) defaultDate.onchange = () => rowsHost.querySelectorAll('input[type=date]').forEach(d => { d.value = defaultDate.value; });
       if (defaultBku) defaultBku.onchange = () => rowsHost.querySelectorAll('[data-bulk-row-bku]').forEach(sel => {
-        sel.value = defaultBku.value || sel.dataset.targetBku || '';
+        if (!sel.dataset.targetBku) sel.value = defaultBku.value || '';
       });
       window.__openModal('mBayarItem');
     });

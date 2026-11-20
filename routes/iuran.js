@@ -306,7 +306,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </form>`;
     };
 
-    const form = (g, fid) => `<form method="post" action="${c.base}/iuran/save" id="${fid}" data-iuran-form>
+    const form = (g, fid) => {
+      const targetBku = g ? dbm.bkuForIuranGrup(g.id) : null;
+      const bkuOptions = dbm.allBku(g ? g.tahun_ajaran_id : taId)
+        .filter(b => b.status === 'aktif' || Number(b.id) === Number(targetBku && targetBku.id));
+      if (targetBku && !bkuOptions.some(b => Number(b.id) === Number(targetBku.id))) bkuOptions.unshift(targetBku);
+      const defaultBku = bkuOptions.find(b => b.jenis === 'umum' && b.status === 'aktif');
+      const autoTarget = !g && !!defaultBku;
+      const selectedBku = targetBku ? targetBku.id : '';
+      return `<form method="post" action="${c.base}/iuran/save" id="${fid}" data-iuran-form>
       <input type="hidden" name="id" value="${g ? g.id : ''}">
       <div class="row2">
         <div class="field"><label>Nama Grup Iuran</label><input name="nama" value="${esc(g ? g.nama : '')}" required placeholder="Iuran SPP / Iuran Praktik"></div>
@@ -321,9 +329,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </select></div>
         <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(g ? g.keterangan : '')}" placeholder="Opsional"></div>
       </div>
+      <div class="field"><label>BKU Sasaran</label>
+        <select name="bku_sasaran_id" data-iuran-bku-target data-default-bku="${defaultBku ? defaultBku.id : ''}" data-auto-target="${autoTarget ? '1' : '0'}">
+          <option value="" ${selectedBku ? '' : 'selected'}>— Tidak ada BKU sasaran —</option>
+          ${bkuOptions.map(b => `<option value="${b.id}" ${String(b.id) === String(selectedBku) ? 'selected' : ''}>${esc(b.nama)}${b.status === 'aktif' ? '' : ' · Ditutup'}</option>`).join('')}
+        </select>
+        <div class="hint">Grup ini menjadi sumber saldo BKU sasaran: total pembayaran non-void menambah saldo otomatis dan pemasukan transaksi BKU tidak dihitung ulang. Grup SPP bulanan baru otomatis diarahkan ke BKU Umum jika tersedia; pilih “Tidak ada BKU sasaran” bila tidak ingin menghubungkan saldo.</div>
+      </div>
       <div data-nominal-wrap>${nominalFields(g, req.query.get('tingkat'))}</div>
       <label class="check"><input type="checkbox" name="aktif" value="1" ${!g || g.aktif ? 'checked' : ''}> Grup iuran aktif</label>
     </form>`;
+    };
 
     const content = `<div class="card">
       <div class="card-head"><div><h3>Grup Iuran</h3><div class="sub">${groups.length} grup pada tahun pelajaran terpilih</div></div>
@@ -475,6 +491,19 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const taId = Number(tahun_ajaran_id || dbm.taAutoId());
     const aktif = req.body.aktif ? 1 : 0;
     let grupId = Number(req.body.id || 0);
+    const targetSent = Object.prototype.hasOwnProperty.call(req.body, 'bku_sasaran_id');
+    const currentTarget = isEdit ? dbm.bkuForIuranGrup(grupId) : null;
+    const targetBkuId = targetSent
+      ? Number(req.body.bku_sasaran_id || 0) : Number(currentTarget && currentTarget.id || 0);
+    const targetBku = targetBkuId
+      ? db.prepare('SELECT * FROM bku WHERE id=? AND COALESCE(auto_mode,0)=0').get(targetBkuId) : null;
+    if (targetBkuId && !targetBku) {
+      return res.redirect(back + '?err=' + encodeURIComponent('BKU sasaran tidak ditemukan atau bukan BKU transaksi.'));
+    }
+    if (targetBku && targetBku.status !== 'aktif'
+        && Number(targetBku.id) !== Number(currentTarget && currentTarget.id)) {
+      return res.redirect(back + '?err=' + encodeURIComponent('BKU sasaran harus berstatus aktif.'));
+    }
     db.transaction(() => {
       if (isEdit) {
         db.prepare('UPDATE iuran_grup SET nama=?,jenis=?,tahun_ajaran_id=?,keterangan=?,aktif=? WHERE id=?')
@@ -483,6 +512,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         const info = db.prepare('INSERT INTO iuran_grup (nama,jenis,tahun_ajaran_id,keterangan,aktif,created_at) VALUES (?,?,?,?,?,?)')
           .run(nama.trim(), jenisV, taId, keterangan || '', aktif, nowStamp());
         grupId = Number(info.lastInsertRowid);
+      }
+      if (targetSent) {
+        db.prepare('DELETE FROM bku_iuran_grup WHERE grup_id=?').run(grupId);
+        if (targetBkuId) db.prepare('INSERT INTO bku_iuran_grup (bku_id,grup_id) VALUES (?,?)').run(targetBkuId, grupId);
       }
       // nominal — hanya untuk tingkat yang dipilih ('' = default semua tingkat)
       const tk = String(req.body.nominal_tingkat || '').trim();
@@ -507,7 +540,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         }
       }
     })();
-    dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'iuran', `${isEdit ? 'Edit' : 'Tambah'} grup iuran ${nama}`);
+    dbm.logAudit(req.user, isEdit ? 'EDIT' : 'TAMBAH', 'iuran',
+      `${isEdit ? 'Edit' : 'Tambah'} grup iuran ${nama} · BKU sasaran ${targetBku ? targetBku.nama : 'tidak ada'}`);
     res.redirect(back + '?ok=' + encodeURIComponent('Grup iuran disimpan.'));
   });
 
@@ -1122,10 +1156,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         </div>
         <div class="field"><label>Dibayar (Rp)</label>${ui.moneyInput('dibayar', sisa, 'readonly data-dibayar')}
           <div class="hint">Otomatis = Jumlah Iuran − Potongan.</div></div>
-        <div class="field"><label>Pilih BKU Sasaran</label><select name="bku_id" data-bku-select required>
+        <div class="field"><label>Pilih BKU Sasaran</label>
+          ${targetBkuId ? `<input type="hidden" name="bku_id" value="${targetBkuId}">` : ''}
+          <select name="bku_id" data-bku-select required ${targetBkuId ? 'disabled' : ''}>
           <option value="">— Pilih BKU tujuan —</option>
             ${bukuss.map(b => `<option value="${b.id}" ${String(b.id) === String(targetBkuId) ? 'selected' : ''}>${esc(b.nama)}</option>`).join('')}
-          </select><div class="hint">${targetBkuId ? `Default mengikuti hubungan grup ini ke BKU <b>${esc(targetBku.nama)}</b>; masih bisa diubah.` : 'Penerimaan masuk <b>antrean posting</b> dahulu, belum langsung ke BKU.'}</div></div>
+          </select><div class="hint">${targetBkuId ? `Mengikuti BKU sasaran grup <b>${esc(targetBku.nama)}</b>; pilihan dikunci agar penerimaan tidak tercatat ganda di saldo.` : 'Penerimaan masuk <b>antrean posting</b> dahulu, belum langsung ke BKU.'}</div></div>
         <label class="check" style="background:var(--o-50);border:1px solid var(--line);border-radius:11px;padding:9px 12px">
           <input type="checkbox" name="nonbku" value="1" data-nonbku>
           <span><b>Hanya Simpan Data Pembayaran (Non-BKU)</b><br>
@@ -2259,6 +2295,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     /** modal edit satu penerimaan: ubah nominal / tanggal / atau ubah status pembukuan */
     function editModal(b) {
       const isPosted = b.status === 'posted';
+      const targetBku = b.grup_id ? dbm.bkuForIuranGrup(b.grup_id) : null;
+      const rowBukuss = targetBku && !bukuss.some(x => Number(x.id) === Number(targetBku.id))
+        ? [targetBku, ...bukuss] : bukuss;
       return {
         title: 'Tinjau / Edit Penerimaan Iuran', body: `<form method="post" action="${c.base}/iuran/antrean/edit" id="fe${b.id}">
           <input type="hidden" name="id" value="${b.id}">
@@ -2279,9 +2318,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
               <div class="hint">Penerimaan tetap masuk antrean. Pilih Non-BKU untuk diproses sebagai data saja tanpa transaksi BKU.</div></div>`}
           </div>
           ${!isPosted ? `<div class="field"><label>BKU Sasaran (dipakai bila status Masuk BKU)</label>
-            <select name="bku_id"><option value="">— Pilih BKU —</option>
-              ${bukuss.map(x => `<option value="${x.id}" ${String(x.id) === String(b.bku_id) ? 'selected' : ''}>${esc(x.nama)}</option>`).join('')}
-            </select></div>` : ''}
+            ${targetBku ? `<input type="hidden" name="bku_id" value="${targetBku.id}">` : ''}
+            <select name="bku_id" ${targetBku ? 'disabled' : ''}><option value="">— Pilih BKU —</option>
+              ${rowBukuss.map(x => `<option value="${x.id}" ${String(x.id) === String(targetBku ? targetBku.id : b.bku_id) ? 'selected' : ''}>${esc(x.nama)}</option>`).join('')}
+            </select>
+            <div class="hint">${targetBku ? `Mengikuti BKU sasaran grup <b>${esc(targetBku.nama)}</b>; perubahan dilakukan melalui edit grup iuran.` : 'Tanpa BKU sasaran grup, pilih tujuan posting di sini.'}</div></div>` : ''}
           <div class="field"><label>Keterangan</label><input name="keterangan" value="${esc(b.keterangan || '')}"></div>
         </form>`,
         footer: `<button class="btn" data-close="mE${b.id}">Batal</button><button class="btn btn-primary" form="fe${b.id}">${ui.icon('save')}Simpan Perubahan</button>`
@@ -2762,7 +2803,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
    */
   function postQueueRows(rows, opts = {}) {
     if (!rows || !rows.length) return { ok: false, err: 'Tidak ada penerimaan yang dipilih.' };
-    const bkuId = Number(opts.bkuId || rows[0].bku_id || 0);
+    const grupIdOf = row => row.tagihan_id
+      ? Number((db.prepare('SELECT grup_id FROM iuran_tagihan WHERE id=?').get(row.tagihan_id) || {}).grup_id || 0) : 0;
+    const grupIds = [...new Set(rows.map(grupIdOf))];
+    if (grupIds.length > 1) return { ok: false, err: 'Posting harus dipisah per grup iuran.' };
+    const tanggalRows = [...new Set(rows.map(r => String(r.tanggal || '').slice(0, 10)))];
+    if (tanggalRows.length > 1) return { ok: false, err: 'Posting harus dipisah per tanggal pembayaran.' };
+    const grupId = grupIds[0] || null;
+    const grup = grupId ? db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(grupId) : null;
+    const bkuTerkonfigurasi = grupId ? dbm.bkuForIuranGrup(grupId) : null;
+    const bkuId = Number((bkuTerkonfigurasi && bkuTerkonfigurasi.id) || opts.bkuId || rows[0].bku_id || 0);
     let bku = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
     if (!bku) return { ok: false, err: 'BKU sasaran tidak ditemukan.' };
     if (bku.status !== 'aktif') return { ok: false, err: `BKU ${bku.nama} sudah ditutup.` };
@@ -2779,8 +2829,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (lock) return { ok: false, err: lock };
     const total = rows.reduce((s, r) => s + Number(r.dibayar || 0), 0);
     if (total <= 0) return { ok: false, err: 'Total penerimaan Rp 0 — periksa kembali nominal.' };
-    const grupId = rows[0].tagihan_id ? (db.prepare('SELECT grup_id FROM iuran_tagihan WHERE id=?').get(rows[0].tagihan_id) || {}).grup_id : null;
-    const grup = grupId ? db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(grupId) : null;
     const coa = coaById(Number(opts.coaId || 0)) || coaIuran(grupId ? (db.prepare('SELECT coa_id FROM iuran_grup WHERE id=?').get(grupId) || {}).coa_id : null);
     if (!coa) return { ok: false, err: 'Kode rekening penerimaan tidak ditemukan.' };
     if (coa.kategori !== 'pendapatan') return { ok: false, err: 'Kode rekening yang dipilih bukan kelompok pendapatan/penerimaan.' };

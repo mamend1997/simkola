@@ -148,6 +148,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       diterima: sum.diterima + group.diterima,
       sisa: sum.sisa + group.sisa
     }), { tagihan: 0, diterima: 0, sisa: 0 });
+    const usesIuranSaldo = b.jenis === 'kegiatan' || linkedIuran.length > 0;
 
     /* ---------- filter periode (bulan / rentang tanggal) ---------- */
     const bulan = isYm(qp('bulan')) ? qp('bulan') : '';
@@ -159,23 +160,33 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
 
     const semua = db.prepare(`SELECT t.* FROM transaksi t
         WHERE t.bku_id=? AND t.status='posted' ORDER BY t.tanggal, t.id`).all(b.id);
-    /* saldo berjalan dihitung dari saldo awal BKU untuk SELURUH transaksi,
-       lalu disaring — sehingga saldo pada hasil filter tetap benar. */
-    let run = Number(b.saldo_awal || 0);
+    /* BKU kegiatan memakai penerimaan grup sebagai sumber saldo; pemasukan BKU hanya informasi. */
+    const saldoSumber = usesIuranSaldo
+      ? linkedIuranSummary.diterima : Number(b.saldo_awal || 0);
+    let run = saldoSumber;
     const berjalan = semua.map(t => {
-      run += (t.jenis === 'pemasukan' ? 1 : -1) * Number(t.nominal || 0);
+      if (t.jenis === 'pengeluaran') run -= Number(t.nominal || 0);
+      else if (!usesIuranSaldo || Number(t.is_penyesuaian) === 1) run += Number(t.nominal || 0);
       return { ...t, saldo: run };
     });
     const signed = t => (t.jenis === 'pemasukan' ? 1 : -1) * Number(t.nominal || 0);
     const cocok = t => (!from || String(t.tanggal) >= from) && (!to || String(t.tanggal) <= to);
     const hasil = berjalan.filter(cocok);
     const masukPeriode = hasil.filter(t => t.jenis === 'pemasukan').reduce((s, t) => s + Number(t.nominal || 0), 0);
+    const masukPenyesuaian = hasil.filter(t => t.jenis === 'pemasukan' && Number(t.is_penyesuaian) === 1)
+      .reduce((s, t) => s + Number(t.nominal || 0), 0);
     const keluarPeriode = hasil.filter(t => t.jenis === 'pengeluaran').reduce((s, t) => s + Number(t.nominal || 0), 0);
-    /* saldo awal periode = saldo BKU sebelum tanggal mulai filter */
+    /* Saldo pembuka BKU kegiatan berasal dari grup; pemasukan BKU tidak dihitung ulang. */
     const saldoAwalPeriode = from
-      ? Number(b.saldo_awal || 0) + semua.filter(t => String(t.tanggal) < from).reduce((s, t) => s + signed(t), 0)
-      : Number(b.saldo_awal || 0);
-    const saldoAkhirPeriode = saldoAwalPeriode + masukPeriode - keluarPeriode;
+      ? saldoSumber + semua.filter(t => String(t.tanggal) < from)
+        .reduce((s, t) => s + (usesIuranSaldo
+          ? (t.jenis === 'pengeluaran' ? -Number(t.nominal || 0)
+            : Number(t.is_penyesuaian) === 1 ? Number(t.nominal || 0) : 0)
+          : signed(t)), 0)
+      : saldoSumber;
+    const saldoAkhirPeriode = saldoAwalPeriode
+      + (usesIuranSaldo ? masukPenyesuaian : masukPeriode) - keluarPeriode;
+    const masukInfoPeriode = usesIuranSaldo ? masukPeriode - masukPenyesuaian : masukPeriode;
 
     const totalHal = Math.max(1, Math.ceil(hasil.length / PER_HAL));
     const hal = Math.min(totalHal, Math.max(1, Number(qp('hal') || 1) || 1));
@@ -223,10 +234,12 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <div>${b.status === 'aktif' ? ui.badge('Buku Terbuka', 'green') : ui.badge('Buku Ditutup', 'gray')}</div>
       </div>
       ${taNotice ? `<div class="alert warn">${ui.icon('alert')}<div>${taNotice}</div></div>` : ''}
+      ${usesIuranSaldo ? `<div class="alert info">${ui.icon('info')}<div>Saldo BKU bersumber dari total <b>Sudah Diterima</b> pada grup iuran terhubung, dikurangi pengeluaran BKU. Pemasukan yang diposting ke BKU tetap tercatat, tetapi tidak menambah saldo lagi.${linkedIuran.length ? '' : ' Belum ada grup terhubung, sehingga saldo sumber Rp0 dan pengeluaran dapat membuat saldo negatif.'}</div></div>` : ''}
       <div class="kpi-grid" style="gap:14px">
-        <div class="kpi"><div class="lbl">${filterAktif ? 'Saldo Awal Periode' : 'Saldo Awal'}</div><div class="val">${rupiah(saldoAwalPeriode)}</div>
+        <div class="kpi"><div class="lbl">${usesIuranSaldo ? (filterAktif ? 'Saldo Sumber Grup Iuran' : 'Penerimaan Grup Iuran') : (filterAktif ? 'Saldo Awal Periode' : 'Saldo Awal')}</div><div class="val">${rupiah(saldoAwalPeriode)}</div>
           ${filterAktif ? `<div class="meta">per ${esc(from ? tglID(from) : '…')}</div>` : ''}</div>
-        <div class="kpi"><div class="lbl">Penerimaan</div><div class="val" style="color:var(--green)">${rupiah(masukPeriode)}</div></div>
+        <div class="kpi"><div class="lbl">${usesIuranSaldo ? 'Pemasukan BKU (Informasi)' : 'Penerimaan'}</div><div class="val" style="color:var(--green)">${rupiah(masukInfoPeriode)}</div>
+          ${usesIuranSaldo ? '<div class="meta">tidak menambah saldo</div>' : ''}</div>
         <div class="kpi"><div class="lbl">Pengeluaran</div><div class="val" style="color:var(--red)">${rupiah(keluarPeriode)}</div></div>
         <div class="kpi"><div class="lbl">${filterAktif ? 'Saldo Akhir Periode' : 'Saldo Buku'}</div><div class="val">${rupiah(saldoAkhirPeriode)}</div></div>
       </div>
@@ -258,21 +271,22 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
       <h3 style="margin-top:16px">Rincian Transaksi
         <span class="t-sub" style="font-weight:600;font-size:12px">(${hasil.length}${filterAktif ? ` dari ${berjalan.length}` : ''} transaksi)</span></h3>
       ${ringkasFilter ? `<div class="alert info" style="margin-bottom:10px">${ui.icon('info')}<div>Filter aktif: ${ringkasFilter}.
-        Menampilkan <b>${hasil.length}</b> transaksi · Penerimaan <b>${rupiah(masukPeriode)}</b> · Pengeluaran <b>${rupiah(keluarPeriode)}</b>.</div></div>` : ''}
+        Menampilkan <b>${hasil.length}</b> transaksi · Penerimaan <b>${rupiah(masukInfoPeriode)}</b> · Pengeluaran <b>${rupiah(keluarPeriode)}</b>.</div></div>` : ''}
       ${showLedger ? `<div class="table-wrap sticky-head"><table>
         <thead><tr>
           <th style="width:38px">No</th><th>Tanggal</th><th>No. Bukti</th><th>Uraian</th>
           <th class="num">Penerimaan</th><th class="num">Pengeluaran</th><th class="num">Saldo</th>
         </tr></thead><tbody>
         ${hal === 1 ? `<tr data-opening-row style="background:#FFF8F2">
-          <td></td><td colspan="3" class="t-strong">SALDO AWAL ${from ? 'per ' + tglID(from) : ''}</td>
+          <td></td><td colspan="3" class="t-strong">${usesIuranSaldo ? 'PENERIMAAN GRUP IURAN' : 'SALDO AWAL'} ${from ? 'per ' + tglID(from) : ''}</td>
           <td class="num t-strong">${rupiah(saldoAwalPeriode)}</td><td></td><td class="num t-strong">${rupiah(saldoAwalPeriode)}</td>
         </tr>` : ''}
         ${rows.map((t, i) => `<tr>
           <td class="num">${(hal - 1) * PER_HAL + i + 1}</td>
           <td class="nowrap">${esc(tglID(t.tanggal))}</td>
           <td class="mono t-sub">${esc(t.no_bukti || '-')}</td>
-          <td>${esc(t.uraian || '-')}${t.nama_pihak ? `<div class="t-sub">${esc(t.nama_pihak)}</div>` : ''}</td>
+          <td>${esc(t.uraian || '-')}${t.nama_pihak ? `<div class="t-sub">${esc(t.nama_pihak)}</div>` : ''}
+            ${usesIuranSaldo && t.jenis === 'pemasukan' && Number(t.is_penyesuaian) !== 1 ? '<div class="t-sub">Informasi · tidak menambah saldo</div>' : ''}</td>
           <td class="num">${t.jenis === 'pemasukan' ? rupiah(t.nominal) : '-'}</td>
           <td class="num">${t.jenis === 'pengeluaran' ? rupiah(t.nominal) : '-'}</td>
           <td class="num t-strong">${rupiah(t.saldo)}</td>
@@ -280,7 +294,7 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         </tbody>
         <tfoot><tr>
           <td colspan="4">TOTAL${filterAktif ? ' PERIODE FILTER' : ''}</td>
-          <td class="num">${rupiah(saldoAwalPeriode + masukPeriode)}</td><td class="num">${rupiah(keluarPeriode)}</td>
+          <td class="num">${rupiah(saldoAwalPeriode + (usesIuranSaldo ? masukPenyesuaian : masukPeriode))}</td><td class="num">${rupiah(keluarPeriode)}</td>
           <td class="num">${rupiah(saldoAkhirPeriode)}</td>
         </tr></tfoot></table></div>
         ${totalHal > 1 ? `<div class="toolbar mt-2" style="justify-content:center;flex-wrap:wrap">

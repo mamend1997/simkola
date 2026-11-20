@@ -2079,13 +2079,35 @@ function autoBku(tahunId) {
   if (tahunId) return db.prepare('SELECT * FROM bku WHERE tahun_ajaran_id=? AND COALESCE(auto_mode,0)=1 ORDER BY urutan, id').all(tahunId);
   return db.prepare('SELECT * FROM bku WHERE COALESCE(auto_mode,0)=1 ORDER BY tahun_ajaran_id DESC, urutan, id').all();
 }
+function bkuIuranReceived(bkuId, range = {}) {
+  let sql = `SELECT COALESCE(SUM(COALESCE(p.dibayar,0)),0) diterima
+    FROM bku_iuran_grup m
+    JOIN iuran_tagihan t ON t.grup_id=m.grup_id
+    JOIN iuran_bayar p ON p.tagihan_id=t.id AND p.status<>'void'
+    WHERE m.bku_id=?`;
+  const args = [bkuId];
+  if (range.before) { sql += ' AND p.tanggal<?'; args.push(range.before); }
+  if (range.from) { sql += ' AND p.tanggal>=?'; args.push(range.from); }
+  if (range.to) { sql += ' AND p.tanggal<=?'; args.push(range.to); }
+  const row = db.prepare(sql).get(...args);
+  return Number(row.diterima || 0);
+}
+function bkuUsesIuranSaldo(bkuId) {
+  const b = db.prepare('SELECT jenis FROM bku WHERE id=?').get(bkuId);
+  return !!b && (b.jenis === 'kegiatan'
+    || !!db.prepare('SELECT 1 FROM bku_iuran_grup WHERE bku_id=? LIMIT 1').get(bkuId));
+}
 function bkuSaldo(bkuId) {
   const b = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
   if (!b) return 0;
   const r = db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE 0 END),0) masuk,
+      COALESCE(SUM(CASE WHEN jenis='pemasukan' AND COALESCE(is_penyesuaian,0)=1 THEN nominal ELSE 0 END),0) masuk_penyesuaian,
       COALESCE(SUM(CASE WHEN jenis='pengeluaran' THEN nominal ELSE 0 END),0) keluar
       FROM transaksi WHERE bku_id=? AND status='posted'`).get(bkuId);
+  if (bkuUsesIuranSaldo(bkuId)) {
+    return bkuIuranReceived(bkuId) + Number(r.masuk_penyesuaian || 0) - Number(r.keluar || 0);
+  }
   return Number(b.saldo_awal || 0) + r.masuk - r.keluar;
 }
 function bkuTotals(bkuId, from, to) {
@@ -2849,17 +2871,28 @@ function periodeEditable(bkuId, tanggal) { return periodeLockError(bkuId, tangga
 function openingFor(bkuId, periode) {
   const b = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
   if (!b) return 0;
-  const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE -nominal END),0) d
-    FROM transaksi WHERE bku_id=? AND status='posted' AND tanggal < ?`).get(bkuId, periodeStart(periode));
-  return Number(b.saldo_awal || 0) + r.d;
+  const usesIuranSaldo = bkuUsesIuranSaldo(bkuId);
+  const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN jenis='pengeluaran' THEN -nominal
+      WHEN ?=1 AND COALESCE(is_penyesuaian,0)<>1 THEN 0 ELSE nominal END),0) d
+    FROM transaksi WHERE bku_id=? AND status='posted' AND tanggal < ?`)
+    .get(usesIuranSaldo ? 1 : 0, bkuId, periodeStart(periode));
+  const source = usesIuranSaldo ? bkuIuranReceived(bkuId, { before: periodeStart(periode) }) : Number(b.saldo_awal || 0);
+  return source + Number(r.d || 0);
 }
 function monthTotals(bkuId, periode) {
+  const usesIuranSaldo = bkuUsesIuranSaldo(bkuId);
   const r = db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE 0 END),0) masuk,
       COALESCE(SUM(CASE WHEN jenis='pengeluaran' THEN nominal ELSE 0 END),0) keluar
     FROM transaksi WHERE bku_id=? AND status='posted' AND tanggal BETWEEN ? AND ?`)
     .get(bkuId, periodeStart(periode), periodeEnd(periode));
-  return { masuk: r.masuk, keluar: r.keluar };
+  const masuk = usesIuranSaldo
+    ? bkuIuranReceived(bkuId, { from: periodeStart(periode), to: periodeEnd(periode) })
+      + Number(db.prepare(`SELECT COALESCE(SUM(nominal),0) masuk FROM transaksi
+        WHERE bku_id=? AND status='posted' AND jenis='pemasukan' AND COALESCE(is_penyesuaian,0)=1
+          AND tanggal BETWEEN ? AND ?`).get(bkuId, periodeStart(periode), periodeEnd(periode)).masuk || 0)
+    : Number(r.masuk || 0);
+  return { masuk, keluar: Number(r.keluar || 0) };
 }
 /** posisi buku satu BKU pada akhir periode tertentu */
 function periodePosisi(bkuId, periode) {
@@ -4870,7 +4903,7 @@ module.exports = {
   rootDb, controlDb, runWithMeta, currentMeta, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, ensureTenantUniqueIndexes, createTenantDatabase, DATA_DIR, tableNamesOf,
   registerTimeFns, migrateLegacyTimestamps, TZ_LEGACY_SHIFT_HOURS, dateOffsetISO,
   getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, bkuIuranGroups, bkuForIuranGrup, bkuRabRows, bkuRabSummary, autoBku,
-  bkuSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
+  bkuSaldo, bkuIuranReceived, bkuUsesIuranSaldo, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
   piutangPegawaiTotal, piutangSisa, sppTunggakan, sppPeriode, sppTerimaMap, sppTampil, sppSeries,
   COA_EXPENSE_KATEGORI, COA_INCOME_KATEGORI, KATEGORI_LABEL, effKategori, cloneTaMaster, cloneKelasTa, autoGraduateStudents, purgeGhostData,
