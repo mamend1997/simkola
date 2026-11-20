@@ -309,7 +309,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="kpi ic-green"><div class="lbl">Sudah Diterima</div><div class="val" style="font-size:18px">${rupiah(iuranReceived)}</div></div>
           <div class="kpi ic-red"><div class="lbl">Sisa Tagihan</div><div class="val" style="font-size:18px">${rupiah(iuranRemaining)}</div></div>
         </div>
-        <div class="toolbar mt-2">${linkedIuran.map(g => `<span class="badge blue">${esc(g.nama)} · TA ${esc(g.ta_nama || '-')}</span>`).join('')}</div>
+        <div class="toolbar mt-2">${linkedIuran.map(g => `<span class="badge blue">${esc(g.nama)} · TA ${esc(g.ta_nama || '-')}</span>
+          ${c.can('iuran', 'view') ? `<a class="btn btn-sm" href="${c.base}/iuran/grup/${g.id}">${ui.icon('eye')}Lihat Rincian Grup</a>` : ''}`).join('')}</div>
       </div>` : `<div class="alert info mt-3">${ui.icon('info')}<div>Belum ada Grup Iuran terhubung. Hubungkan grup melalui tombol <b>Grup Iuran</b> di Master BKU agar total seharusnya diterima, penerimaan, dan sisa tagihan tampil di sini.
         ${c.can('bku', 'edit') ? `<a class="btn btn-sm" href="${c.base}/bku?ta=${b.tahun_ajaran_id}">${ui.icon('link')}Buka Master BKU</a>` : ''}</div></div>`}
       ${b.jenis === 'kegiatan' ? `<div class="card mt-3">

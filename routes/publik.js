@@ -240,13 +240,16 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
         <div class="kpi"><div class="lbl">Sisa Tagihan</div><div class="val" style="color:var(--red)">${rupiah(linkedIuranSummary.sisa)}</div></div>
       </div>
       <div class="table-wrap sticky-head mt-2"><table>
-        <thead><tr><th>Grup Iuran</th><th>Tahun Ajaran</th><th class="num">Total Seharusnya</th><th class="num">Sudah Diterima</th><th class="num">Sisa Tagihan</th></tr></thead>
+        <thead><tr><th>Grup Iuran</th><th>Tahun Ajaran</th><th class="num">Total Seharusnya</th><th class="num">Sudah Diterima</th><th class="num">Sisa Tagihan</th><th>Aksi</th></tr></thead>
         <tbody>${linkedIuran.map(g => `<tr><td class="t-strong">${esc(g.nama)}</td><td>${esc(g.ta_nama || '-')}</td>
           <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).tagihan)}</td>
           <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).diterima)}</td>
-          <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).sisa)}</td></tr>`).join('')}</tbody>
+          <td class="num">${rupiah(linkedIuranTotals.get(Number(g.id)).sisa)}</td>
+          <td class="nowrap">${g.is_public && g.public_token
+            ? `<a class="btn btn-sm" href="${base}/${slugBase}/publik/iuran/${encodeURIComponent(g.public_token)}">${ui.icon('eye')}Lihat Rincian</a>`
+            : '<span class="badge gray">Belum dipublikasikan</span>'}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="2">GRAND TOTAL</td><td class="num"><b>${rupiah(linkedIuranSummary.tagihan)}</b></td>
-          <td class="num"><b>${rupiah(linkedIuranSummary.diterima)}</b></td><td class="num"><b>${rupiah(linkedIuranSummary.sisa)}</b></td></tr></tfoot>
+          <td class="num"><b>${rupiah(linkedIuranSummary.diterima)}</b></td><td class="num"><b>${rupiah(linkedIuranSummary.sisa)}</b></td><td></td></tr></tfoot>
       </table></div>
     </div>` : ''}
 
@@ -481,6 +484,9 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
     const slugBase = dbm.portalSlugs().base;
     const qp = k => String(req.query.get(k) || '').trim();
     const ta = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(g.tahun_ajaran_id) || {};
+    const linkedBku = dbm.bkuForIuranGrup(g.id);
+    const linkedBkuUrl = linkedBku && linkedBku.is_public && linkedBku.public_token
+      ? `${base}/${slugBase}/publik/bku/${encodeURIComponent(linkedBku.public_token)}` : '';
 
     /* ---------- filter pencarian: nama/NISN & kelas ---------- */
     const q = qp('q');
@@ -534,7 +540,11 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
           <div class="t-sub" style="font-size:12.5px">${esc(jenisLabel)} · ${esc(periodeLabel)}
             · Tahun Pelajaran ${esc(ta.nama || '-')}</div>
         </div>
-        <div>${g.aktif ? ui.badge('Grup Aktif', 'green') : ui.badge('Non-Aktif', 'gray')}</div>
+        <div class="toolbar">
+          ${g.aktif ? ui.badge('Grup Aktif', 'green') : ui.badge('Non-Aktif', 'gray')}
+          ${linkedBkuUrl ? `<a class="btn btn-sm" href="${esc(linkedBkuUrl)}">${ui.icon('eye')}Lihat BKU</a>`
+          : linkedBku ? '<span class="badge gray">BKU belum dipublikasikan</span>' : ''}
+        </div>
       </div>
       <div class="kpi-grid" style="gap:14px">
         <div class="kpi"><div class="lbl">Total Tagihan</div><div class="val">${rupiah(totalTagihan)}</div>

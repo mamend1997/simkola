@@ -104,7 +104,9 @@ async function req(method, url, body, noCookie = false) {
     && r.text.includes('TA Historis R50')
     && r.text.includes('Rp 500.000')
     && r.text.includes('Rp 125.000')
-    && r.text.includes('Rp 375.000'));
+    && r.text.includes('Rp 375.000')
+    && r.text.includes(`/iuran/grup/${grupId}`)
+    && r.text.includes('Lihat Rincian Grup'));
   ok('RAB lama tetap dibandingkan dengan total pengeluaran', r.text.includes('Melebihi RAB')
     && r.text.includes('Rp 200.000'));
   r = await req('GET', `/bku/${bkuId}/rab`);

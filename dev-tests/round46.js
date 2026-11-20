@@ -352,7 +352,12 @@ async function follow(url, depth = 0) {
       && /Total Seharusnya Diterima \(Tagihan\)/.test(r.text)
       && /Sudah Diterima/.test(r.text)
       && /Sisa Tagihan/.test(r.text)
+      && r.text.includes(urlGrup)
+      && /Lihat Rincian/.test(r.text)
       && /GRAND TOTAL[\s\S]{0,160}5\.400\.000[\s\S]{0,100}975\.000[\s\S]{0,100}4\.400\.000/.test(r.text));
+  r = await pub(urlGrup);
+  ok('portal publik grup iuran menyediakan pintasan ke BKU publik terhubung',
+    r.status === 200 && /Lihat BKU/.test(r.text) && r.text.includes(urlBku2));
 
   /* toggle nonaktif */
   r = await req('POST', '/iuran/publik', { id: grup.id, aksi: 'toggle', aktif: '0', ta: ta.id });
