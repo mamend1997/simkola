@@ -273,6 +273,27 @@ async function req(method, url, body, noCookie = false) {
   r = await req('POST', '/bku/grup-iuran', { bku_id: secondBkuId, grup_id: String(grupId) });
   ok('Menghubungkan ulang grup memindahkannya dari BKU lama', r.status === 303
     && Number(one('SELECT bku_id FROM bku_iuran_grup WHERE grup_id=?', grupId).bku_id) === secondBkuId);
+  const postingDate = String(activeTa.tanggal_mulai).slice(0, 10);
+  const closedPeriod = postingDate.slice(0, 7);
+  run(`INSERT INTO bku_periode (bku_id,periode,status,metode) VALUES (?,?,'ditutup','rollover')
+    ON CONFLICT(bku_id,periode) DO UPDATE SET status='ditutup', metode='rollover'`, secondBkuId, closedPeriod);
+  run(`INSERT INTO iuran_bayar (tagihan_id,siswa_id,tanggal,jumlah,potongan,dibayar,metode,status,bku_id,created_at)
+    VALUES (?,?,?,10000,0,10000,'tunai','pending',?,?)`,
+    tagihanId, siswaId, postingDate, secondBkuId, `${postingDate} 12:00:00`);
+  const latePayment = one("SELECT * FROM iuran_bayar WHERE tagihan_id=? AND status='pending' ORDER BY id DESC LIMIT 1", tagihanId);
+  await req('POST', '/ta/pilih', { ta: String(oldTa.id) });
+  r = await req('GET', '/iuran/antrean');
+  ok('antrean menandai pembayaran dengan periode BKU tertutup',
+    r.status === 200 && r.text.includes('periode ditutup · akan dibuka saat posting'));
+  r = await req('POST', '/iuran/antrean/posting', {
+    ids: String(latePayment.id), bku_id: String(bkuId), coa_id: String(coaId)
+  });
+  const latePosted = one('SELECT * FROM iuran_bayar WHERE id=?', latePayment.id);
+  const reopened = one('SELECT status FROM bku_periode WHERE bku_id=? AND periode=?', secondBkuId, closedPeriod);
+  ok('posting antrean periode tertutup membuka periode otomatis dan sukses',
+    r.status === 303 && /dibuka otomatis/.test(decodeURIComponent(r.loc))
+      && latePosted.status === 'posted' && Number(latePosted.bku_id) === secondBkuId
+      && reopened.status === 'dibuka', r.loc);
   ok('tabel relasi BKU–Grup Iuran dan rincian RAB masuk daftar backup',
     require('../backupdata').TABLES.includes('bku_iuran_grup') && require('../backupdata').TABLES.includes('bku_rab'));
 

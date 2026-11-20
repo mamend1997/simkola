@@ -2307,6 +2307,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         .all(...pendingGroupIds).map(g => [g.id, g])
       : []);
     const queue = queueRows(pendingRows);
+    const canReopenClosed = can(req.user, 'tutup_bulanan', 'edit');
+    for (const q of queue) {
+      const target = q.target_bku || (q.bku_id ? db.prepare('SELECT * FROM bku WHERE id=?').get(q.bku_id) : null);
+      q.period_closed = !!(target && dbm.periodeStatus(target.id, q.tanggal.slice(0, 7)) === 'ditutup');
+    }
 
     const bukuss = db.prepare("SELECT * FROM bku WHERE status='aktif' AND tahun_ajaran_id=? AND COALESCE(auto_mode,0)=0 ORDER BY jenis DESC, urutan").all(taId || 0);
     const bkuDefault = bukuss.length ? bukuss[0].id : '';
@@ -2516,7 +2521,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     </div>` : ''}
     ${queue.length ? `<div class="alert warn mb-3">${ui.icon('alert')}<div><b>Terdapat ${queue.length} kelompok penerimaan grup iuran belum di-posting ke BKU.</b>
       ${queue.filter(q => q.tanggal <= yesterday).length ? `Termasuk ${queue.filter(q => q.tanggal <= yesterday).length} kelompok dari hari sebelumnya.` : ''}
-      Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.</div></div>` : ''}
+      Posting akan membuat <b>satu transaksi pemasukan</b> per grup &amp; tanggal pada BKU sasaran.
+      ${queue.some(q => q.period_closed) ? `<div class="mt-1"><b>Perhatian:</b> ${queue.filter(q => q.period_closed).length} kelompok berada pada periode yang sudah ditutup. Saat diposting, periode akan dibuka otomatis dan harus ditutup ulang setelah koreksi.${!canReopenClosed ? ' Anda tidak memiliki hak Buka Kembali; minta administrator membuka periode terlebih dahulu.' : ''}</div>` : ''}</div></div>` : ''}
     <div class="card mb-3">
       <div class="card-head"><div><h3>Antrean Posting BKU</h3>
         <div class="sub">Akumulasi penerimaan harian per grup iuran · ${filterAktif ? esc(periodeInfo) : 'seluruh periode'}</div></div></div>
@@ -2544,7 +2550,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           data-target-bku="${q.target_bku ? q.target_bku.id : ''}"
           data-nonbku-allowed="${!q.target_bku || dbm.bkuIncomeEnabled(q.target_bku.id) ? '1' : '0'}"
           value="${q.rows.map(r => r.id).join(',')}"></td>
-        <td class="nowrap">${tglID(q.tanggal)}${q.tanggal <= yesterday ? ' <span class="badge red plain">terlambat</span>' : ''}</td>
+        <td class="nowrap">${tglID(q.tanggal)}${q.tanggal <= yesterday ? ' <span class="badge red plain">terlambat</span>' : ''}
+          ${q.period_closed ? '<div><span class="badge red plain">periode ditutup · akan dibuka saat posting</span></div>' : ''}</td>
         <td class="t-strong">${esc(q.grup_nama)}</td>
         <td>${ketCell({ status: 'pending', bku_nama: q.bku_nama })}</td>
         <td class="num">${q.n}</td><td class="num t-strong">${rupiah(q.total)}</td>
@@ -2552,10 +2559,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="toolbar" style="justify-content:flex-end;gap:6px;flex-wrap:wrap">
             <button class="btn btn-sm" data-open="mQ${i}">${ui.icon('edit')}Tinjau / Edit</button>
             ${editable ? `<form method="post" action="${c.base}/iuran/antrean/posting" style="display:inline"
-              data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?">
+              data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?${q.period_closed ? ' Periode yang sudah ditutup akan dibuka otomatis dan harus ditutup ulang setelah posting.' : ''}">
               <input type="hidden" name="bku_id" value="${q.bku_id || ''}">
               <input type="hidden" name="coa_id" value="${q.coa_id || coaDefId}">
-              <button class="btn btn-sm btn-green" name="ids" value="${q.rows.map(r => r.id).join(',')}">${ui.icon('check')}Posting ke BKU</button></form>` : ''}
+              <button class="btn btn-sm btn-green" name="ids" value="${q.rows.map(r => r.id).join(',')}"
+                ${q.period_closed && !canReopenClosed ? 'disabled title="Perlu hak Buka Kembali periode"' : ''}>${ui.icon('check')}Posting ke BKU</button></form>` : ''}
           </div>
         </td></tr>
         ${late('mQ' + i, {
@@ -2563,7 +2571,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         body: `<form method="post" action="${c.base}/iuran/antrean/posting" id="fq${i}">
           <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
           <div class="alert info">${ui.icon('info')}<div>Tinjau penerimaan lalu tentukan <b>Kode Akun</b> yang dipakai saat posting. Default: <b>${esc((coaDef || {}).kode || '4.1.07')} · ${esc((coaDef || {}).nama || 'Penerimaan Kegiatan Siswa')}</b> — bisa diubah per posting.
-            ${!q.target_bku || dbm.bkuIncomeEnabled(q.target_bku.id) ? 'Gunakan Non-BKU bila penerimaan ini hanya ingin dicatat sebagai data.' : 'Grup ini terhubung ke BKU yang menonaktifkan pemasukan transaksi; penerimaan harus diposting ke BKU.'}</div></div>
+            ${!q.target_bku || dbm.bkuIncomeEnabled(q.target_bku.id) ? 'Gunakan Non-BKU bila penerimaan ini hanya ingin dicatat sebagai data.' : 'Grup ini terhubung ke BKU yang menonaktifkan pemasukan transaksi; penerimaan harus diposting ke BKU.'}
+            ${q.period_closed ? ' Periode tersebut akan dibuka otomatis saat diposting; tutup kembali setelah seluruh koreksi selesai.' : ''}</div></div>
           <div class="row2">
             <div class="field"><label>BKU Sasaran</label>
               ${q.target_bku
@@ -2579,7 +2588,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           </tbody><tfoot><tr><td colspan="4">TOTAL</td><td class="num">${rupiah(q.total)}</td></tr></tfoot></table></div>
         </form>`,
         footer: `<button class="btn" data-close="mQ${i}">Tutup</button>${editable ? `${!q.target_bku || dbm.bkuIncomeEnabled(q.target_bku.id) ? `<button class="btn" form="fq${i}" formaction="${c.base}/iuran/antrean/nonbku" formmethod="post">${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button>` : ''}
-          <button class="btn btn-green" form="fq${i}">${ui.icon('check')}Posting ke BKU</button>` : ''}`
+          <button class="btn btn-green" form="fq${i}"
+            ${q.period_closed && !canReopenClosed ? 'disabled title="Perlu hak Buka Kembali periode"' : ''}
+            ${q.period_closed ? `data-confirm-click="Periode BKU ${esc(dbm.periodeLabel(q.tanggal.slice(0, 7)))} akan dibuka otomatis. Posting transaksi sekarang?"` : ''}>${ui.icon('check')}Posting ke BKU</button>` : ''}`
       })}`).join('')}
       </tbody></table></div>` : ui.emptyState('Antrean posting BKU kosong', pendingNonBkuRows.length
         ? 'Tidak ada pembayaran yang menunggu posting BKU; antrean proses Non-BKU ditampilkan terpisah di atas.'
@@ -2882,7 +2893,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       : '';
     bku = taRes.bku;
     const lock = dbm.periodeLockError(bku.id, tanggal);
-    if (lock) return { ok: false, err: lock };
+    const lockedPeriod = lock ? dbm.periodeRow(bku.id, String(tanggal).slice(0, 7)) : null;
+    if (lock && (!lockedPeriod || !can(opts.user, 'tutup_bulanan', 'edit'))) {
+      return { ok: false, err: `${lock} Pengguna harus memiliki hak Buka Kembali periode untuk memposting.` };
+    }
     const total = rows.reduce((s, r) => s + Number(r.dibayar || 0), 0);
     if (total <= 0) return { ok: false, err: 'Total penerimaan Rp 0 — periksa kembali nominal.' };
     const coa = coaById(Number(opts.coaId || 0)) || coaIuran(grupId ? (db.prepare('SELECT coa_id FROM iuran_grup WHERE id=?').get(grupId) || {}).coa_id : null);
@@ -2892,7 +2906,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bku.id).c + 1;
     const noBukti = `${bku.kode || 'BKU'}/IUR/${ym}/${String(seq).padStart(3, '0')}`;
     const uraian = `${grup ? grup.nama : 'Iuran Siswa'} — ${rows.length} siswa (${tglID(tanggal)})`;
+    let adjustmentRemoved = 0;
     const trxId = db.transaction(() => {
+      if (lockedPeriod) {
+        adjustmentRemoved = dbm.removePeriodAdjustment(
+          bku.id, lockedPeriod.periode, opts.user,
+          `Penyesuaian opnam periode ${dbm.periodeLabel(lockedPeriod.periode)} diarsipkan saat posting iuran terlambat`
+        );
+        db.prepare("UPDATE bku_periode SET status='dibuka' WHERE id=? AND status='ditutup'").run(lockedPeriod.id);
+      }
       const ins = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
         VALUES (?,?,'pemasukan',?,?,?,?,?,?,'posted',?,?)`);
       const r = ins.run(bku.id, tanggal, rows[0].metode === 'transfer' ? 'transfer' : 'tunai', noBukti, coa.id, total,
@@ -2902,8 +2924,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       for (const b of rows) upd.run(id, bku.id, nowStamp(), b.id);
       return id;
     })();
+    if (lockedPeriod) {
+      dbm.logAudit(opts.user, 'BUKA BULAN', 'tutup_bulanan',
+        `Periode ${dbm.periodeLabel(lockedPeriod.periode)} pada BKU ${bku.nama} dibuka otomatis untuk posting iuran` +
+        (adjustmentRemoved ? `; ${adjustmentRemoved} penyesuaian opnam dihapus dan diarsipkan ke Kotak Sampah` : '') +
+        '; periode harus ditutup ulang setelah koreksi');
+    }
     if (grup) db.prepare('UPDATE iuran_grup SET coa_id=? WHERE id=?').run(coa.id, grup.id);
-    return { ok: true, trxId, noBukti, total, bku, grup, coa, n: rows.length, catatanTa };
+    return { ok: true, trxId, noBukti, total, bku, grup, coa, n: rows.length, catatanTa,
+      reopenedPeriod: lockedPeriod ? lockedPeriod.periode : '', adjustmentRemoved };
   }
 
   post('/iuran/antrean/posting', (req, res) => {
@@ -2916,7 +2945,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const hasil = postQueueRows(rows, { bkuId: Number(req.body.bku_id || 0), coaId: Number(req.body.coa_id || 0), user: req.user, taSesiId: req.taId });
     if (!hasil.ok) return res.redirect(back + '?err=' + encodeURIComponent(hasil.err));
     dbm.logAudit(req.user, 'POSTING IURAN', 'iuran', `${hasil.n} penerimaan ${hasil.grup ? hasil.grup.nama : ''} ${rupiah(hasil.total)} → ${hasil.bku.nama} (${hasil.noBukti}) · kode ${hasil.coa.kode} ${hasil.coa.nama}`);
-    res.redirect(back + '?ok=' + encodeURIComponent(`Posting berhasil: ${rupiah(hasil.total)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).` + (hasil.catatanTa || '')));
+    res.redirect(back + '?ok=' + encodeURIComponent(`Posting berhasil: ${rupiah(hasil.total)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).`
+      + (hasil.reopenedPeriod ? ` Periode ${dbm.periodeLabel(hasil.reopenedPeriod)} dibuka otomatis; tutup kembali setelah koreksi selesai.` : '')
+      + (hasil.adjustmentRemoved ? ` ${hasil.adjustmentRemoved} penyesuaian opnam diarsipkan ke Kotak Sampah.` : '')
+      + (hasil.catatanTa || '')));
   });
 
   /**
@@ -2939,18 +2971,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     }
     const bkuPilih = Number(req.body.bku_id || 0);
     const coaPilih = Number(req.body.coa_id || 0);
-    let berhasil = 0, total = 0;
+    let berhasil = 0, total = 0, reopened = 0, adjustmentsRemoved = 0;
     const gagal = [];
     for (const group of grupMap.values()) {
       const hasil = postQueueRows(group, { bkuId: bkuPilih || Number(group[0].bku_id || 0), coaId: coaPilih, user: req.user, taSesiId: req.taId });
-      if (hasil.ok) { berhasil++; total += hasil.total; }
+      if (hasil.ok) {
+        berhasil++; total += hasil.total;
+        if (hasil.reopenedPeriod) reopened++;
+        adjustmentsRemoved += Number(hasil.adjustmentRemoved || 0);
+      }
       else gagal.push(`${tglID(group[0].tanggal)} ${hasil.err}`);
     }
     dbm.logAudit(req.user, 'POSTING IURAN MASAL', 'iuran',
       `Posting masal: ${berhasil} kelompok penerimaan (${rupiah(total)}) → BKU` + (gagal.length ? ` · gagal: ${gagal.join('; ')}` : ''));
     if (!berhasil) return res.redirect(back + '?err=' + encodeURIComponent('Posting gagal: ' + gagal.join('; ')));
     res.redirect(back + '?ok=' + encodeURIComponent(
-      `Posting masal berhasil: ${berhasil} transaksi BKU dibuat, total ${rupiah(total)}.` + (gagal.length ? ` Gagal: ${gagal.join('; ')}` : '')));
+      `Posting masal berhasil: ${berhasil} transaksi BKU dibuat, total ${rupiah(total)}.`
+      + (reopened ? ` ${reopened} periode dibuka otomatis; tutup kembali setelah koreksi selesai.` : '')
+      + (adjustmentsRemoved ? ` ${adjustmentsRemoved} penyesuaian opnam diarsipkan ke Kotak Sampah.` : '')
+      + (gagal.length ? ` Gagal: ${gagal.join('; ')}` : '')));
   });
 
   /* =========================================================
