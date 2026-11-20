@@ -24,7 +24,7 @@ const DB = path.join(TMP, 'k.sqlite');
 const SDB = path.join(TMP, 'saas.db');
 const PORT = process.env.R46_PORT || 3776;
 const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-  env: { ...process.env, PORT, DB_PATH: DB, SAAS_DB_PATH: SDB, DEMO_DB_PATH: path.join(TMP, 'demo.sqlite') },
+  env: { ...process.env, PORT, APP_BASE_URL: 'https://simkola-app-production.up.railway.app', DB_PATH: DB, SAAS_DB_PATH: SDB, DEMO_DB_PATH: path.join(TMP, 'demo.sqlite') },
   stdio: ['ignore', 'pipe', 'pipe']
 });
 let log = '';
@@ -118,6 +118,8 @@ async function follow(url, depth = 0) {
 
   r = await req('GET', '/bku');
   ok('tautan publik tampil di modal master BKU', r.text.includes('/publik/bku/' + token1));
+  ok('tautan publik BKU memakai domain aktif, bukan APP_BASE_URL Railway',
+    r.text.includes(`${base}/${SLUG}/publik/bku/${token1}`) && !r.text.includes('simkola-app-production.up.railway.app'));
   ok('modal publik menyediakan tombol salin tautan', /data-copy="[^"]*\/publik\/bku\//.test(r.text));
   ok('modal publik menyediakan tombol Generate Ulang', /Generate Ulang Link/.test(r.text));
 

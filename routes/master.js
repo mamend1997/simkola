@@ -465,9 +465,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const s = c.settings;
     const ro = !c.can('sekolah', 'edit');
     const t = req.tenant || {};
-    const localHost = String(process.env.APP_BASE_URL || req.BASE || '').replace(/\/+$/, '') || '(domain ini)';
+    const localHost = c.publicAbsUrl('').replace(/\/+$/, '') || '(domain ini)';
     const platformHost = String(saas.get('saas_base_url', '') || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    const baseHost = String(process.env.APP_BASE_URL || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const baseHost = localHost.replace(/^https?:\/\//, '');
     const domStatus = String(t.custom_domain_status || '').toUpperCase();
     const domBadge = !t.custom_domain ? ui.badge('Belum Ada', 'gray')
       : domStatus === 'VERIFIED' ? ui.badge('Terverifikasi', 'green')
@@ -486,14 +486,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     /* ---- alamat publik efektif (mengikuti slug kanonik sekolah, boleh dua bagian) ----
        Dulu tautan sakelar memakai slug internal ("/portal") sehingga bisa menunjuk alamat
        yang sudah tidak dipakai. Sekarang selalu memakai slug portal yang aktif. */
-    const hostAbs = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
-    const slugCanon = String(t.portal_slug || '').trim().toLowerCase();
     /* alamat lengkap /<nama-sekolah>/<sub-slug> — sumber tunggal: pengaturan sekolah */
     const pgSlugs = dbm.portalSlugs();
-    const publicUrl = (kind, fallback) => {
+    const publicUrl = kind => {
       const path = '/' + (kind === 'pegawai' ? pgSlugs.pegawai : kind === 'slip' ? pgSlugs.slip : pgSlugs.siswa);
-      const short = (c.base || '') + path;
-      return { short, full: hostAbs ? hostAbs + path : short };
+      return { full: c.publicAbsUrl(path) };
     };
     const swRow = (name, on, label, sub, link, extra = '') => `<div class="publ-row">
       <label class="sw">
@@ -527,9 +524,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const customDomainStatus = String(t.custom_domain_status || s.custom_domain_status || '').toUpperCase();
     const customOrigin = customDomain && customDomainStatus === 'VERIFIED'
       ? `https://${customDomain}` : '';
-    const publicAbsUrl = path => customOrigin
-      ? customOrigin + (c.base || '') + path
-      : c.absUrl(path);
+    const publicAbsUrl = path => c.publicAbsUrl(path);
     const kelasPortalRows = kelasPortal.map(k => {
       const token = String(k.public_token || '');
       const path = token ? `/${pgSlugs.base}/publik/kelas/${token}` : '';
@@ -732,7 +727,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             <dt>Portal piutang pegawai</dt><dd>${pegawaiOn ? ui.badge('Dipublikasikan', 'green') : ui.badge('Tidak Dipublikasikan', 'gray')}</dd>
             <dt>Portal slip gaji</dt><dd>${slipOn ? ui.badge('Dipublikasikan', 'green') : ui.badge('Tidak Dipublikasikan', 'gray')}</dd>
             <dt>Status dari Super Admin</dt><dd>${ui.badge(pstInfo.label, pstInfo.color)}</dd>
-            <dt>Alamat portal</dt><dd>${tenantSlug ? `<span class="mono">/${esc(tenantSlug)}/portal</span>` : '<span class="muted">(tidak ada)</span>'}</dd>
+            <dt>Alamat portal</dt><dd>${tenantSlug ? `<span class="mono">/${esc(pgSlugs.siswa)}</span>` : '<span class="muted">(tidak ada)</span>'}</dd>
             <dt>Custom domain</dt><dd>${t.custom_domain ? `<span class="mono">${esc(t.custom_domain)}</span>` : '-'}</dd>
             <dt>Status domain</dt><dd>${domBadge}</dd>
           </div>
@@ -1091,7 +1086,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const kodeKegiatan = dbm.nextBkuKode('kegiatan');
     /* ---- tautan publik BKU (tanpa login) ---- */
     const pubLink = b => (b.public_token
-      ? c.absUrl('/' + dbm.portalSlugs().base + '/publik/bku/' + b.public_token) : '');
+      ? c.publicAbsUrl('/' + dbm.portalSlugs().base + '/publik/bku/' + b.public_token) : '');
     const publiForm = b => {
       const link = pubLink(b);
       return `<div class="alert info">${ui.icon('info')}<div>Tautan publik menampilkan <b>nama BKU, identitas sekolah, dan seluruh transaksi yang sudah dibukukan</b> (pemasukan, pengeluaran, saldo berjalan) tanpa perlu login.
@@ -1627,7 +1622,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           ${Math.abs(saldoDana - totalAset) > 1 ? `<div class="alert warn mt-2">${ui.icon('alert')}<div>Ada selisih antara saldo dana BKU dan aset riil. Periksa transaksi, saldo awal, atau nilai pinjaman kegiatan.</div></div>`
         : `<div class="alert ok mt-2">${ui.icon('check')}<div>Saldo dana BKU seimbang dengan total aset riil.</div></div>`}
           <a class="btn btn-block mt-2" href="${c.base}/laporan?r=neraca">Lihat Rekonsiliasi Kas</a>
-          <a class="btn btn-block mt-1" href="${c.base}/portal" target="_blank">${ui.icon('link')}Portal Cek Tagihan Orang Tua</a>
+          <a class="btn btn-block mt-1" href="${c.publicAbsUrl('/' + dbm.portalSlugs().siswa)}" target="_blank" rel="noopener">${ui.icon('link')}Portal Cek Tagihan Orang Tua</a>
           ${editable ? `<form method="post" action="${c.base}/aset/dedupe" class="mt-1" data-confirm="Bersihkan duplikasi akun pinjaman/aset yang nominalnya sama? Akun duplikat hanya disembunyikan (tidak dihapus).">
             <button class="btn btn-block">${ui.icon('refresh')}Bersihkan Duplikasi Akun</button></form>` : ''}
         </div>

@@ -156,8 +156,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
     const nomor = saas.get('qris_nomor', '');
     const instruksi = saas.get('qris_instruksi', '') || 'Unggah bukti transfer setelah membayar. Verifikasi maksimal 1x24 jam kerja.';
     /* konfigurasi metode pembayaran hybrid (QRIS otomatis + QRIS manual) */
-    const absBase = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '')
-      || `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0]}://${String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')}${c.base}`;
+    const absBase = c.publicAbsUrl('');
     const pay = saas.payConfig(absBase);
 
     const content = `<div class="split">
@@ -252,8 +251,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, uploadMedia, flas
     try {
       const durasi = Number(req.body.durasi) === 365 ? 365 : 30;
       const paket = String(req.body.paket || '').trim().toLowerCase();
-      const absBase = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '')
-        || `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0]}://${String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')}${c.base}`;
+      const absBase = c.publicAbsUrl('');
       const py = await saas.bayarGateway(t.id, {
         durasi, paket, oleh: req.user, base_url: absBase
       });

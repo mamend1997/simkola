@@ -11,7 +11,7 @@
  */
 const dbm = require('./db');
 const lib = require('./lib');
-const env = require('./env');
+const publicUrl = require('./publicurl');
 
 /** normalisasi nomor WhatsApp → 62xxxxxxxxxx (satu implementasi dengan lib.normPhone) */
 function normalizePhone(raw) {
@@ -108,11 +108,9 @@ function otpMessage({ kode, keperluan, sekolah, menit, link }) {
   return `*${sekolah || 'Sekolah'}*\nKode OTP ${keperluan} Anda: *${kode}*\n\nKode berlaku ${menit || 10} menit dan hanya untuk Anda. Jangan bagikan kode ini kepada siapa pun.`
     + (link ? `\n\nBuka portal: ${link}` : '');
 }
-/** tautan absolut portal bila APP_BASE_URL diatur di .env */
-function portalLink(pathname) {
-  const b = env.baseUrl();
-  if (!b) return '';
-  return b + (String(pathname || '').startsWith('/') ? pathname : '/' + pathname);
+/** tautan absolut portal memakai domain publik aktif */
+function portalLink(pathname, req) {
+  return publicUrl.absolute(dbm, req, pathname);
 }
 
 module.exports = { sendWA, otpMessage, waConfig, pusatConfig, normalizePhone, portalLink };

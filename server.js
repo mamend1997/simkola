@@ -13,6 +13,7 @@ const saas = require('./saas');
 const storage = require('./storage');
 const queue = require('./queue');
 const bayariuran = require('./bayariuran');
+const publicUrl = require('./publicurl');
 
 const PORT = process.env.PORT || 3120;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -271,6 +272,7 @@ function ctx(req) {
     req,
     base: req.BASE,
     absUrl: (p = '') => absUrl(req, p),
+    publicAbsUrl: (p = '') => publicUrl.absolute(dbm, req, p),
     user: req.user,
     q: req.query,
     settings: s,
@@ -447,7 +449,7 @@ require('./routes/reminder')({ get, post, dbm, lib, ui, page, ctx, guard, can, f
 require('./routes/ekskul')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/trash')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
 require('./routes/mutasi')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
-require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl, saas, uploadMedia });
+require('./routes/portal')({ get, post, dbm, lib, ui, guard, flashUrl, saas, uploadMedia, ctx });
 require('./routes/pembayaran')({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia, flashUrl, saas });
 require('./routes/portal_pegawai')({ get, post, dbm, lib, ui });
 require('./routes/catatan')({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl });
@@ -460,7 +462,7 @@ require('./routes/superadmin_db')({ get, post, dbm, lib, ui, saas });
 /* dokumen legalitas: halaman publik (ToS/SLA) + menu sidebar panel sekolah (/legal/tos, /legal/sla) */
 require('./routes/legal')({ get, dbm, lib, ui, saas, page, ctx, guard });
 /* domain publik: tautan acak BKU & Grup Iuran (tanpa login) */
-require('./routes/publik')({ get, dbm, lib, ui, saas });
+require('./routes/publik')({ get, dbm, lib, ui, ctx });
 
 /* ---------------- halaman status (suspend / fitur nonaktif) ---------------- */
 function statusPage({ base, badge, title, desc, tone = 'warn', actions = [] }) {

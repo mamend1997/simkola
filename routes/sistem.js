@@ -230,13 +230,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, permissionMa
           &amp; sub-judul bannernya kini diatur pada menu <a href="${c.base}/portal-publik"><b>Portal Publik</b></a>.</div></div>
         <div class="row3">
           <div class="field"><label>Portal Cek Tagihan Siswa</label>
-            <a class="btn btn-sm btn-block" href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
+            <a class="btn btn-sm btn-block" href="${c.publicAbsUrl('/' + dbm.portalSlugs().siswa)}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
             <div class="hint"><code>${dbm.portalSlugs().siswa}</code></div></div>
           <div class="field"><label>Portal Piutang Pegawai</label>
-            <a class="btn btn-sm btn-block" href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
+            <a class="btn btn-sm btn-block" href="${c.publicAbsUrl('/' + dbm.portalSlugs().pegawai)}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
             <div class="hint"><code>${dbm.portalSlugs().pegawai}</code></div></div>
           <div class="field"><label>Portal Slip Gaji Pegawai</label>
-            <a class="btn btn-sm btn-block" href="${c.base}/${dbm.portalSlugs().slip}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
+            <a class="btn btn-sm btn-block" href="${c.publicAbsUrl('/' + dbm.portalSlugs().slip)}" target="_blank" rel="noopener">${ui.icon('eye')}Buka halaman</a>
             <div class="hint"><code>${dbm.portalSlugs().slip}</code></div></div>
         </div>
         <div class="row2">

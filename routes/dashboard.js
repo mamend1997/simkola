@@ -651,9 +651,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     }).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada catatan orang tua', 'Catatan orang tua/wali dari portal publik akan tampil di sini.')}
       <p class="help mt-2">Portal publik (alamat dapat diubah di menu <a href="${c.base}/portal-publik">Portal Publik</a>):
-        <a href="${c.base}/${dbm.portalSlugs().siswa}" target="_blank">tagihan siswa</a> ·
-        <a href="${c.base}/${dbm.portalSlugs().pegawai}" target="_blank">piutang pegawai</a> ·
-        <a href="${c.base}/${dbm.portalSlugs().slip}" target="_blank">slip gaji pegawai</a>
+        <a href="${c.publicAbsUrl('/' + dbm.portalSlugs().siswa)}" target="_blank">tagihan siswa</a> ·
+        <a href="${c.publicAbsUrl('/' + dbm.portalSlugs().pegawai)}" target="_blank">piutang pegawai</a> ·
+        <a href="${c.publicAbsUrl('/' + dbm.portalSlugs().slip)}" target="_blank">slip gaji pegawai</a>
         — catatan orang tua otomatis terkumpul di sini.</p>
     </div>`;
     page(req, res, { title: 'Catatan Orang Tua', sub: 'Rekap umpan balik orang tua/wali dari portal publik', active: 'pesan_orangtua', content });

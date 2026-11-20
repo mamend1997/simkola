@@ -23,6 +23,7 @@ const X = require('../xlsx-read');
 const srcpack = require('../sourcepack');
 const envCfg = require('../env');
 const QRCode = require('qrcode');
+const publicUrl = require('../publicurl');
 
 const COOKIE = 'simkeu_saas';
 const MFA_COOKIE = 'simkeu_mfa';
@@ -33,6 +34,14 @@ module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPo
   function pkgLabel(kode) {
     const p = saas.packageByKode(kode);
     return p ? p.nama : (saas.PAKET[kode] || kode || '-');
+  }
+  function tenantPortalSlugs(t) {
+    return dbm.runAsTenant(t, () => dbm.portalSlugs());
+  }
+  function tenantPortalUrl(t, req, kind, slugs) {
+    return dbm.runAsTenant(t, () => publicUrl.absolute(dbm, {
+      tenant: t, BASE: req.BASE, headers: req.headers
+    }, '/' + (slugs || dbm.portalSlugs())[kind]));
   }
   const S = saas.db;
 
@@ -449,6 +458,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       const s = saas.statusOf(t);
       const on = saas.enabledKeys(t).length;
       const slug = String(t.portal_slug || '');
+      const portalSlugs = slug ? tenantPortalSlugs(t) : null;
       const adm = (() => { try { return adminOf(t); } catch (e) { return null; } })();
       return `<tr>
         <td><a href="${req.BASE}/super-admin/sekolah/${t.id}"><b>${esc(t.nama)}</b></a>
@@ -459,8 +469,8 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         <td class="nowrap">${Number(t.is_lifetime_free) ? '<b>Lifetime</b>' : esc(tglID(t.expires_at || '-'))}</td>
         <td>${ui.badge(s.label, s.color)}</td>
         <td class="num">${on}/${saas.FEATURES.length}</td>
-        <td class="small">${slug
-        ? `<a href="${req.BASE}/${esc(slug)}/portal" target="_blank" rel="noopener" class="mono">/${esc(slug)}/portal</a>`
+        <td class="small">${slug && portalSlugs
+        ? `<a href="${esc(tenantPortalUrl(t, req, 'siswa', portalSlugs))}" target="_blank" rel="noopener" class="mono">/${esc(portalSlugs.siswa)}</a>`
         : '<span class="muted">-</span>'}</td>
         <td class="small">${t.custom_domain ? `<span class="mono">${esc(t.custom_domain)}</span><div>${domBadge(t)}</div>` : domBadge(t)}</td>
         <td class="nowrap">
@@ -559,6 +569,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
     const st = saas.statusOf(t);
     const cred = saas.credNoticeTake(parseCookie(req, COOKIE));
     const adminAkun = (() => { try { return adminOf(t); } catch (e) { return null; } })();
+    const portalSlugs = t.portal_slug ? tenantPortalSlugs(t) : null;
     const on = saas.tenantFeatures(t);
     const featureBox = (std) => saas.FEATURES.filter(f => f.std === std).map(f => `
       <label class="check" style="display:flex;align-items:center;gap:8px;padding:7px 0">
@@ -671,7 +682,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           <form method="post" action="${req.BASE}/super-admin/sekolah/${t.id}/portal">
             <div class="field"><label>Alamat Portal (slug)</label>
               <input type="text" name="portal_slug" value="${esc(t.portal_slug || '')}" placeholder="sdn-1-jakarta">
-              <div class="hint">${t.portal_slug ? `Aktif: <b>/${esc(t.portal_slug)}/portal</b>` : 'Belum ada slug.'}</div></div>
+              <div class="hint">${portalSlugs ? `Aktif: <b>/${esc(portalSlugs.siswa)}</b>` : 'Belum ada slug.'}</div></div>
             <div class="field"><label>Custom Domain</label>
               <input type="text" name="custom_domain" value="${esc(t.custom_domain || '')}" placeholder="keuangan.sman1jakarta.sch.id"></div>
             <div class="form-actions"><button class="btn btn-primary btn-block">${ui.icon('save')}Simpan</button></div>
@@ -1457,7 +1468,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   /* ================= MANAJEMEN CUSTOM SLUG & PORTAL PUBLIK ================= */
   /** ringkasan halaman publik satu sekolah (dibaca dari database sekolahnya) */
   function tenantPortalInfo(t) {
-    const out = { published: true, title: '', subtitle: '', namaSekolah: '', sw: { siswa: true, pegawai: true, slip: true } };
+    const out = { published: true, title: '', subtitle: '', namaSekolah: '', slugs: null, sw: { siswa: true, pegawai: true, slip: true } };
     try {
       const conn = dbm.openTenantConn(t.id, t.db_file);
       const rows = conn.prepare("SELECT k,v FROM settings WHERE k IN ('portal_aktif','portal_pegawai_aktif','portal_slip_aktif','portal_page_title','portal_subtitle','sekolah_nama')").all();
@@ -1467,6 +1478,7 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       out.title = g('portal_page_title');
       out.subtitle = g('portal_subtitle');
       out.namaSekolah = g('sekolah_nama');
+      out.slugs = tenantPortalSlugs(t);
     } catch (e) { }
     return out;
   }
@@ -1493,12 +1505,16 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       const st = saas.portalStatusOf(t);
       const infoSt = saas.portalStatusInfo(t);
       const slug = String(t.portal_slug || '');
+      const portalHref = kind => info.slugs ? tenantPortalUrl(t, req, kind, info.slugs) : '';
+      const siswaHref = portalHref('siswa');
+      const pegawaiHref = portalHref('pegawai');
+      const slipHref = portalHref('slip');
       return `<tr>
         <td><a href="${req.BASE}/super-admin/sekolah/${t.id}"><b>${esc(t.nama)}</b></a>
           <div class="t-sub mono">${esc(t.school_code)} · ${esc(pkgLabel(t.paket))}</div></td>
-        <td>${slug
-          ? `<a class="mono" href="${req.BASE}/${esc(slug)}/portal" target="_blank" rel="noopener">/${esc(slug)}/portal</a>`
-          : '<span class="badge gray">Tidak ada</span>'}
+        <td>${slug && info.slugs
+          ? `<a class="mono" href="${esc(siswaHref)}" target="_blank" rel="noopener">${esc('/' + info.slugs.siswa)}</a>`
+          : `<span class="badge gray">${slug ? 'Path tidak tersedia' : 'Tidak ada'}</span>`}
           ${info.title ? `<div class="t-sub">Tab: ${esc(info.title)}</div>` : ''}</td>
         <td>${t.custom_domain ? `<span class="mono small">${esc(t.custom_domain)}</span><div>${domBadge(t)}</div>` : domBadge(t)}</td>
         <td>
@@ -1509,10 +1525,10 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
           ${t.portal_note ? `<div class="t-sub" title="${esc(t.portal_note)}">Catatan: ${esc(t.portal_note.slice(0, 40))}</div>` : ''}
         </td>
         <td class="nowrap">
-          ${slug ? `<span class="small muted">Lihat:</span>
-            <a class="btn btn-sm" href="${req.BASE}/${esc(slug)}/portal" target="_blank" rel="noopener" title="Portal tagihan siswa">${ui.icon('eye')}Siswa</a>
-            <a class="btn btn-sm" href="${req.BASE}/${esc(slug)}/portal-pegawai" target="_blank" rel="noopener" title="Portal piutang pegawai">Pegawai</a>
-            <a class="btn btn-sm" href="${req.BASE}/${esc(slug)}/portal-slip" target="_blank" rel="noopener" title="Portal slip gaji">Slip</a>` : ''}
+          ${slug && info.slugs ? `<span class="small muted">Lihat:</span>
+            <a class="btn btn-sm" href="${esc(siswaHref)}" target="_blank" rel="noopener" title="Portal tagihan siswa">${ui.icon('eye')}Siswa</a>
+            <a class="btn btn-sm" href="${esc(pegawaiHref)}" target="_blank" rel="noopener" title="Portal piutang pegawai">Pegawai</a>
+            <a class="btn btn-sm" href="${esc(slipHref)}" target="_blank" rel="noopener" title="Portal slip gaji">Slip</a>` : ''}
           <button class="btn btn-sm" data-open="mSlug${t.id}" title="Ubah / reset slug">${ui.icon('edit')}Slug</button>
           ${st === 'aktif'
           ? `<form method="post" action="${req.BASE}/super-admin/portal-publik/${t.id}/status" style="display:inline">
@@ -1523,28 +1539,29 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
                <input type="hidden" name="status" value="aktif">
                <button class="btn btn-sm" title="Aktifkan kembali halaman publik">${ui.icon('unlock')}Aktifkan</button></form>`}
           <form method="post" action="${req.BASE}/super-admin/portal-publik/${t.id}/hapus" style="display:inline"
-            data-confirm="Hapus halaman publik ${esc(t.nama)}? Alamat /${esc(slug || '-')}/portal akan dikosongkan dan portal kembali ke halaman default. Pengaturan lain tidak dihapus.">
+            data-confirm="Hapus halaman publik ${esc(t.nama)}? Alamat /${esc(info.slugs ? info.slugs.siswa : slug || '-') } akan dikosongkan dan portal kembali ke halaman default. Pengaturan lain tidak dihapus.">
             <button class="btn btn-sm" title="Hapus halaman publik">${ui.icon('trash')}Hapus</button></form>
         </td>
       </tr>`;
     }).join('');
 
     /* modal edit slug (dirender DI LUAR tabel agar form tidak rusak) */
-    const modals = rowsRaw.map(({ t }) => {
+    const modals = rowsRaw.map(({ t, info }) => {
       const slug = String(t.portal_slug || '');
       const st = saas.portalStatusOf(t);
+      const currentPath = info.slugs ? '/' + info.slugs.siswa : '';
       return ui.modal('mSlug' + t.id, {
         title: 'Ubah Slug Halaman Publik',
         body: `<form method="post" action="${req.BASE}/super-admin/portal-publik/${t.id}/slug">
           <div class="alert info" style="margin-top:0">${ui.icon('info')}<div>
             <b>${esc(t.nama)}</b> · kode <b class="mono">${esc(t.school_code)}</b><br>
-            Alamat publik: <code>/${esc(slug || '-')}/portal</code></div></div>
+            Alamat publik: <code>${esc(currentPath || '(tidak ada)')}</code></div></div>
           <div class="field"><label>Custom Slug</label>
             <div class="flex" style="gap:6px;align-items:center">
               <span class="small muted nowrap">/</span>
               <input type="text" name="portal_slug" value="${esc(slug)}" style="flex:1" maxlength="81"
                 pattern="[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9](/[a-z0-9][a-z0-9\\-]{1,38}[a-z0-9])?" placeholder="slug-sekolah">
-              <span class="small muted nowrap">/portal</span>
+              <span class="small muted nowrap">sub-slug aktif</span>
             </div>
             <div class="hint">Huruf kecil, angka, dan tanda hubung (-), tiap bagian 3–40 karakter, harus unik antar sekolah.
               Boleh dua bagian mengikuti format default (mis. <code>sdn-1-cikoneng/tagihan</code>).
@@ -1693,8 +1710,9 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (req.body.status !== undefined) t = saas.setPortalStatus(req.params.id, req.body.status, String(req.body.note || '').trim(), u);
       else if (req.body.note !== undefined) t = saas.setPortalStatus(req.params.id, saas.portalStatusOf(t), String(req.body.note || '').trim(), u);
       if (typeof refreshPortalMap === 'function') refreshPortalMap();
+      const portalSlugs = raw ? tenantPortalSlugs(t) : null;
       res.redirect(flash(back, 'ok', raw
-        ? `Slug ${t.nama} disimpan: /${raw}/portal`
+        ? `Slug ${t.nama} disimpan: /${portalSlugs.siswa}`
         : `Halaman publik ${t.nama} dihapus — alamat publik kembali ke halaman default.`));
     } catch (e) {
       res.redirect(flash(back, 'err', e.message));

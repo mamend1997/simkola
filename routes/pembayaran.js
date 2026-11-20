@@ -35,7 +35,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const s = c.settings;
     const pending = bayar.listPending(dbm, { limit: 20 });
     const totalPending = pending.reduce((a, b) => a + Number(b.total || 0), 0);
-    const portalUrl = `${c.base}/${dbm.portalSlugs().siswa}`;
+    const portalUrl = c.publicAbsUrl('/' + dbm.portalSlugs().siswa);
     const editable = c.can('iuran', 'edit');
 
     const content = `<div class="grid split-2 mb-3">
@@ -109,7 +109,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
               </select>
               <div class="hint">Pilih <b>qris</b> bila akun Kasera sekolah ini belum mengaktifkan API Transactions.</div></div>
             <div class="field"><label>URL Webhook untuk dashboard Kasera</label>
-              <input value="${esc(c.absUrl('/api/webhook/kasera'))}" readonly>
+              <input value="${esc(c.publicAbsUrl('/api/webhook/kasera'))}" readonly>
               <div class="hint">Daftarkan URL ini pada dashboard Kasera Pay. Sekolah dikenali otomatis dari nomor pesanan
                 (<span class="mono">IU&lt;id sekolah&gt;-…</span>), sehingga satu URL dipakai semua sekolah.</div></div>
           </div>
@@ -118,7 +118,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
             <span class="mono">KASERA_WEBHOOK_SECRET</span>.</div></div>
         </div>
         <div class="field"><label>URL Callback untuk gateway</label>
-          <input value="${esc((process.env.APP_BASE_URL || '') + c.base + '/portal/pay/callback')}" readonly>
+          <input value="${esc(c.publicAbsUrl('/portal/pay/callback'))}" readonly>
           <div class="hint">Daftarkan URL ini pada dashboard provider (Midtrans / Duitku / Xendit / Kasera). Query <b>?t=</b> diisi otomatis oleh sistem.</div></div>
         <div class="row2">
           <div class="field"><label>Gambar QRIS Sekolah (opsional)</label>

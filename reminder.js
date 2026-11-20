@@ -20,7 +20,8 @@
 const crypto = require('crypto');
 const lib = require('./lib');
 const wa = require('./wa');
-const env = require('./env');
+
+const publicUrl = require('./publicurl');
 
 /* ---------------- variabel dinamis pesan ---------------- */
 const VARS = [
@@ -184,25 +185,14 @@ function verifyPortalToken(dbm, tok) {
 }
 /**
  * Alamat dasar publik ABSOLUT untuk tautan di pesan WhatsApp.
- * Urutan: setting reminder_base_url → APP_BASE_URL (.env) → host permintaan (req) + base path.
+ * Urutan: custom domain terverifikasi → host permintaan → URL pengingat / APP_BASE_URL.
  */
 function absBase(dbm, req) {
-  const cfg = config(dbm);
-  if (cfg.baseUrl) return cfg.baseUrl;
-  if (env.baseUrl()) return env.baseUrl();
-  if (req) {
-    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-    if (host) {
-      const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
-        || (/^(localhost|127\.|0\.0\.0\.0)/.test(host) ? 'http' : 'https');
-      return proto + '://' + host + String(req.BASE || '');
-    }
-  }
-  return '';
+  return publicUrl.baseUrl(dbm, req);
 }
 function portalLink(dbm, siswaId, opts = {}) {
-  const cfg = config(dbm);
-  const base = String(opts.baseUrl || cfg.baseUrl || env.baseUrl() || '').replace(/\/+$/, '');
+  const hasBase = Object.prototype.hasOwnProperty.call(opts, 'baseUrl');
+  const base = String(hasBase ? opts.baseUrl || '' : publicUrl.baseUrl(dbm) || '').replace(/\/+$/, '');
   const slug = (() => { try { return dbm.portalSlugs().siswa; } catch (e) { return 'portal'; } })();
   const path = `/${slug}?token=${encodeURIComponent(portalToken(dbm, siswaId))}`;
   return base ? base + path : path;
@@ -494,14 +484,16 @@ function dueSlots(dbm, now) {
  * Jalankan jadwal yang due (dipanggil cron/interval). Aman dipanggil berulang:
  * slot yang sudah dijalankan dicatat di setting `reminder_done`.
  */
-function runSchedule(dbm, now) {
+function runSchedule(dbm, now, opts = {}) {
   const slots = dueSlots(dbm, now);
   const results = [];
   for (const slot of slots) {
     let recips;
     if (slot.grupIds && slot.grupIds.length) recips = recipients(dbm, { grupId: slot.grupIds });
     else recips = recipients(dbm, {});
-    const r = enqueueForSiswa(dbm, recips, { mode: 'jadwal', pemicu: slot.pemicu });
+    const enqueueOpts = { mode: 'jadwal', pemicu: slot.pemicu };
+    if (Object.prototype.hasOwnProperty.call(opts, 'baseUrl')) enqueueOpts.baseUrl = opts.baseUrl;
+    const r = enqueueForSiswa(dbm, recips, enqueueOpts);
     addDoneSlot(dbm, slot.key);
     dbm.setSetting('reminder_last', lib.nowStamp());
     try {
@@ -519,7 +511,9 @@ function startScheduler(dbm, saas) {
     for (const t of saas.allTenants()) {
       try {
         dbm.runAsTenant(t, () => {
-          const r = runSchedule(dbm, new Date());
+          const r = runSchedule(dbm, new Date(), {
+            baseUrl: publicUrl.baseUrl(dbm, { tenant: t })
+          });
           if (r.length) console.log(`[wa-reminder] ${t.school_code}: ${r.map(x => x.queued).reduce((a, b) => a + b, 0)} pesan dijadwalkan`);
         });
       } catch (e) { console.error('[wa-reminder-jadwal]', e.message); }

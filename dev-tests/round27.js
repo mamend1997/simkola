@@ -42,7 +42,7 @@ const gw = http.createServer((req, res) => {
 
 const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
   env: {
-    ...process.env, PORT, DB_PATH: DB, SAAS_DB_PATH: SAAS,
+    ...process.env, PORT, APP_BASE_URL: 'https://old-railway.up.railway.app', DB_PATH: DB, SAAS_DB_PATH: SAAS,
     DEMO_DB_PATH: path.join(TMP, 'demo.sqlite'),
     WA_API_URL: `http://127.0.0.1:${GW_PORT}/send`, WA_API_TOKEN: 'token-uji', WA_API_PAYLOAD: 'json'
   },
@@ -57,7 +57,7 @@ let cookie = '';
 const results = [];
 function ok(name, cond, extra = '') { results.push({ name, ok: !!cond, extra }); if (!cond) console.log('FAIL', name, '→', extra); }
 async function req(method, url, body, opt = {}) {
-  const headers = {};
+  const headers = { 'x-forwarded-host': 'sekolah.contoh.id', 'x-forwarded-proto': 'https' };
   if (cookie) headers.Cookie = cookie;
   if (opt.cookie !== undefined) { if (opt.cookie) headers.Cookie = opt.cookie; else delete headers.Cookie; }
   let payload = null;
@@ -222,6 +222,8 @@ const today = new Date().toISOString().slice(0, 10);
   ok('kirim WA per siswa masuk antrean (pending)', r.status === 303 && logBudi && logBudi.status === 'pending', logBudi && logBudi.status);
   ok('antrean mencatat nomor orang tua & nama siswa', logBudi && logBudi.phone === '6281234567890' && logBudi.nama === 'Budi Santoso');
   ok('antrean mencatat nominal tunggakan', logBudi && Number(logBudi.nominal) > 0);
+  ok('tautan WA mengikuti domain aktif, bukan APP_BASE_URL Railway',
+    logBudi && logBudi.pesan.includes('https://sekolah.contoh.id/') && !logBudi.pesan.includes('old-railway.up.railway.app'));
   ok('pesan di antrean berisi tag yang sudah terisi', logBudi && !/\{nama_siswa\}|\{nominal_tunggakan\}/.test(logBudi.pesan));
   ok('flash sukses menyebut antrean', /ok=/.test(r.loc) && /antrean/i.test(dec(r.loc)), dec(r.loc));
   r = await req('GET', '/iuran/pengingat');

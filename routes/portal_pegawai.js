@@ -163,7 +163,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     const o = dbm.otpCreate('piutang', String(pg.id), phone, 10);
     const sent = await wa.sendWA(phone, wa.otpMessage({
       kode: o.kode, keperluan: 'Cek Piutang Pegawai', sekolah: settings.sekolah_nama || 'Sekolah', menit: 10,
-      link: wa.portalLink('/' + dbm.portalSlugs().pegawai)
+      link: wa.portalLink('/' + dbm.portalSlugs().pegawai, req)
     }));
     const demoKode = (!sent.ok && dbm.getSetting('wa_demo_tampil', '1') === '1') ? o.kode : '';
     res.html(shell({
@@ -569,7 +569,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     const o = dbm.otpCreate('slip', String(pg.id), phone, 10);
     const sent = await wa.sendWA(phone, wa.otpMessage({
       kode: o.kode, keperluan: 'Slip Gaji Pegawai', sekolah: settings.sekolah_nama || 'Sekolah', menit: 10,
-      link: wa.portalLink('/' + dbm.portalSlugs().slip)
+      link: wa.portalLink('/' + dbm.portalSlugs().slip, req)
     }));
     const demoKode = (!sent.ok && dbm.getSetting('wa_demo_tampil', '1') === '1') ? o.kode : '';
     res.html(shell({

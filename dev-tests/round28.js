@@ -156,6 +156,15 @@ const tabTitle = html => (String(html).match(/<title>([\s\S]*?)<\/title>/) || []
   ok('dropdown status akses publik (aktif/nonaktif/private)', /name="status"/.test(r.text) && /value="nonaktif"/.test(r.text) && /value="private"/.test(r.text));
   ok('aksi: Lihat / Slug / Sembunyikan / Hapus', /Lihat:/.test(r.text) && /mSlug1/.test(r.text) && /Sembunyikan/.test(r.text) && /\/hapus"/.test(r.text));
   ok('aksi Lihat tersedia untuk 3 portal', /portal-tagihan|\/portal"/.test(r.text) && /portal-pegawai/.test(r.text) && /portal-slip/.test(r.text));
+  const domainBefore = ctl.prepare('SELECT custom_domain,custom_domain_status FROM tenants WHERE id=1').get();
+  ctl.prepare("UPDATE tenants SET custom_domain='portal-r28.example',custom_domain_status='VERIFIED' WHERE id=1").run();
+  r = await req('GET', '/super-admin/portal-publik');
+  ok('tautan Lihat Super Admin memakai custom domain terverifikasi dan path portal aktif',
+    r.text.includes(`href="https://portal-r28.example/${SEG.base}/${SEG.siswa}"`)
+      && r.text.includes(`href="https://portal-r28.example/${SEG.base}/${SEG.pegawai}"`)
+      && r.text.includes(`href="https://portal-r28.example/${SEG.base}/${SEG.slip}"`));
+  ctl.prepare('UPDATE tenants SET custom_domain=?,custom_domain_status=? WHERE id=1')
+    .run(domainBefore.custom_domain, domainBefore.custom_domain_status);
   ok('status sakelar sekolah per portal ditampilkan', /Sakelar sekolah:/.test(r.text) && /Siswa/.test(r.text) && /Pegawai/.test(r.text) && /Slip/.test(r.text));
   ok('KPI rekapitulasi halaman publik', /Halaman Aktif/.test(r.text) && /Punya Slug/.test(r.text));
   ok('modal edit slug dirender di luar tabel', /id="mSlug1"/.test(r.text) && r.text.indexOf('id="mSlug1"') > r.text.indexOf('</table>'));

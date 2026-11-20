@@ -275,7 +275,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
 
     /* ---- tautan publik Grup Iuran (tanpa login) ---- */
     const pubLink = g => (g.public_token
-      ? c.absUrl('/' + dbm.portalSlugs().base + '/publik/iuran/' + g.public_token) : '');
+      ? c.publicAbsUrl('/' + dbm.portalSlugs().base + '/publik/iuran/' + g.public_token) : '');
     const publiForm = g => {
       const link = pubLink(g);
       return `<div class="alert info">${ui.icon('info')}<div>Halaman publik menampilkan <b>daftar siswa</b> pada grup ini beserta <b>tagihan, pembayaran, sisa, dan status</b> masing-masing, ditutup dengan <b>total tagihan</b> &amp; <b>grand total dana diterima</b>. Tidak perlu login.</div></div>

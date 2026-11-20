@@ -14,10 +14,11 @@
  * ================================================================== */
 const reminder = require('./reminder');
 const lib = require('./lib');
+const publicUrl = require('./publicurl');
 
-/** alamat absolut dasar (setting reminder_base_url → APP_BASE_URL → host permintaan) */
+/** alamat publik aktif untuk tautan slip, tanpa memakai URL pengingat yang bisa kedaluwarsa */
 function baseUrl(dbm, req) {
-  return String(reminder.absBase(dbm, req) || '').replace(/\/+$/, '');
+  return publicUrl.baseUrl(dbm, req);
 }
 /** tautan langsung slip honor satu pegawai */
 function slipLinkFor(dbm, req, pegawai, periode) {

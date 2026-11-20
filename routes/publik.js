@@ -13,7 +13,7 @@ const QRCode = require('qrcode');
              lain dengan BKU bernama SAMA yang juga dibagikan publik)
      Iuran : ?q=<nama/NISN> · ?kelas=<nama kelas>
    ========================================================================== */
-module.exports = ({ get, dbm, lib, ui, saas }) => {
+module.exports = ({ get, dbm, lib, ui, ctx }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID } = lib;
   const PER_HAL = 60;
@@ -255,18 +255,11 @@ ${ui.logoPreconnect ? ui.logoPreconnect([st.sekolah_logo]) : ''}
   get('/publik/kelas/:token/qr', async (req, res) => {
     const kelas = dbm.publicFind('kelas', req.params.token);
     if (!kelas) return res.html(tidakDitemukan(req.BASE, settings(), 'Kelas'), 404);
+    const c = ctx(req);
     const slugBase = dbm.portalSlugs().base;
-    const path = `${req.BASE}/${slugBase}/publik/kelas/${encodeURIComponent(kelas.public_token)}`;
-    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-    const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
-    const tenant = req.tenant || {};
-    const portalSettings = settings();
-    const domain = saas.normalizeDomain(tenant.custom_domain || portalSettings.custom_domain);
-    const domainStatus = String(tenant.custom_domain_status || portalSettings.custom_domain_status || '').toUpperCase();
-    const customOrigin = domain && domainStatus === 'VERIFIED'
-      ? `https://${domain}` : '';
-    const origin = customOrigin || String(process.env.APP_BASE_URL || '').replace(/\/+$/, '') || (host ? `${proto}://${host}` : '');
-    const svg = await QRCode.toString(origin + path, { type: 'svg', width: 220, margin: 2, errorCorrectionLevel: 'Q' });
+    const path = `/${slugBase}/publik/kelas/${encodeURIComponent(kelas.public_token)}`;
+    const target = c.publicAbsUrl(path);
+    const svg = await QRCode.toString(target, { type: 'svg', width: 220, margin: 2, errorCorrectionLevel: 'Q' });
     res.raw.writeHead(200, {
       'Content-Type': 'image/svg+xml; charset=utf-8',
       'Cache-Control': 'no-store',

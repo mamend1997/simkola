@@ -186,11 +186,15 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
   ok('halaman slip punya ceklis multi-pegawai', /data-check-all-box="slipIds"/.test(r.text) && /form="fSlipWa"/.test(r.text));
   ok('tombol Kirim Slip Honor Masal (WA) tersedia', /Kirim Slip Honor Masal \(WA\)/.test(r.text));
   if (leger) {
+    db.prepare(`INSERT INTO settings (k,v,tenant_id) VALUES ('reminder_base_url','https://simkola.web.id',1)
+      ON CONFLICT(k) DO UPDATE SET v=excluded.v`).run();
     r = await req('POST', '/payroll/slip/wa', { periode, id: [String(leger.id)] });
     ok('kirim slip honor massal masuk antrean', r.status === 303 && /ok=/.test(r.loc), dec(r.loc));
     const wa = db.prepare("SELECT * FROM wa_reminder_log WHERE mode='slip' ORDER BY id DESC LIMIT 1").get();
     ok('antrean WhatsApp slip honor dibuat', !!wa && wa.status === 'pending', wa ? wa.status : '-');
     ok('pesan slip memuat tautan bertoken (tanpa OTP)', wa && /\/hasil\?t=\d+\.[a-f0-9]{32}/.test(wa.pesan), wa ? wa.pesan.slice(0, 120) : '-');
+    ok('tautan slip WA mengikuti domain aktif, bukan URL pengingat lama', wa
+      && wa.pesan.includes(base + '/') && !wa.pesan.includes('simkola.web.id'), wa ? wa.pesan.slice(0, 240) : '-');
     // tautan bertoken langsung membuka slip (tanpa kode OTP)
     const mLink = wa && wa.pesan.match(/https?:\/\/[^\s]*\/[^\s]*hasil\?t=[^\s]+/);
     const pathLink = mLink ? mLink[0].replace(/^https?:\/\/[^/]+/, '') : '';

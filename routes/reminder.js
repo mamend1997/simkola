@@ -125,9 +125,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           </div>
           <hr class="sep">
           <div class="row2">
-            <div class="field"><label>Alamat Dasar Tautan Portal (untuk {link_portal})</label>
-              <input name="reminder_base_url" value="${esc(cfg.baseUrl)}" placeholder="https://sekolah.simkeu.com" ${canEdit ? '' : 'readonly'}>
-              <div class="hint">Kosongkan untuk memakai <code>APP_BASE_URL</code> dari <code>.env</code>.</div></div>
+            <div class="field"><label>Domain Tautan Portal</label>
+              <div class="hint">Diambil otomatis dari domain sekolah terverifikasi atau domain yang sedang dipakai. Domain Railway tidak digunakan.</div></div>
             <div class="field"><label>Retensi Riwayat Pengiriman (hari)</label>
               <input type="number" name="wa_log_retensi" min="7" max="3650" value="${cfg.retensi}" ${canEdit ? '' : 'readonly'}>
               <div class="hint">Riwayat lebih tua dari ini otomatis dibersihkan.</div></div>

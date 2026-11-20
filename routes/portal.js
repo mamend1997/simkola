@@ -3,7 +3,7 @@
 const reminder = require('../reminder');
 const bayar = require('../bayariuran');
 
-module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas, uploadMedia }) => {
+module.exports = ({ get, post, dbm, lib, ui, guard, flashUrl, saas, uploadMedia, ctx }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID } = lib;
   /** alamat portal dapat diubah di menu Portal Publik (default: portal) */
@@ -510,11 +510,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
      BAYAR IURAN — halaman & aksi (tanpa login, verifikasi identitas)
      ================================================================== */
   function appBase(req) {
-    const env = String(process.env.APP_BASE_URL || '').replace(/\/+$/, '');
-    if (env) return env + req.BASE;
-    const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim() || 'https';
-    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-    return host ? `${proto}://${host}${req.BASE}` : req.BASE;
+    return ctx(req).publicAbsUrl('').replace(/\/+$/, '');
   }
 
   get('/portal/bayar', (req, res) => {
