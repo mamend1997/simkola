@@ -774,10 +774,23 @@
     const ter = form.querySelector('.js-terbilang');
     const appr = form.querySelector('.js-approval');
     const paguBox = form.querySelector('.js-pagu');
-    const jenis = (form.querySelector('input[name=jenis]') || {}).value;
+    const jenisRadios = Array.from(form.querySelectorAll('input[name=jenis][type=radio]'));
+    const jenisField = form.querySelector('input[name=jenis]');
     const threshold = Number(window.__THRESHOLD || 0);
     const paguMap = window.__PAGU || {};
     function sync() {
+      const jenis = jenisRadios.length
+        ? ((jenisRadios.find(r => r.checked) || {}).value || '')
+        : ((jenisField || {}).value || '');
+      if (jenisRadios.length && coa) {
+        Array.from(coa.options).forEach(option => {
+          if (!option.value || !option.dataset.jenis) return;
+          const visible = option.dataset.jenis.split(',').includes(jenis);
+          option.hidden = !visible;
+          option.disabled = !visible;
+          if (!visible && option.selected) coa.value = '';
+        });
+      }
       const v = nominal ? moneyVal(nominal) : 0;
       if (ter) ter.textContent = v ? terbilang(v) : '';
       if (appr) {
@@ -800,6 +813,7 @@
     }
     if (nominal) nominal.addEventListener('input', sync);
     if (coa) coa.addEventListener('change', sync);
+    jenisRadios.forEach(r => r.addEventListener('change', sync));
     sync();
   });
 

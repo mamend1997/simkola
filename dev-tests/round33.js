@@ -312,13 +312,66 @@ const XLSX_MAGIC = buf => !!(buf && buf.length > 2 && buf[0] === 0x50 && buf[1] 
     r = await req('GET', '/transaksi?edit=' + trxUji.id);
     ok('modal edit transaksi = struktur form transaksi',
       /id="fTrx_edit"/.test(r.text) && /radio-cards/.test(r.text) && /class="js-coa"/.test(r.text)
-      && /js-terbilang/.test(r.text) && /Simpan &amp; Cetak Kwitansi/.test(r.text));
+      && /js-terbilang/.test(r.text) && /Simpan &amp; Cetak Kwitansi/.test(r.text)
+      && /class="modal show" id="mEditTrx"/.test(r.text)
+      && /id="fTrx_edit_pemasukan"/.test(r.text) && /id="fTrx_edit_pengeluaran"/.test(r.text)
+      && new RegExp(`name="back" value="[^"]*"`).test(r.text));
     ok('modal edit transaksi memakai ID radio unik', /id="fTrx_edit_tunai"/.test(r.text) && /id="fTrx_edit_transfer"/.test(r.text));
+    r = await req('GET', '/transaksi');
+    ok('aksi edit transaksi membuka modal edit, bukan edit inline',
+      new RegExp(`/transaksi\\?edit=${trxUji.id}`).test(r.text)
+      && !new RegExp(`/transaksi\\?inline=${trxUji.id}`).test(r.text));
     // hapus masal transaksi
     const countSebelum = db.prepare('SELECT COUNT(*) c FROM transaksi').get().c;
     r = await req('POST', '/transaksi/hapus-masal', { id: [String(trxUji.id)], back: '/transaksi' });
     const countSesudah = db.prepare('SELECT COUNT(*) c FROM transaksi').get().c;
     ok('hapus masal transaksi memindahkan ke Kotak Sampah', r.status === 303 && countSesudah === countSebelum - 1, `${countSebelum}→${countSesudah}`);
+  }
+  const tanggalHariIni = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Jakarta' }).format(new Date());
+  const taHariIniUji = db.prepare(`SELECT id FROM tahun_ajaran
+    WHERE ? BETWEEN tanggal_mulai AND tanggal_selesai ORDER BY tanggal_mulai DESC, id DESC LIMIT 1`).get(tanggalHariIni);
+  const bkuRalatUji = taHariIniUji
+    ? db.prepare("SELECT * FROM bku WHERE tahun_ajaran_id=? AND status='aktif' AND COALESCE(auto_mode,0)=0 ORDER BY id LIMIT 1").get(taHariIniUji.id) : null;
+  const coaMasukRalat = db.prepare("SELECT * FROM coa WHERE kategori='pendapatan' ORDER BY kode LIMIT 1").get();
+  const coaKeluarRalat = db.prepare("SELECT * FROM coa WHERE kategori='pengeluaran' ORDER BY kode LIMIT 1").get();
+  if (bkuRalatUji && coaMasukRalat && coaKeluarRalat) {
+    const tglAsal = new Date(new Date(tanggalHariIni + 'T12:00:00+07:00').getTime());
+    tglAsal.setMonth(tglAsal.getMonth() - 2);
+    const tanggalAsal = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Jakarta' }).format(tglAsal);
+    const insRalat = db.prepare(`INSERT INTO transaksi
+      (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
+      VALUES (?,?, 'pemasukan','tunai','UJI/RALAT/ASAL',?,25000,'Uji ralat jenis','Penyetor Uji','posted',1,?)`)
+      .run(bkuRalatUji.id, tanggalAsal, coaMasukRalat.id, nowIso);
+    const idRalat = Number(insRalat.lastInsertRowid);
+    db.prepare(`INSERT OR REPLACE INTO bku_periode (bku_id,periode,status) VALUES (?,?,'ditutup')`)
+      .run(bkuRalatUji.id, tanggalAsal.slice(0, 7));
+    r = await req('GET', '/transaksi?ralat=' + idRalat);
+    ok('modal ralat jenis muncul untuk periode terkunci',
+      r.status === 200 && /class="modal show" id="mRalatJenis"/.test(r.text)
+      && /transaksi\/ralat-jenis/.test(r.text) && /tanggal hari ini/i.test(r.text));
+    r = await req('POST', '/transaksi/ralat-jenis', {
+      id: String(idRalat), coa_id: String(coaKeluarRalat.id), alasan: 'Salah pilih jenis transaksi', back: '/transaksi'
+    });
+    const ralatAsal = db.prepare('SELECT * FROM transaksi WHERE id=?').get(idRalat);
+    const ralatBalik = db.prepare('SELECT * FROM transaksi WHERE void_of=?').get(idRalat);
+    const ralatBenar = db.prepare("SELECT * FROM transaksi WHERE uraian LIKE 'Ralat jenis UJI/RALAT/ASAL:%' ORDER BY id DESC LIMIT 1").get();
+    ok('ralat periode terkunci membuat pembalik dan transaksi pengganti',
+      r.status === 303 && ralatAsal.status === 'void' && ralatBalik && ralatBalik.jenis === 'pengeluaran'
+      && ralatBenar && ralatBenar.jenis === 'pengeluaran' && ralatBenar.nominal === 25000);
+
+    const insEditJenis = db.prepare(`INSERT INTO transaksi
+      (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
+      VALUES (?,?,'pemasukan','tunai','UJI/EDIT/JENIS',?,30000,'Uji ubah jenis','Penyetor Uji','posted',1,?)`)
+      .run(bkuRalatUji.id, tanggalHariIni, coaMasukRalat.id, nowIso);
+    const idEditJenis = Number(insEditJenis.lastInsertRowid);
+    r = await req('POST', '/transaksi/save', {
+      id: String(idEditJenis), bku_id: String(bkuRalatUji.id), tanggal: tanggalHariIni,
+      jenis: 'pengeluaran', metode: 'tunai', coa_id: String(coaKeluarRalat.id),
+      nominal: '30000', uraian: 'Uji ubah jenis', nama_pihak: 'Penerima Uji', back: '/transaksi'
+    });
+    const trxEditJenis = db.prepare('SELECT * FROM transaksi WHERE id=?').get(idEditJenis);
+    ok('edit langsung dapat mengubah penerimaan menjadi pengeluaran',
+      r.status === 303 && trxEditJenis.jenis === 'pengeluaran' && trxEditJenis.coa_id === coaKeluarRalat.id);
   }
 
   /* ========================= 9. ledger aset: cetak & export ========================= */

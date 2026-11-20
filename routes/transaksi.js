@@ -25,13 +25,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     return Number(a.pagu) - real;
   }
 
-  function trxForm(c, { mode = 'pemasukan', trx = null, taId, bukuss, closeId = '', judul = '' }) {
+  function trxHasLinkedData(id) {
+    return !!(
+      db.prepare('SELECT 1 FROM iuran_bayar WHERE transaksi_id=? LIMIT 1').get(id)
+      || db.prepare('SELECT 1 FROM piutang_bayar WHERE transaksi_id=? LIMIT 1').get(id)
+      || db.prepare('SELECT 1 FROM piutang_lain_bayar WHERE transaksi_id=? LIMIT 1').get(id)
+      || db.prepare('SELECT 1 FROM piutang_lainnya_bayar WHERE transaksi_id=? LIMIT 1').get(id)
+      || db.prepare('SELECT 1 FROM payroll_post WHERE trx_umum_id=? OR trx_dana_sosial_id=? LIMIT 1').get(id, id)
+      || db.prepare('SELECT 1 FROM ekskul_honor WHERE transaksi_id=? LIMIT 1').get(id)
+    );
+  }
+
+  function trxForm(c, { mode = 'pemasukan', trx = null, taId, bukuss, closeId = '', judul = '', backPath = '/transaksi' }) {
     const coaAll = db.prepare("SELECT * FROM coa ORDER BY kategori, kode").all();
     const jenis0 = trx ? trx.jenis : mode;
+    const jenisRows = trx
+      ? coaAll.filter(x => dbm.COA_INCOME_KATEGORI.includes(x.kategori) || dbm.COA_EXPENSE_KATEGORI.includes(x.kategori)
+        || String(trx.coa_id) === String(x.id))
+      : coaAll.filter(x => jenis0 === 'pemasukan'
+        ? dbm.COA_INCOME_KATEGORI.includes(x.kategori)
+        : dbm.COA_EXPENSE_KATEGORI.includes(x.kategori));
     // pengeluaran: HANYA akun belanja/pengeluaran (akun pendapatan disembunyikan)
-    const coaList = jenis0 === 'pemasukan'
-      ? coaAll.filter(x => dbm.COA_INCOME_KATEGORI.includes(x.kategori))
-      : coaAll.filter(x => dbm.COA_EXPENSE_KATEGORI.includes(x.kategori) || (trx && String(trx.coa_id) === String(x.id)));
     const fid = 'fTrx_' + (trx ? 'edit' : mode);
     const tgl = trx ? trx.tanggal : todayISO();
     const jenis = trx ? trx.jenis : mode;
@@ -40,11 +54,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const closeTarget = closeId || ('mTrx' + (trx ? 'Edit' : (mode === 'pemasukan' ? 'In' : 'Out')));
     return `<form method="post" action="${c.base}/transaksi/save" id="${fid}" data-trx-form>
       ${trx ? `<input type="hidden" name="id" value="${trx.id}">` : ''}
-      <input type="hidden" name="jenis" value="${jenis}">
-      <div class="alert ${jenis === 'pemasukan' ? 'ok' : 'warn'}" style="margin-bottom:16px">${ui.icon(jenis === 'pemasukan' ? 'up' : 'down')}
+      ${trx ? `<input type="hidden" name="back" value="${esc(backPath)}">` : ''}
+      ${trx ? `<div class="field"><label>Arah Transaksi</label><div class="radio-cards">
+        <input type="radio" name="jenis" id="${fid}_pemasukan" value="pemasukan" ${jenis === 'pemasukan' ? 'checked' : ''}>
+        <label for="${fid}_pemasukan"><span class="dot"></span> Penerimaan</label>
+        <input type="radio" name="jenis" id="${fid}_pengeluaran" value="pengeluaran" ${jenis === 'pengeluaran' ? 'checked' : ''}>
+        <label for="${fid}_pengeluaran"><span class="dot"></span> Pengeluaran</label>
+      </div></div>` : `<input type="hidden" name="jenis" value="${jenis}">`}
+      <div class="alert ${trx ? 'info' : jenis === 'pemasukan' ? 'ok' : 'warn'}" style="margin-bottom:16px">${ui.icon(trx ? 'info' : jenis === 'pemasukan' ? 'up' : 'down')}
         <div><b>${esc(judulForm)}</b><br>
         <span class="small">${trx
-        ? `Nomor bukti tetap <b>${esc(trx.no_bukti || '-')}</b> — perubahan langsung memperbarui saldo BKU.`
+        ? `Nomor bukti tetap <b>${esc(trx.no_bukti || '-')}</b> — perubahan jenis langsung memperbarui saldo BKU. Periode terkunci memakai menu Ralat Jenis.`
         : 'Transaksi hanya dapat disimpan pada BKU yang berstatus <b>AKTIF</b>.'}</span></div></div>
       <div class="row2">
         <div class="field"><label>Buku Kas Sasaran (BKU Aktif)</label>
@@ -68,7 +88,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <div class="field"><label>Kode Rekening</label>
           <select name="coa_id" class="js-coa" required>
             <option value="">— Pilih kode rekening —</option>
-            ${coaList.map(x => `<option value="${x.id}" data-k="${x.kategori}" ${trx && String(trx.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}
+            ${jenisRows.map(x => {
+              const kinds = [];
+              if (dbm.COA_INCOME_KATEGORI.includes(x.kategori)) kinds.push('pemasukan');
+              if (dbm.COA_EXPENSE_KATEGORI.includes(x.kategori)) kinds.push('pengeluaran');
+              if (!kinds.length && trx && String(trx.coa_id) === String(x.id)) kinds.push(jenis);
+              return `<option value="${x.id}" data-k="${x.kategori}" data-jenis="${kinds.join(',')}" ${trx && String(trx.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`;
+            }).join('')}
           </select>
           <div class="hint">Rekening ditampilkan sesuai jenis transaksi.</div>
         </div>
@@ -79,7 +105,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       <div class="field"><label>Uraian / Keterangan</label><textarea name="uraian" required placeholder="Contoh: Pembelian ATK untuk kegiatan ujian semester">${esc(trx ? trx.uraian : '')}</textarea>
         <div class="hint">Terbilang: <b class="js-terbilang" style="color:var(--o-700)"></b></div></div>
       <div class="row2">
-        <div class="field"><label>${jenis === 'pemasukan' ? 'Nama Penyetor / Penerima' : 'Nama Penerima'}</label>
+        <div class="field"><label>${trx ? 'Nama Penerima / Penyetor' : jenis === 'pemasukan' ? 'Nama Penyetor / Penerima' : 'Nama Penerima'}</label>
           ${ui.pihakInput('nama_pihak', trx ? trx.nama_pihak : '', 'placeholder="Pilih dari data pegawai atau ketik manual"')}
           <div class="hint">Klik kolom untuk memilih dari <b>master pegawai</b>, atau langsung ketik nama bebas.</div></div>
         <div class="field"><label>Upload Bukti Fisik / Nota (maks 15 MB)</label>
@@ -89,7 +115,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         </div>
       </div>
       <div class="modal-foot" style="padding:16px 0 0;background:none;border-radius:0">
-        <button class="btn" type="button" data-close="${closeTarget}">Batal</button>
+        ${trx ? `<a class="btn" href="${c.base}${esc(backPath)}">Batal</a>` : `<button class="btn" type="button" data-close="${closeTarget}">Batal</button>`}
         <button class="btn" name="after" value="saja" type="submit">${ui.icon('save')}Simpan Saja</button>
         <button class="btn btn-primary" name="after" value="cetak" type="submit">${ui.icon('printer')}Simpan &amp; Cetak Kwitansi</button>
       </div>
@@ -191,8 +217,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const autoOpen = req.query.get('new');
     const voidAsk = Number(req.query.get('void') || 0);
     const apprAsk = Number(req.query.get('appr') || 0);
+    const ralatAsk = Number(req.query.get('ralat') || 0);
     const voidTrx = voidAsk ? db.prepare('SELECT t.*, b.nama bku_nama, b.status bku_status FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.id=?').get(voidAsk) : null;
     const apprTrx = apprAsk ? db.prepare('SELECT t.*, b.nama bku_nama, u.nama pembuat FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN users u ON u.id=t.created_by WHERE t.id=?').get(apprAsk) : null;
+    const ralatTrx = ralatAsk ? db.prepare(`SELECT t.*, b.nama bku_nama, b.jenis bku_jenis, b.tahun_ajaran_id
+      FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.id=?`).get(ralatAsk) : null;
+    const ralatJenis = ralatTrx && ralatTrx.jenis === 'pemasukan' ? 'pengeluaran' : 'pemasukan';
+    const ralatCoa = ralatTrx ? db.prepare('SELECT * FROM coa ORDER BY kategori, kode').all()
+      .filter(x => ralatJenis === 'pemasukan'
+        ? dbm.COA_INCOME_KATEGORI.includes(x.kategori)
+        : dbm.COA_EXPENSE_KATEGORI.includes(x.kategori)) : [];
+    const ralatTaHariIni = ralatTrx ? dbm.taOfDate(todayISO()) : null;
+    const ralatBku = ralatTrx && ralatTaHariIni
+      ? dbm.bkuPadanan({ nama: ralatTrx.bku_nama, jenis: ralatTrx.bku_jenis }, ralatTaHariIni.id) : null;
+    const ralatBkuError = !ralatTrx ? '' : !ralatTaHariIni
+      ? 'Tanggal hari ini tidak berada dalam rentang tahun pelajaran.'
+      : !ralatBku || ralatBku.status !== 'aktif'
+        ? `BKU "${ralatTrx.bku_nama}" yang aktif tidak tersedia pada tahun pelajaran ${ralatTaHariIni.nama}.`
+        : dbm.periodeLockError(ralatBku.id, todayISO()) || '';
     const late = modalCollector();
 
     const paguMap = {};
@@ -324,6 +366,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const lockInfo = lockOf(t.bku_id, t.tanggal);
       const perLock = lockEdit || lockInfo;
       const bisaInline = c.can('transaksi', 'edit') && t.bku_status === 'aktif';
+      const bisaEdit = c.can('transaksi', 'edit') && t.bku_status === 'aktif' && !lockEdit
+        && !t.is_penyesuaian && !t.void_reversal_id && !t.void_of;
+      const bisaRalat = c.can('transaksi', 'edit') && t.status === 'posted'
+        && (t.bku_status !== 'aktif' || !!lockEdit) && !t.is_penyesuaian
+        && !t.void_reversal_id && !t.void_of;
       if (inlineId === t.id && bisaInline) return inlineRowHtml(t);
       const bisaHapusRow = c.can('transaksi', 'delete') && t.bku_status === 'aktif' && !lockEdit;
       return `<tr id="trx${t.id}">
@@ -339,13 +386,47 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <a class="btn btn-sm" href="${c.base}/transaksi/${t.id}/kwitansi" target="_blank" title="Cetak kwitansi">${ui.icon('printer')}</a>
           ${t.nota_url ? `<a class="btn btn-sm" href="${c.base}/nota/${t.id}" target="_blank" title="Lihat nota">${ui.icon('eye')}</a>` : `<span class="btn btn-sm" style="opacity:.4;cursor:default" title="Tidak ada nota">${ui.icon('eye')}</span>`}
           ${t.status === 'pending' && c.can('transaksi', 'approve') ? `<a class="btn btn-sm btn-green" href="${c.base}${withBack('appr=' + t.id)}#trx${t.id}" title="Setujui">${ui.icon('check')}</a>` : ''}
-          ${bisaInline ? `<a class="btn btn-sm btn-icon" href="${c.base}${withBack('inline=' + t.id)}#trx${t.id}" title="Edit langsung di tabel">${ui.icon('edit')}</a>` : ''}
+          ${bisaEdit ? `<a class="btn btn-sm btn-icon" href="${c.base}${withBack('edit=' + t.id)}#trx${t.id}" title="Edit transaksi">${ui.icon('edit')}</a>` : ''}
+          ${bisaRalat ? `<a class="btn btn-sm btn-warn" href="${c.base}${withBack('ralat=' + t.id)}#trx${t.id}" title="Ralat jenis transaksi">${ui.icon('refresh')}Ralat Jenis</a>` : ''}
           ${lockEdit && canUnlock && c.can('transaksi', 'edit') ? unlockBtn(t) : ''}
           ${t.status === 'posted' && t.bku_status === 'aktif' && !lockEdit && !t.is_penyesuaian && !t.void_reversal_id && !t.void_of && c.can('transaksi', 'edit') ? `<a class="btn btn-sm btn-warn" href="${c.base}${withBack('void=' + t.id)}#trx${t.id}" title="Batalkan transaksi (void)">${ui.icon('x')}Void</a>` : ''}
           ${t.bku_status === 'aktif' && !lockEdit && c.can('transaksi', 'delete') ? `<form method="post" action="${c.base}/transaksi/delete" style="display:inline" data-confirm="Hapus transaksi ${esc(t.no_bukti || '')}? Data dipindahkan ke Kotak Sampah (dapat dipulihkan 30 hari)."><input type="hidden" name="id" value="${t.id}"><input type="hidden" name="back" value="${esc(backPath)}"><button class="btn btn-sm btn-danger" title="Hapus transaksi">${ui.icon('trash')}</button></form>` : ''}
         </td></tr>`; }).join('')}
       </tbody></table></div>` : ui.emptyState('Belum ada transaksi', 'Gunakan tombol Pemasukan atau Pengeluaran untuk mulai mencatat.')}
       ${totalRows > perPage ? transaksiPager : ''}
+
+      ${ralatTrx ? ui.modal('mRalatJenis', {
+        title: 'Ralat Jenis Transaksi',
+        wide: true,
+        body: `<form method="post" action="${c.base}/transaksi/ralat-jenis" id="fRalatJenis">
+          <input type="hidden" name="id" value="${ralatTrx.id}">
+          <input type="hidden" name="back" value="${esc(backPath)}">
+          <div class="alert warn">${ui.icon('alert')}<div>
+            <b>Transaksi lama tidak akan diubah.</b> Sistem menandai transaksi asal sebagai void, membuat jurnal pembalik, lalu mencatat transaksi dengan jenis yang benar pada tanggal hari ini.
+          </div></div>
+          <div class="kv">
+            <dt>No. Bukti Asal</dt><dd class="mono">${esc(ralatTrx.no_bukti || '-')}</dd>
+            <dt>Tanggal Asal</dt><dd>${tglID(ralatTrx.tanggal)}</dd>
+            <dt>Jenis Asal</dt><dd>${ralatTrx.jenis === 'pemasukan' ? 'Penerimaan' : 'Pengeluaran'}</dd>
+            <dt>Jenis Ralat</dt><dd><b>${ralatJenis === 'pemasukan' ? 'Penerimaan' : 'Pengeluaran'}</b></dd>
+            <dt>Tanggal Ralat</dt><dd>${tglID(todayISO())}</dd>
+            <dt>BKU Tujuan</dt><dd>${ralatBku ? esc(ralatBku.nama) : '-'}</dd>
+          </div>
+          ${ralatBkuError ? `<div class="alert err mt-2">${ui.icon('alert')}<div>${esc(ralatBkuError)}</div></div>` : ''}
+          <div class="field mt-2"><label>Kode Rekening untuk Jenis Ralat</label>
+            <select name="coa_id" required ${ralatBkuError || !ralatCoa.length ? 'disabled' : ''}>
+              <option value="">— Pilih kode rekening —</option>
+              ${ralatCoa.map(x => `<option value="${x.id}">${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Alasan Ralat <span style="color:var(--red)">*</span></label>
+            <textarea name="alasan" required placeholder="Contoh: transaksi seharusnya dicatat sebagai pengeluaran"></textarea></div>
+        </form>`,
+        footer: `<a class="btn" href="${c.base}${esc(backPath)}#trx${ralatTrx.id}">Batal</a>
+          <button class="btn btn-primary" form="fRalatJenis" ${ralatBkuError || !ralatCoa.length ? 'disabled' : ''}>${ui.icon('refresh')}Buat Ralat</button>`
+      }).replace('class="modal" id="mRalatJenis"', 'class="modal show" id="mRalatJenis"')
+        .replace('<button class="xbtn" type="button" data-close="mRalatJenis">&times;</button>',
+          `<a class="xbtn" href="${c.base}${esc(backPath)}#trx${ralatTrx.id}" aria-label="Tutup" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none">&times;</a>`) : ''}
 
       ${voidTrx ? ui.modal('mVoidLazy', {
         title: 'Batalkan Transaksi (Void)',
@@ -391,9 +472,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       body: trxForm(c, {
         mode: editTrx.jenis, trx: editTrx, taId,
         bukuss: dbm.allBku(taId).filter(b => b.status === 'aktif' || String(b.id) === String(editTrx.bku_id)),
-        closeId: 'mEditTrx', judul: 'Edit Transaksi / Koreksi Data'
+        closeId: 'mEditTrx', judul: 'Edit Transaksi / Koreksi Data', backPath
       })
-    }).replace('class="modal" id="mEditTrx"', 'class="modal show" id="mEditTrx"') : ''}
+    }).replace('class="modal" id="mEditTrx"', 'class="modal show" id="mEditTrx"')
+      .replace('<button class="xbtn" type="button" data-close="mEditTrx">&times;</button>',
+        `<a class="xbtn" href="${c.base}${esc(backPath)}" aria-label="Tutup" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none">&times;</a>`) : ''}
     ${c.can('transaksi', 'create') && bukuss.length > 1 ? ui.modal('mPindah', {
       title: 'Pindah Saldo / Transfer Antar BKU', wide: true,
       body: `<form method="post" action="${c.base}/transaksi/pindah" id="fPindah">
@@ -438,6 +521,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const go = (msg, key) => res.redirect(req.BASE + flashUrl(backPath, key, msg));
 
     const { id, bku_id, tanggal, jenis, metode, coa_id, nominal, uraian, nama_pihak, after } = req.body;
+    if (!['pemasukan', 'pengeluaran'].includes(jenis)) return go('Jenis transaksi tidak valid.', 'err');
+    const old = isEdit ? db.prepare('SELECT * FROM transaksi WHERE id=?').get(id) : null;
+    if (isEdit && !old) return go('Transaksi tidak ditemukan.', 'err');
+    if (isEdit && (old.status === 'void' || old.void_of || old.void_reversal_id)) {
+      return go('Transaksi yang sudah di-void atau merupakan jurnal pembalik tidak dapat diedit.', 'err');
+    }
+    if (isEdit && old.jenis !== jenis && trxHasLinkedData(old.id)) {
+      return go('Jenis transaksi ini terhubung ke pembayaran/modul lain. Lakukan koreksi dari modul asal agar data terkait tetap sinkron.', 'err');
+    }
+    if (coa_id) {
+      const selectedCoa = db.prepare('SELECT * FROM coa WHERE id=?').get(coa_id);
+      if (!selectedCoa) return go('Kode rekening tidak ditemukan.', 'err');
+      const kategoriValid = jenis === 'pemasukan'
+        ? dbm.COA_INCOME_KATEGORI.includes(selectedCoa.kategori)
+        : dbm.COA_EXPENSE_KATEGORI.includes(selectedCoa.kategori);
+      const keepLegacy = old && old.jenis === jenis && String(old.coa_id) === String(coa_id);
+      if (!kategoriValid && !keepLegacy) return go('Kode rekening tidak sesuai dengan jenis transaksi.', 'err');
+    }
     let b = db.prepare('SELECT * FROM bku WHERE id=?').get(bku_id);
     if (!b) return go('BKU tidak ditemukan.', 'err');
     if (b.status !== 'aktif') return go('BKU "' + b.nama + '" sudah ditutup dan terkunci.', 'err');
@@ -489,8 +590,6 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     let trxId = id;
     const bkuTujuan = b.id;
     if (isEdit) {
-      const old = db.prepare('SELECT * FROM transaksi WHERE id=?').get(id);
-      if (!old) return go('Transaksi tidak ditemukan.', 'err');
       const oldBku = db.prepare('SELECT * FROM bku WHERE id=?').get(old.bku_id);
       if (oldBku && oldBku.status !== 'aktif') return go('Transaksi pada BKU tertutup tidak dapat diedit.', 'err');
       const oldLock = dbm.periodeLockError(old.bku_id, old.tanggal, 'edit');
@@ -505,6 +604,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         nota_url=COALESCE(?,nota_url),status=?,approved_by=NULL,approved_at=NULL,periode_penyesuaian=? WHERE id=?`)
         .run(bkuTujuan, tanggal, jenis, metode, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, periodePenyesuaian, id);
       dbm.logAudit(req.user, 'EDIT', 'transaksi', `Edit transaksi ${old.no_bukti}: ${uraian} (${rupiah(nom)})`
+        + (old.jenis !== jenis ? ` — jenis ${old.jenis} menjadi ${jenis}` : '')
         + (Number(old.bku_id) !== Number(bkuTujuan) ? ` — dipindahkan ke BKU ${b.nama}` : ''));
     } else {
       const ym = String(tanggal).slice(0, 7).replace('-', '');
@@ -551,6 +651,86 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       .run(req.user.id, nowStamp(), catatan || '', id);
     dbm.logAudit(req.user, 'SETUJUI', 'transaksi', `Menyetujui transaksi ${t.no_bukti} (${rupiah(t.nominal)})`);
     res.redirect(req.BASE + '/transaksi?ok=' + encodeURIComponent('Transaksi disetujui dan masuk ke saldo BKU.'));
+  });
+
+  post('/transaksi/ralat-jenis', (req, res) => {
+    if (!guard(req, res, 'transaksi', 'edit')) return;
+    const backRaw = String(req.body.back || '/transaksi');
+    const backPath = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(backRaw) && !backRaw.startsWith('//') ? backRaw : '/transaksi';
+    const go = (msg, key) => res.redirect(req.BASE + flashUrl(backPath, key, msg));
+    const trx = db.prepare('SELECT * FROM transaksi WHERE id=?').get(req.body.id);
+    if (!trx) return go('Transaksi tidak ditemukan.', 'err');
+    if (trx.status !== 'posted' || trx.void_of || trx.void_reversal_id) {
+      return go('Hanya transaksi terposting yang belum pernah di-void yang dapat diralat.', 'err');
+    }
+    if (!['pemasukan', 'pengeluaran'].includes(trx.jenis)) {
+      return go('Jenis transaksi asal tidak dapat diralat dari menu ini.', 'err');
+    }
+    if (trx.is_penyesuaian || trx.transfer_group) {
+      return go('Transaksi penyesuaian atau pindah saldo tidak dapat diralat dari menu ini.', 'err');
+    }
+
+    if (trxHasLinkedData(trx.id)) {
+      return go('Transaksi ini terhubung ke pembayaran/modul lain. Lakukan koreksi dari modul asal agar data terkait tetap sinkron.', 'err');
+    }
+
+    const jenisBaru = trx.jenis === 'pemasukan' ? 'pengeluaran' : 'pemasukan';
+    const coa = db.prepare('SELECT * FROM coa WHERE id=?').get(req.body.coa_id);
+    if (!coa) return go('Pilih kode rekening untuk jenis ralat.', 'err');
+    const kategoriValid = jenisBaru === 'pemasukan'
+      ? dbm.COA_INCOME_KATEGORI.includes(coa.kategori)
+      : dbm.COA_EXPENSE_KATEGORI.includes(coa.kategori);
+    if (!kategoriValid) return go('Kode rekening tidak sesuai dengan jenis transaksi yang diralat.', 'err');
+
+    const tanggal = todayISO();
+    const taHariIni = dbm.taOfDate(tanggal);
+    if (!taHariIni) return go('Tahun pelajaran untuk tanggal ralat hari ini tidak ditemukan.', 'err');
+    const bkuAsal = db.prepare('SELECT * FROM bku WHERE id=?').get(trx.bku_id);
+    if (!bkuAsal) return go('BKU transaksi asal tidak ditemukan.', 'err');
+    const bkuRalat = dbm.bkuPadanan(bkuAsal, taHariIni.id);
+    if (!bkuRalat || bkuRalat.status !== 'aktif') {
+      return go(`BKU "${bkuAsal.nama}" yang aktif tidak tersedia pada tahun pelajaran ${taHariIni.nama}.`, 'err');
+    }
+    const lockRalat = dbm.periodeLockError(bkuRalat.id, tanggal);
+    if (lockRalat) return go('Periode tanggal ralat terkunci: ' + lockRalat, 'err');
+
+    const alasan = String(req.body.alasan || '').trim();
+    if (!alasan) return go('Alasan ralat wajib diisi.', 'err');
+    const threshold = Number(dbm.getSetting('approval_threshold', '5000000'));
+    const statusBaru = jenisBaru === 'pengeluaran' && Number(trx.nominal) > threshold ? 'pending' : 'posted';
+    const ym = tanggal.slice(0, 7).replace('-', '');
+    let reversalId = 0;
+    let correctedId = 0;
+
+    db.transaction(() => {
+      let seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bkuRalat.id).c + 1;
+      const noBalik = `${bkuRalat.kode || 'BKU'}/VOID/${ym}/${String(seq++).padStart(3, '0')}`;
+      const rev = db.prepare(`INSERT INTO transaksi
+        (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,void_of,created_by,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'posted',?,?,?)`).run(
+        bkuRalat.id, tanggal, trx.jenis === 'pemasukan' ? 'pengeluaran' : 'pemasukan',
+        trx.metode, noBalik, trx.coa_id || null, trx.nominal,
+        `Jurnal Pembalik Ralat — ${trx.no_bukti || '#' + trx.id}`, trx.nama_pihak || '',
+        trx.id, req.user.id, nowStamp());
+      reversalId = Number(rev.lastInsertRowid);
+      db.prepare(`UPDATE transaksi SET status='void', void_at=?, void_by=?, void_alasan=?, void_reversal_id=? WHERE id=?`)
+        .run(nowStamp(), req.user.nama, `Ralat jenis: ${alasan}`, reversalId, trx.id);
+
+      const noBenar = `${bkuRalat.kode || 'BKU'}/${jenisBaru === 'pemasukan' ? 'M' : 'K'}/${ym}/${String(seq).padStart(3, '0')}`;
+      const benar = db.prepare(`INSERT INTO transaksi
+        (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,nota_url,status,created_by,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        bkuRalat.id, tanggal, jenisBaru, trx.metode, noBenar, coa.id, trx.nominal,
+        `Ralat jenis ${trx.no_bukti || '#' + trx.id}: ${trx.uraian || ''} — ${alasan}`,
+        trx.nama_pihak || '', trx.nota_url || null, statusBaru, req.user.id, nowStamp());
+      correctedId = Number(benar.lastInsertRowid);
+    })();
+
+    const jenisAsalLabel = trx.jenis === 'pemasukan' ? 'penerimaan' : 'pengeluaran';
+    const jenisBaruLabel = jenisBaru === 'pemasukan' ? 'penerimaan' : 'pengeluaran';
+    dbm.logAudit(req.user, 'RALAT JENIS', 'transaksi',
+      `Ralat ${trx.no_bukti || '#' + trx.id}: ${jenisAsalLabel} menjadi ${jenisBaruLabel}; jurnal pembalik #${reversalId}, transaksi benar #${correctedId}. Alasan: ${alasan}`);
+    go(`Ralat berhasil dicatat pada ${tglID(tanggal)}. Transaksi asal tetap tersimpan sebagai void; jurnal pembalik dibuat.${statusBaru === 'pending' ? ' Transaksi pengganti menunggu persetujuan.' : ''}`, 'ok');
   });
 
   /* ---------- pindah saldo antar BKU ---------- */
