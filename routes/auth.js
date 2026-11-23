@@ -115,7 +115,8 @@ ${ui.themeCss(tema)}
     saas.authRecord(identity, true);
     // hitung draf pengeluaran baru di database sekolah tersebut
     const alert = dbm.runAsTenant(tenant, () => {
-      const pendingRow = db.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending'").get();
+      const pendingRow = db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id
+        WHERE t.status='pending' AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get();
       return pendingRow ? pendingRow.c : 0;
     });
     const t = setSession(u.id, tenant.id, alert);

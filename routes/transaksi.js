@@ -35,6 +35,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       || db.prepare('SELECT 1 FROM ekskul_honor WHERE transaksi_id=? LIMIT 1').get(id)
     );
   }
+  function trxHasIuranPayment(id) {
+    return !!db.prepare('SELECT 1 FROM iuran_bayar WHERE transaksi_id=? LIMIT 1').get(id);
+  }
 
   function trxForm(c, { mode = 'pemasukan', trx = null, taId, bukuss, closeId = '', judul = '', backPath = '/transaksi' }) {
     const coaAll = db.prepare("SELECT * FROM coa ORDER BY kategori, kode").all();
@@ -138,7 +141,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const inlineId = Number(req.query.get('inline') || 0);
 
     // klausa filter dipakai bersama oleh query hitung & query daftar
-    let where = ' WHERE b.tahun_ajaran_id=?';
+    let where = ` WHERE b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`;
     const args = [taId || 0];
     if (fBku) { where += ' AND t.bku_id=?'; args.push(fBku); }
     if (fStatus) { where += ' AND t.status=?'; args.push(fStatus); }
@@ -197,7 +200,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const sumSql = `SELECT
         COALESCE(SUM(CASE WHEN t.status='posted' AND t.jenis='pemasukan' THEN t.nominal ELSE 0 END),0) masuk,
         COALESCE(SUM(CASE WHEN t.status='posted' AND t.jenis='pengeluaran' THEN t.nominal ELSE 0 END),0) keluar
-      FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE b.tahun_ajaran_id=?`;
+      FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`;
     const sumArgs = [taId || 0];
     let sumWhere = '';
     if (fBku) { sumWhere += ' AND t.bku_id=?'; sumArgs.push(fBku); }
@@ -208,20 +212,25 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const sums = db.prepare(sumSql + sumWhere).get(...sumArgs);
     const totalIn = Number(sums.masuk || 0);
     const totalOut = Number(sums.keluar || 0);
-    const pendingCnt = db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.status='pending' AND b.tahun_ajaran_id=?`).get(taId || 0).c;
+    const pendingCnt = db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.status='pending' AND b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(taId || 0).c;
     const threshold = Number(dbm.getSetting('approval_threshold', '5000000'));
     const simpan = req.query.get('simpan');
-    const saved = simpan ? db.prepare('SELECT * FROM transaksi WHERE id=?').get(simpan) : null;
+    const saved = simpan ? db.prepare(`SELECT t.* FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(simpan) : null;
     const editId = req.query.get('edit');
-    const editTrx = editId ? db.prepare('SELECT * FROM transaksi WHERE id=?').get(editId) : null;
+    const editTrx = editId ? db.prepare(`SELECT t.* FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(editId) : null;
     const autoOpen = req.query.get('new');
     const voidAsk = Number(req.query.get('void') || 0);
     const apprAsk = Number(req.query.get('appr') || 0);
     const ralatAsk = Number(req.query.get('ralat') || 0);
-    const voidTrx = voidAsk ? db.prepare('SELECT t.*, b.nama bku_nama, b.status bku_status FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.id=?').get(voidAsk) : null;
-    const apprTrx = apprAsk ? db.prepare('SELECT t.*, b.nama bku_nama, u.nama pembuat FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN users u ON u.id=t.created_by WHERE t.id=?').get(apprAsk) : null;
+    const voidTrx = voidAsk ? db.prepare(`SELECT t.*, b.nama bku_nama, b.status bku_status FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(voidAsk) : null;
+    const apprTrx = apprAsk ? db.prepare(`SELECT t.*, b.nama bku_nama, u.nama pembuat FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN users u ON u.id=t.created_by
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(apprAsk) : null;
     const ralatTrx = ralatAsk ? db.prepare(`SELECT t.*, b.nama bku_nama, b.jenis bku_jenis, b.tahun_ajaran_id
-      FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.id=?`).get(ralatAsk) : null;
+      FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(ralatAsk) : null;
     const ralatJenis = ralatTrx && ralatTrx.jenis === 'pemasukan' ? 'pengeluaran' : 'pemasukan';
     const ralatCoa = ralatTrx ? db.prepare('SELECT * FROM coa ORDER BY kategori, kode').all()
       .filter(x => ralatJenis === 'pemasukan'
@@ -524,6 +533,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!['pemasukan', 'pengeluaran'].includes(jenis)) return go('Jenis transaksi tidak valid.', 'err');
     const old = isEdit ? db.prepare('SELECT * FROM transaksi WHERE id=?').get(id) : null;
     if (isEdit && !old) return go('Transaksi tidak ditemukan.', 'err');
+    if (isEdit && trxHasIuranPayment(old.id)) {
+      return go('Transaksi hasil posting Grup Iuran hanya dapat dikoreksi melalui menu Iuran agar saldo grup tetap sinkron.', 'err');
+    }
     if (isEdit && (old.status === 'void' || old.void_of || old.void_reversal_id)) {
       return go('Transaksi yang sudah di-void atau merupakan jurnal pembalik tidak dapat diedit.', 'err');
     }
@@ -635,7 +647,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
   post('/transaksi/approve', (req, res) => {
     if (!guard(req, res, 'transaksi', 'approve')) return;
     const { id, aksi, catatan } = req.body;
-    const t = db.prepare('SELECT * FROM transaksi WHERE id=?').get(id);
+    const t = db.prepare(`SELECT t.* FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(id);
     if (!t) return res.redirect(req.BASE + '/transaksi?err=' + encodeURIComponent('Transaksi tidak ditemukan.'));
     const b = db.prepare('SELECT * FROM bku WHERE id=?').get(t.bku_id);
     if (b && b.status !== 'aktif') return res.redirect(req.BASE + '/transaksi?err=' + encodeURIComponent('BKU sudah ditutup, transaksi tidak dapat diproses.'));
@@ -855,6 +868,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const go = (msg, key) => res.redirect(req.BASE + flashUrl(backPath, key, msg));
     const t = db.prepare('SELECT * FROM transaksi WHERE id=?').get(req.body.id);
     if (!t) return go('Transaksi tidak ditemukan.', 'err');
+    if (trxHasIuranPayment(t.id)) {
+      return go('Transaksi hasil posting Grup Iuran tidak dapat dihapus dari menu Transaksi. Kelola melalui menu Iuran.', 'err');
+    }
     const b = db.prepare('SELECT * FROM bku WHERE id=?').get(t.bku_id);
     if (b && b.status !== 'aktif') return go('BKU sudah ditutup — transaksi tidak dapat dihapus.', 'err');
     const delLock = dbm.periodeLockError(t.bku_id, t.tanggal, 'edit');
@@ -885,6 +901,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     let hapus = 0;
     const ditolak = [];
     for (const t of rows) {
+      if (trxHasIuranPayment(t.id)) { ditolak.push(`${t.no_bukti}: dikelola melalui menu Iuran`); continue; }
       const b = db.prepare('SELECT * FROM bku WHERE id=?').get(t.bku_id);
       if (b && b.status !== 'aktif') { ditolak.push(`${t.no_bukti}: BKU ditutup`); continue; }
       const lock = dbm.periodeLockError(t.bku_id, t.tanggal, 'edit');
@@ -907,7 +924,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
   /* ---------- lihat nota ---------- */
   get('/nota/:id', (req, res) => {
     if (!guard(req, res, 'transaksi', 'view')) return;
-    const t = db.prepare('SELECT * FROM transaksi WHERE id=?').get(req.params.id);
+    const t = db.prepare(`SELECT t.* FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(req.params.id);
     if (!t || !t.nota_url) return res.redirect(req.BASE + '/transaksi?err=' + encodeURIComponent('Nota tidak ditemukan.'));
     res.redirect(t.nota_url);
   });
@@ -917,7 +935,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!guard(req, res, 'transaksi', 'view')) return;
     const c = ctx(req);
     const t = db.prepare(`SELECT t.*, b.nama bku_nama, b.kode bku_kode, co.kode coa_kode, co.nama coa_nama
-      FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa co ON co.id=t.coa_id WHERE t.id=?`).get(req.params.id);
+      FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa co ON co.id=t.coa_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(req.params.id);
     if (!t) return res.notFound();
     const isIn = t.jenis === 'pemasukan';
     const L = printcfg.labels(dbm, 'kwitansi_trx');

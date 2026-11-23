@@ -282,8 +282,10 @@ function ctx(req) {
     can: (m, a) => can(req.user, m, a),
     roleLabel: roleLabel(req.user?.role),
     pendingCount: ta
-      ? dbm.db.prepare('SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.status=\'pending\' AND b.tahun_ajaran_id=?').get(ta.id).c
-      : dbm.db.prepare("SELECT COUNT(*) c FROM transaksi WHERE status='pending'").get().c
+      ? dbm.db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id
+          WHERE t.status='pending' AND b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(ta.id).c
+      : dbm.db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id
+          WHERE t.status='pending' AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get().c
   };
 }
 

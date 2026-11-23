@@ -9,7 +9,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
         u.nama pembuat, u.jabatan pembuat_jabatan
       FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa c ON c.id=t.coa_id
       LEFT JOIN users u ON u.id=t.created_by
-      WHERE t.status='pending' AND b.tahun_ajaran_id=? ORDER BY t.created_at ASC, t.id ASC`).all(taId || 0);
+      WHERE t.status='pending' AND b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}
+      ORDER BY t.created_at ASC, t.id ASC`).all(taId || 0);
   }
 
   get('/approval', (req, res) => {
@@ -19,7 +20,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const riwayat = db.prepare(`SELECT t.*, b.nama bku_nama, u.nama pembuat, a.nama penyetuju
       FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN users u ON u.id=t.created_by LEFT JOIN users a ON a.id=t.approved_by
       WHERE t.status IN ('posted','rejected') AND t.approved_by IS NOT NULL AND t.approved_at IS NOT NULL
-        AND b.tahun_ajaran_id=?
+        AND b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}
       ORDER BY t.approved_at DESC LIMIT 40`).all(c.taId || 0);
     const threshold = Number(dbm.getSetting('approval_threshold', '5000000'));
     const total = list.reduce((s, t) => s + Number(t.nominal || 0), 0);
@@ -86,7 +87,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
   post('/approval/aksi', (req, res) => {
     if (!guard(req, res, 'transaksi', 'approve')) return;
     const { id, aksi, catatan } = req.body;
-    const t = db.prepare('SELECT * FROM transaksi WHERE id=?').get(id);
+    const t = db.prepare(`SELECT t.* FROM transaksi t JOIN bku b ON b.id=t.bku_id
+      WHERE t.id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`).get(id);
     if (!t) return res.redirect(req.BASE + '/approval?err=' + encodeURIComponent('Transaksi tidak ditemukan.'));
     if (t.status !== 'pending') return res.redirect(req.BASE + '/approval?err=' + encodeURIComponent('Transaksi ini sudah diproses sebelumnya.'));
     const b = db.prepare('SELECT * FROM bku WHERE id=?').get(t.bku_id);

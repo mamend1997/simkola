@@ -15,7 +15,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     const args = [];
     let sql = `SELECT t.*, co.kode coa_kode, co.nama coa_nama, bk.nama bku_nama, bk.status bku_status
       FROM transaksi t LEFT JOIN coa co ON co.id=t.coa_id JOIN bku bk ON bk.id=t.bku_id
-      WHERE t.status='posted' AND t.metode='transfer'`;
+      WHERE t.status='posted' AND t.metode='transfer'
+        AND ${dbm.bkuTransactionVisibleSql('t', 'bk')}`;
     if (taArg) { sql += ' AND bk.tahun_ajaran_id=?'; args.push(taArg); }
     sql += ' ORDER BY t.tanggal DESC, t.id DESC';
     const list = db.prepare(sql).all(...args);
@@ -68,12 +69,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can }) => {
     </div>
 
     <div class="kpi-grid mb-3">
-      <div class="kpi ic-orange"><div class="ico">${ui.icon('bank')}</div><div class="lbl">Saldo Buku (Bank)</div><div class="val" style="font-size:19px">${rupiah(saldoBuku)}</div><div class="meta">Seluruh transaksi transfer terposting · ${bkuss.length} BKU</div></div>
+      <div class="kpi ic-orange"><div class="ico">${ui.icon('bank')}</div><div class="lbl">Saldo Buku (Bank)</div><div class="val" style="font-size:19px">${rupiah(saldoBuku)}</div><div class="meta">Transaksi transfer yang ditampilkan · ${bkuss.length} BKU</div></div>
       <div class="kpi ic-blue"><div class="ico">${ui.icon('file')}</div><div class="lbl">Saldo Rekening Koran</div><div class="val" style="font-size:19px">${rupiah(saldoKoran)}</div><div class="meta">${koran ? 'Input terakhir ' + tglID(koran.tanggal) : 'Belum diinput'}</div></div>
       <div class="kpi ${Math.abs(selisih) < 1 ? 'ic-green' : 'ic-red'}"><div class="ico">${ui.icon(Math.abs(selisih) < 1 ? 'check' : 'alert')}</div>
         <div class="lbl">Selisih</div><div class="val" style="font-size:19px">${rupiah(selisih)}</div>
         <div class="meta">${Math.abs(selisih) < 1 ? 'Rekonsiliasi cocok' : 'Perlu penyesuaian'}</div></div>
-      <div class="kpi ic-amber"><div class="ico">${ui.icon('check')}</div><div class="lbl">Sudah Dicocokkan</div><div class="val" style="font-size:19px">${matchedCount}/${list.length}</div><div class="meta">Transaksi transfer semua BKU</div></div>
+      <div class="kpi ic-amber"><div class="ico">${ui.icon('check')}</div><div class="lbl">Sudah Dicocokkan</div><div class="val" style="font-size:19px">${matchedCount}/${list.length}</div><div class="meta">Transaksi transfer yang ditampilkan</div></div>
     </div>
 
     ${Math.abs(selisih) >= 1 ? `<div class="alert warn">${ui.icon('alert')}<div><b>Ada selisih ${rupiah(selisih)}.</b> Periksa transaksi yang belum dicocokkan, lalu catat biaya administrasi bank / pendapatan bunga di bawah agar saldo buku sesuai rekening koran.</div></div>` : ''}

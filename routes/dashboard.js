@@ -39,10 +39,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const tutupBku = bkuss.filter(b => b.status !== 'aktif');
     const pending = db.prepare(`SELECT t.*, b.nama bku_nama, u.nama pembuat FROM transaksi t
       JOIN bku b ON b.id=t.bku_id LEFT JOIN users u ON u.id=t.created_by
-      WHERE t.status='pending' AND b.tahun_ajaran_id=? ORDER BY t.tanggal DESC, t.id DESC LIMIT 6`).all(taId || 0);
+      WHERE t.status='pending' AND b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}
+      ORDER BY t.tanggal DESC, t.id DESC LIMIT 6`).all(taId || 0);
     const recent = db.prepare(`SELECT t.*, b.nama bku_nama, c.nama coa_nama FROM transaksi t
       JOIN bku b ON b.id=t.bku_id LEFT JOIN coa c ON c.id=t.coa_id
-      WHERE t.status='posted' AND b.tahun_ajaran_id=? ORDER BY t.tanggal DESC, t.id DESC LIMIT 8`).all(taId || 0);
+      WHERE t.status='posted' AND b.tahun_ajaran_id=? AND ${dbm.bkuTransactionVisibleSql('t', 'b')}
+      ORDER BY t.tanggal DESC, t.id DESC LIMIT 8`).all(taId || 0);
     const hasData = taId ? db.prepare(`SELECT COUNT(*) c FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE b.tahun_ajaran_id=?`).get(taId).c : 0;
     const curPeriode = dbm.currentPeriode();
     const lastPeriode = dbm.prevPeriode(curPeriode);
@@ -50,8 +52,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const belumBulanLalu = belumTutup.filter(x => x.periode === lastPeriode);
     const totalBukuBelum = belumTutup.reduce((s2, x) => s2 + dbm.periodePosisi(x.bku_id, x.periode).saldoBuku, 0);
     const store = dbm.storageInfo();
-    const approvalAlert = (req.sessionRow && req.sessionRow.alert_pending > 0 && c.can('transaksi', 'approve'))
-      ? Number(req.sessionRow.alert_pending) : 0;
+    const approvalAlert = c.can('transaksi', 'approve') ? Number(c.pendingCount || 0) : 0;
 
     /* ---------- data grafik multi-tipe ---------- */
     const finBkuRows = ta ? db.prepare(`SELECT b.id, b.nama, b.saldo_awal,
@@ -477,7 +478,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     ${queueAlerts.length ? `<div class="alert warn mb-3">${ui.icon('bell')}<div><b>Notifikasi Antrean Posting.</b><ul style="margin:6px 0 0 16px;padding:0">${queueAlerts.map(x => `<li>${x}</li>`).join('')}</ul></div></div>` : ''}
 
     <div class="kpi-grid mb-3">
-      ${kpi('ic-green', 'up', 'Total Pemasukan BKU', rupiah(g.masuk), 'Seluruh transaksi terposting')}
+      ${kpi('ic-green', 'up', 'Total Pemasukan BKU', rupiah(g.masuk), 'Sesuai pengaturan BKU; penerimaan Grup Iuran diringkas terpisah')}
       ${kpi('ic-red', 'down', 'Total Pengeluaran BKU', rupiah(g.keluar), 'Seluruh transaksi terposting')}
       ${kpi('ic-orange', 'wallet', 'Total Kas Riil', rupiah(kas.bank + kas.tunai),
       `Bank ${rupiah(kas.bank)} · Tunai ${rupiah(kas.tunai)}`)}

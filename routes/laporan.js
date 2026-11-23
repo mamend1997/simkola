@@ -8,7 +8,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
   /* ---------- data builders ---------- */
   /**
    * Data BKU. `bkuIds` boleh satu id, array id, atau kosong/`'all'` = SEMUA BKU pada TA terpilih
-   * (transaksi digabung & diurutkan per tanggal, saldo awal = jumlah saldo awal seluruh BKU).
+   * (transaksi digabung & diurutkan per tanggal; tiap BKU mengikuti aturan penerimaan master).
    */
   function bkuData(bkuIds, from, to, taId) {
     const ids = (Array.isArray(bkuIds) ? bkuIds : [bkuIds])
@@ -23,25 +23,48 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const b = multi
       ? { id: 0, nama: `Semua BKU (${list.length} buku)`, ta_nama: list[0].ta_nama, multi: true, list }
       : list[0];
-    let opening = list.reduce((s, x) => s + Number(x.saldo_awal || 0), 0);
     const bIds = list.map(x => Number(x.id));
+    const stateByBku = new Map(list.map(book => {
+      const usesIuranSaldo = dbm.bkuUsesIuranSaldo(book.id);
+      return [Number(book.id), {
+        usesIuranSaldo,
+        includeIncome: dbm.bkuIncomeEnabled(book.id),
+        opening: Number(book.saldo_awal || 0)
+          + (usesIuranSaldo ? dbm.bkuIuranReceived(book.id) : 0)
+      }];
+    }));
     const bq = `(${bIds.map(() => '?').join(',')})`;
     if (from) {
-      const pre = db.prepare(`SELECT COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE -nominal END),0) d
-        FROM transaksi WHERE bku_id IN ${bq} AND status='posted' AND tanggal<?`).get(...bIds, from).d;
-      opening += pre;
+      const previous = db.prepare(`SELECT t.*,
+          CASE WHEN EXISTS (SELECT 1 FROM iuran_bayar p WHERE p.transaksi_id=t.id) THEN 1 ELSE 0 END iuran_source
+        FROM transaksi t WHERE t.bku_id IN ${bq} AND t.status='posted' AND t.tanggal<?
+        ORDER BY t.tanggal, t.id`).all(...bIds, from);
+      for (const t of previous) {
+        const state = stateByBku.get(Number(t.bku_id));
+        if (t.jenis === 'pengeluaran') state.opening -= Number(t.nominal || 0);
+        else if (!state.usesIuranSaldo || Number(t.is_penyesuaian) === 1
+          || (state.includeIncome && Number(t.iuran_source) !== 1)) state.opening += Number(t.nominal || 0);
+      }
     }
-    let q = `SELECT t.*, co.kode coa_kode, co.nama coa_nama, b.nama bku_nama FROM transaksi t
+    let q = `SELECT t.*,
+      CASE WHEN EXISTS (SELECT 1 FROM iuran_bayar p WHERE p.transaksi_id=t.id) THEN 1 ELSE 0 END iuran_source,
+      co.kode coa_kode, co.nama coa_nama, b.nama bku_nama FROM transaksi t
       LEFT JOIN coa co ON co.id=t.coa_id LEFT JOIN bku b ON b.id=t.bku_id
       WHERE t.bku_id IN ${bq} AND t.status='posted'`;
     const qa = [...bIds];
     if (from) { q += ' AND t.tanggal>=?'; qa.push(from); }
     if (to) { q += ' AND t.tanggal<=?'; qa.push(to); }
     q += ' ORDER BY t.tanggal, t.id';
-    const rows = db.prepare(q).all(...qa);
+    const rows = db.prepare(q).all(...qa).filter(t => {
+      const state = stateByBku.get(Number(t.bku_id));
+      return t.jenis !== 'pemasukan' || !state.usesIuranSaldo
+        || Number(t.is_penyesuaian) === 1
+        || (state.includeIncome && Number(t.iuran_source) !== 1);
+    });
+    const opening = [...stateByBku.values()].reduce((sum, state) => sum + state.opening, 0);
     let run = opening;
     const out = rows.map(t => {
-      run += t.jenis === 'pemasukan' ? t.nominal : -t.nominal;
+      run += t.jenis === 'pemasukan' ? Number(t.nominal || 0) : -Number(t.nominal || 0);
       return { ...t, saldo: run };
     });
     return {
@@ -255,7 +278,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const args = [];
     let sql = `SELECT t.*, b.nama bku_nama, co.kode coa_kode, co.nama coa_nama
       FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa co ON co.id=t.coa_id
-      WHERE t.status='posted' AND ${cfg.where}`;
+      WHERE t.status='posted' AND ${cfg.where}
+        AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`;
     if (taId) { sql += ' AND b.tahun_ajaran_id=?'; args.push(taId); }
     if (bk.length) { sql += ` AND b.id IN (${bk.map(() => '?').join(',')})`; args.push(...bk); }
     if (from) { sql += ' AND t.tanggal>=?'; args.push(from); }
@@ -276,7 +300,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       const pa = [];
       let pq = `SELECT COALESCE(SUM(CASE WHEN t.jenis='pemasukan' THEN t.nominal ELSE -t.nominal END),0) d
         FROM transaksi t JOIN bku b ON b.id=t.bku_id LEFT JOIN coa co ON co.id=t.coa_id
-        WHERE t.status='posted' AND ${cfg.where}`;
+        WHERE t.status='posted' AND ${cfg.where}
+          AND ${dbm.bkuTransactionVisibleSql('t', 'b')}`;
       if (taId) { pq += ' AND b.tahun_ajaran_id=?'; pa.push(taId); }
       if (bk.length) { pq += ` AND b.id IN (${bk.map(() => '?').join(',')})`; pa.push(...bk); }
       pq += ' AND t.tanggal<?';

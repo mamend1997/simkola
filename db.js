@@ -2109,6 +2109,12 @@ function bkuIncomeEnabled(bkuId) {
   const b = db.prepare('SELECT jenis, pemasukan_saldo FROM bku WHERE id=?').get(bkuId);
   return !!b && (b.jenis !== 'kegiatan' || Number(b.pemasukan_saldo) === 1);
 }
+function bkuTransactionVisibleSql(trxAlias = 't', bkuAlias = 'b') {
+  return `(${trxAlias}.jenis<>'pemasukan' OR COALESCE(${trxAlias}.is_penyesuaian,0)=1
+    OR COALESCE(${bkuAlias}.jenis,'')<>'kegiatan'
+    OR (COALESCE(${bkuAlias}.pemasukan_saldo,0)=1
+      AND NOT EXISTS (SELECT 1 FROM iuran_bayar p WHERE p.transaksi_id=${trxAlias}.id)))`;
+}
 function bkuRegularIncome(bkuId, range = {}) {
   let sql = `SELECT COALESCE(SUM(t.nominal),0) masuk FROM transaksi t
     WHERE t.bku_id=? AND t.status='posted' AND t.jenis='pemasukan'
@@ -2145,17 +2151,36 @@ function bkuTotals(bkuId, from, to) {
   if (to) { q += ' AND tanggal<=?'; args.push(to); }
   return db.prepare(q).get(...args);
 }
-function globalTotals(taId) {
-  if (taId) {
-    return db.prepare(`SELECT
-        COALESCE(SUM(CASE WHEN t.jenis='pemasukan' THEN t.nominal ELSE 0 END),0) masuk,
-        COALESCE(SUM(CASE WHEN t.jenis='pengeluaran' THEN t.nominal ELSE 0 END),0) keluar
-        FROM transaksi t JOIN bku b ON b.id=t.bku_id WHERE t.status='posted' AND b.tahun_ajaran_id=?`).get(taId);
+function bkuVisibleIncomeTotal(bkuId, range = {}) {
+  const b = db.prepare('SELECT jenis FROM bku WHERE id=?').get(bkuId);
+  if (!b) return 0;
+  if (bkuUsesIuranSaldo(bkuId)) {
+    let sql = `SELECT COALESCE(SUM(nominal),0) masuk FROM transaksi
+      WHERE bku_id=? AND status='posted' AND jenis='pemasukan' AND COALESCE(is_penyesuaian,0)=1`;
+    const args = [bkuId];
+    if (range.before) { sql += ' AND tanggal<?'; args.push(range.before); }
+    if (range.from) { sql += ' AND tanggal>=?'; args.push(range.from); }
+    if (range.to) { sql += ' AND tanggal<=?'; args.push(range.to); }
+    const adjustment = Number(db.prepare(sql).get(...args).masuk || 0);
+    return adjustment + (bkuIncomeEnabled(bkuId) ? bkuRegularIncome(bkuId, range) : 0);
   }
-  return db.prepare(`SELECT
-      COALESCE(SUM(CASE WHEN jenis='pemasukan' THEN nominal ELSE 0 END),0) masuk,
-      COALESCE(SUM(CASE WHEN jenis='pengeluaran' THEN nominal ELSE 0 END),0) keluar
-      FROM transaksi WHERE status='posted'`).get();
+  let sql = `SELECT COALESCE(SUM(nominal),0) masuk FROM transaksi
+    WHERE bku_id=? AND status='posted' AND jenis='pemasukan'`;
+  const args = [bkuId];
+  if (range.before) { sql += ' AND tanggal<?'; args.push(range.before); }
+  if (range.from) { sql += ' AND tanggal>=?'; args.push(range.from); }
+  if (range.to) { sql += ' AND tanggal<=?'; args.push(range.to); }
+  return Number(db.prepare(sql).get(...args).masuk || 0);
+}
+function globalTotals(taId) {
+  const args = [];
+  let sql = `SELECT
+      COALESCE(SUM(CASE WHEN t.jenis='pemasukan' THEN t.nominal ELSE 0 END),0) masuk,
+      COALESCE(SUM(CASE WHEN t.jenis='pengeluaran' THEN t.nominal ELSE 0 END),0) keluar
+    FROM transaksi t JOIN bku b ON b.id=t.bku_id
+    WHERE t.status='posted' AND ${bkuTransactionVisibleSql('t', 'b')}`;
+  if (taId) { sql += ' AND b.tahun_ajaran_id=?'; args.push(taId); }
+  return db.prepare(sql).get(...args);
 }
 /** ukuran berkas database aplikasi (DB + WAL/SHM) dalam byte */
 function dbSizeBytes() {
@@ -2176,15 +2201,27 @@ function storageInfo() {
   return { used, quota, sisa: Math.max(0, quota - used), pct: quota > 0 ? Math.min(100, (used / quota) * 100) : 0 };
 }
 function kasBankTunai(taId) {
-  const join = taId ? ' JOIN bku b ON b.id=t.bku_id AND b.tahun_ajaran_id=?' : '';
-  const stmt = db.prepare(`SELECT
+  let txnSql = `SELECT
      COALESCE(SUM(CASE WHEN t.metode='transfer' AND t.jenis='pemasukan' THEN t.nominal
                        WHEN t.metode='transfer' AND t.jenis='pengeluaran' THEN -t.nominal ELSE 0 END),0) bank,
      COALESCE(SUM(CASE WHEN t.metode='tunai' AND t.jenis='pemasukan' THEN t.nominal
                        WHEN t.metode='tunai' AND t.jenis='pengeluaran' THEN -t.nominal ELSE 0 END),0) tunai
-     FROM transaksi t${join} WHERE t.status='posted'`);
-  const r = taId ? stmt.get(taId) : stmt.get();
-  return { bank: r.bank, tunai: r.tunai };
+     FROM transaksi t JOIN bku b ON b.id=t.bku_id
+     WHERE t.status='posted' AND ${bkuTransactionVisibleSql('t', 'b')}`;
+  if (taId) txnSql += ' AND b.tahun_ajaran_id=?';
+  const r = taId ? db.prepare(txnSql).get(taId) : db.prepare(txnSql).get();
+  const iuranSql = `SELECT
+     COALESCE(SUM(CASE WHEN p.metode='transfer' THEN p.dibayar ELSE 0 END),0) bank,
+     COALESCE(SUM(CASE WHEN p.metode='tunai' THEN p.dibayar ELSE 0 END),0) tunai
+    FROM iuran_bayar p JOIN transaksi t ON t.id=p.transaksi_id
+    JOIN bku b ON b.id=t.bku_id
+    WHERE p.status='posted' AND t.status='posted' AND t.jenis='pemasukan'
+     AND COALESCE(t.is_penyesuaian,0)<>1 AND b.jenis='kegiatan'${taId ? ' AND b.tahun_ajaran_id=?' : ''}`;
+  const iuran = taId ? db.prepare(iuranSql).get(taId) : db.prepare(iuranSql).get();
+  return {
+    bank: Number(r.bank || 0) + Number(iuran.bank || 0),
+    tunai: Number(r.tunai || 0) + Number(iuran.tunai || 0)
+  };
 }
 /** Kas riil = otomatis dari transaksi + mutasi bank/cash + penyesuaian manual (tabel aset jenis bank/tunai) */
 function asetKas(taId) {
@@ -4934,7 +4971,7 @@ module.exports = {
   rootDb, controlDb, runWithMeta, currentMeta, openTenantConn, runAsTenant, currentTenantConn, migrateTenantColumns, ensureTenantUniqueIndexes, createTenantDatabase, DATA_DIR, tableNamesOf,
   registerTimeFns, migrateLegacyTimestamps, TZ_LEGACY_SHIFT_HOURS, dateOffsetISO,
   getSetting, setSetting, settingsAll, logAudit, activeTahun, allTahun, allBku, allBkuRaw, bkuIuranGroups, bkuForIuranGrup, bkuRabRows, bkuRabSummary, autoBku,
-  bkuSaldo, bkuIuranReceived, bkuUsesIuranSaldo, bkuIncomeEnabled, bkuRegularIncome, bkuTotals, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
+  bkuSaldo, bkuIuranReceived, bkuUsesIuranSaldo, bkuIncomeEnabled, bkuTransactionVisibleSql, bkuRegularIncome, bkuTotals, bkuVisibleIncomeTotal, globalTotals, dbSizeBytes, storageQuotaBytes, storageInfo, kasBankTunai, asetKas, asetLain, pinjamanAkun,
   asetLedger, asetMutasi, pinjamanList, asetNonKasTotal,
   piutangPegawaiTotal, piutangSisa, sppTunggakan, sppPeriode, sppTerimaMap, sppTampil, sppSeries,
   COA_EXPENSE_KATEGORI, COA_INCOME_KATEGORI, KATEGORI_LABEL, effKategori, cloneTaMaster, cloneKelasTa, autoGraduateStudents, purgeGhostData,

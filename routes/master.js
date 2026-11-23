@@ -1178,6 +1178,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const saldoManual = Number(b.saldo_awal || 0);
       const penerimaanGrup = usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0;
       const saldoAwalKeseluruhan = saldoManual + penerimaanGrup;
+      const pemasukanTampil = dbm.bkuVisibleIncomeTotal(b.id);
       const rabSummary = b.jenis === 'kegiatan' ? dbm.bkuRabSummary(b.id) : null;
       const rab = rabSummary ? rabSummary.totalPagu : 0;
       const rabExceeded = rabSummary ? rabSummary.overCount > 0 : false;
@@ -1242,7 +1243,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
                 <dt>Saldo awal manual</dt><dd>${rupiah(b.saldo_awal)}</dd>
                 ${usesIuranSaldo ? `<dt>Penerimaan grup iuran</dt><dd>${rupiah(dbm.bkuIuranReceived(b.id))}</dd>` : ''}
                 <dt>Saldo awal keseluruhan</dt><dd>${rupiah(Number(b.saldo_awal || 0) + (usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0))}</dd>
-                <dt>${usesIuranSaldo ? 'Rincian Pemasukan Transaksi' : 'Total pemasukan'}</dt><dd>${rupiah(dbm.bkuTotals(b.id).masuk)}</dd>
+                ${usesIuranSaldo && !dbm.bkuIncomeEnabled(b.id) ? '' : `<dt>${usesIuranSaldo ? 'Pemasukan Transaksi yang Ditampilkan' : 'Total pemasukan'}</dt><dd>${rupiah(pemasukanTampil)}</dd>`}
                 <dt>Total pengeluaran</dt><dd>${rupiah(dbm.bkuTotals(b.id).keluar)}</dd>
                 <dt>Saldo akhir</dt><dd style="color:var(--o-700);font-size:15px">${rupiah(saldo)}</dd>
               </div>
@@ -1525,6 +1526,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (!b) return res.notFound();
     const ta = db.prepare('SELECT * FROM tahun_ajaran WHERE id=?').get(b.tahun_ajaran_id) || {};
     const t = dbm.bkuTotals(b.id);
+    const pemasukanTampil = dbm.bkuVisibleIncomeTotal(b.id);
     const saldo = dbm.bkuSaldo(b.id);
     const usesIuranSaldo = dbm.bkuUsesIuranSaldo(b.id);
     const saldoManual = Number(b.saldo_awal || 0);
@@ -1538,7 +1540,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           <tr><td style="width:46%">Saldo Awal Manual</td><td class="num">${rupiah(saldoManual)}</td></tr>
           ${usesIuranSaldo ? `<tr><td>Penerimaan Grup Iuran</td><td class="num">${rupiah(penerimaanGrup)}</td></tr>` : ''}
           <tr><td><b>Saldo Awal Keseluruhan</b></td><td class="num"><b>${rupiah(saldoAwal)}</b></td></tr>
-          <tr><td>${usesIuranSaldo ? 'Rincian Pemasukan Transaksi' : 'Total Penerimaan / Pemasukan'}</td><td class="num">${rupiah(t.masuk)}</td></tr>
+          ${usesIuranSaldo && !dbm.bkuIncomeEnabled(b.id) ? '' : `<tr><td>${usesIuranSaldo ? 'Pemasukan Transaksi yang Ditampilkan' : 'Total Penerimaan / Pemasukan'}</td><td class="num">${rupiah(pemasukanTampil)}</td></tr>`}
           <tr><td>Total Pengeluaran</td><td class="num">${rupiah(t.keluar)}</td></tr>
           <tr><td><b>Saldo Akhir Buku Kas</b></td><td class="num"><b>${rupiah(b.saldo_akhir_tutup ?? saldo)}</b></td></tr>
         </tbody>

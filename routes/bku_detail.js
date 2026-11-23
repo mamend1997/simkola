@@ -3,6 +3,7 @@
 module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) => {
   const { db } = dbm;
   const { esc, rupiah, tglID, todayISO, nowStamp, num } = lib;
+  const trxHasIuranPayment = id => !!db.prepare('SELECT 1 FROM iuran_bayar WHERE transaksi_id=? LIMIT 1').get(id);
 
   /* ---------- helper ---------- */
   function ledger(bkuId, from, to, q, jenis, sort, usesIuranSaldo) {
@@ -146,7 +147,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
 
     const coaList = db.prepare('SELECT * FROM coa ORDER BY kategori, kode').all();
     const koreksi = db.prepare(`SELECT k.*, t.no_bukti, t.tanggal, t.uraian FROM koreksi k
-      LEFT JOIN transaksi t ON t.id=k.transaksi_id WHERE k.bku_id=? ORDER BY k.id DESC LIMIT 30`).all(b.id);
+      LEFT JOIN transaksi t ON t.id=k.transaksi_id LEFT JOIN bku b ON b.id=k.bku_id
+      WHERE k.bku_id=? AND (t.id IS NULL OR ${dbm.bkuTransactionVisibleSql('t', 'b')})
+      ORDER BY k.id DESC LIMIT 30`).all(b.id);
     const pendingKoreksi = koreksi.filter(k => k.status === 'pending');
 
     /* Form edit transaksi disamakan tampilannya dengan form Transaksi Masuk / Transaksi Keluar
@@ -417,7 +420,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         <div class="kv"><dt>Saldo awal manual</dt><dd>${rupiah(b.saldo_awal)}</dd>
           ${usesIuranSaldo ? `<dt>Penerimaan grup iuran</dt><dd>${rupiah(dbm.bkuIuranReceived(b.id))}</dd>` : ''}
           <dt>Saldo awal keseluruhan</dt><dd>${rupiah(Number(b.saldo_awal || 0) + (usesIuranSaldo ? dbm.bkuIuranReceived(b.id) : 0))}</dd>
-          <dt>${usesIuranSaldo ? 'Pemasukan BKU (informasi)' : 'Total masuk'}</dt><dd>${rupiah(dbm.bkuTotals(b.id).masuk)}</dd>
+          ${hideActivityIncomes ? '' : `<dt>${usesIuranSaldo ? 'Pemasukan Transaksi yang Ditampilkan' : 'Total masuk'}</dt><dd>${rupiah(dbm.bkuVisibleIncomeTotal(b.id))}</dd>`}
         <dt>Total keluar</dt><dd>${rupiah(dbm.bkuTotals(b.id).keluar)}</dd><dt>Saldo akhir</dt><dd style="color:var(--o-700);font-size:15px">${rupiah(d.saldoAkhirTotal)}</dd></div>
         <form method="post" action="${c.base}/bku/tutup" id="fTutupBku">
           <input type="hidden" name="id" value="${b.id}">
@@ -456,6 +459,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     guard(req, res, 'transaksi', isHapus ? 'delete' : 'edit');
     const t = db.prepare('SELECT * FROM transaksi WHERE id=? AND bku_id=?').get(req.body.id, b.id);
     if (!t) return go('Transaksi tidak ditemukan pada BKU ini.', 'err');
+    if (trxHasIuranPayment(t.id)) return go('Transaksi hasil posting Grup Iuran hanya dapat dikoreksi melalui menu Iuran.', 'err');
     if (b.status !== 'aktif') return go('BKU sudah ditutup. Buka kembali BKU untuk melakukan koreksi.', 'err');
     const lockErr = dbm.periodeLockError(b.id, t.tanggal, 'edit');
     if (lockErr) return go(lockErr, 'err');
@@ -517,6 +521,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (b.status !== 'aktif') return go('BKU sudah ditutup, pengajuan koreksi tidak diperlukan.', 'err');
     const t = db.prepare('SELECT * FROM transaksi WHERE id=? AND bku_id=?').get(req.body.transaksi_id, b.id);
     if (!t) return go('Transaksi tidak ditemukan.', 'err');
+    if (trxHasIuranPayment(t.id)) return go('Transaksi hasil posting Grup Iuran hanya dapat dikoreksi melalui menu Iuran.', 'err');
     const alasan = String(req.body.alasan || '').trim();
     if (!alasan) return go('Alasan pengajuan wajib diisi.', 'err');
     const aksi = req.body.aksi === 'hapus' ? 'hapus' : 'edit';
@@ -553,6 +558,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
 
     const t = db.prepare('SELECT * FROM transaksi WHERE id=?').get(k.transaksi_id);
     if (!t) return res.redirect(req.BASE + `/bku/${b.id}?err=` + encodeURIComponent('Transaksi sudah tidak ada.'));
+    if (trxHasIuranPayment(t.id)) return res.redirect(req.BASE + `/bku/${b.id}?err=` + encodeURIComponent('Transaksi hasil posting Grup Iuran hanya dapat dikoreksi melalui menu Iuran.'));
     const lockErr = dbm.periodeLockError(b.id, t.tanggal, 'edit');
     if (lockErr) return res.redirect(req.BASE + `/bku/${b.id}?err=` + encodeURIComponent(lockErr));
 
