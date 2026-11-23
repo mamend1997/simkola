@@ -300,6 +300,12 @@ const countOf = (html, needle) => html.split(needle).length - 1;
     Number(trx.nominal) === postedBatch.reduce((sum, row) => sum + Number(row.dibayar), 0)
       && trx.uraian.includes('3 siswa') && trx.nama_pihak === '3 siswa',
     trx.nominal + ' / ' + trx.uraian + ' / ' + trx.nama_pihak);
+  const legacyDuplicate = run(`INSERT INTO transaksi
+    (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_at)
+    VALUES (?,?,'pemasukan','tunai',?,?,300000,'Iuran SPP Uji — posting lama','1 siswa','posted',?)`,
+  bku.id, '2026-08-10', `${bku.kode}/IUR/202608/LEGACY`, coaIn.id, '2026-08-10 13:00:00');
+  run('UPDATE iuran_bayar SET transaksi_id=? WHERE id=?', legacyDuplicate.lastInsertRowid, postedBatch[2].id);
+  run('UPDATE transaksi SET nominal=600000 WHERE id=?', posted.transaksi_id);
   const siswaTambahan = siswaIds[5];
   const tagTambahan = one('SELECT * FROM iuran_tagihan WHERE siswa_id=? AND grup_id=?', siswaTambahan, grupId);
   insBayar.run(tagTambahan.id, siswaTambahan, '2026-08-10', 300000, 0, 300000, 'tunai', 'Pembayaran sesudah posting awal',
@@ -308,10 +314,12 @@ const countOf = (html, needle) => html.split(needle).length - 1;
   r = await req('POST', '/iuran/antrean/posting', { ids: pembayaranTambahan.id, bku_id: bku.id, coa_id: coaIn.id });
   const transaksiPerHari = one('SELECT * FROM transaksi WHERE id=?', posted.transaksi_id);
   const postedBatchAfter = all('SELECT * FROM iuran_bayar WHERE transaksi_id=? AND status=\'posted\'', posted.transaksi_id);
-  ok('pembayaran berikutnya di hari yang sama digabung ke transaksi harian yang sudah ada',
+  const duplicateAfter = one('SELECT * FROM transaksi WHERE id=?', legacyDuplicate.lastInsertRowid);
+  ok('pembayaran baru menggabungkan transaksi harian lama yang terduplikasi',
     r.status === 303 && /ok=/.test(r.loc) && transaksiPerHari.uraian.includes('4 siswa')
-      && Number(transaksiPerHari.nominal) === 1200000 && postedBatchAfter.length === 4,
-    `${postedBatchAfter.length} pembayaran / ${transaksiPerHari.nominal} / ${transaksiPerHari.uraian}`);
+      && Number(transaksiPerHari.nominal) === 1200000 && postedBatchAfter.length === 4
+      && duplicateAfter.status === 'void' && /dikonsolidasikan/.test(duplicateAfter.void_alasan),
+    `${postedBatchAfter.length} pembayaran / ${transaksiPerHari.nominal} / ${transaksiPerHari.uraian} / ${duplicateAfter.status}`);
 
   // kelompok yang sudah diposting hilang dari antrean
   r = await req('GET', '/iuran/antrean');

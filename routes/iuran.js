@@ -2947,8 +2947,15 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       WHERE ib.status='posted' AND it.grup_id=? AND substr(COALESCE(ib.tanggal,''),1,10)=?
         AND tr.tanggal=? AND tr.bku_id=? AND tr.coa_id=? AND tr.metode=? AND tr.status='posted'
       ORDER BY tr.id`).all(grupId, tanggal, tanggal, bku.id, coa.id, rows[0].metode === 'transfer' ? 'transfer' : 'tunai') : [];
-    if (sameDayTransactions.length > 1) {
-      return { ok: false, err: 'Sudah ada beberapa transaksi BKU untuk grup dan tanggal ini. Periksa riwayat sebelum memposting pembayaran baru.' };
+    const duplicateTransactions = sameDayTransactions.slice(1);
+    const mixedTransaction = sameDayTransactions.find(tr => Number(db.prepare(`SELECT COUNT(*) n FROM iuran_bayar ib
+      LEFT JOIN iuran_tagihan it ON it.id=ib.tagihan_id
+      WHERE ib.transaksi_id=? AND (ib.status<>'posted' OR COALESCE(it.grup_id,0)<>?
+        OR substr(COALESCE(ib.tanggal,''),1,10)<>?
+        OR CASE WHEN ib.metode='transfer' THEN 'transfer' ELSE 'tunai' END<>?)`).get(
+      tr.id, grupId, tanggal, rows[0].metode === 'transfer' ? 'transfer' : 'tunai').n || 0) > 0);
+    if (mixedTransaction) {
+      return { ok: false, err: `Transaksi BKU ${mixedTransaction.no_bukti || mixedTransaction.id} juga memuat pembayaran lain, sehingga tidak dapat digabung otomatis.` };
     }
     const existingTrx = sameDayTransactions[0] || null;
     const seq = existingTrx ? 0 : db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bku.id).c + 1;
@@ -2964,6 +2971,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         db.prepare("UPDATE bku_periode SET status='dibuka' WHERE id=? AND status='ditutup'").run(lockedPeriod.id);
       }
       let id = existingTrx ? Number(existingTrx.id) : 0;
+      for (const duplicate of duplicateTransactions) {
+        db.prepare('UPDATE iuran_bayar SET transaksi_id=? WHERE transaksi_id=? AND status=\'posted\'')
+          .run(id, duplicate.id);
+        db.prepare(`UPDATE transaksi SET status='void', void_at=?, void_by=?, void_alasan=? WHERE id=?`)
+          .run(nowStamp(), (opts.user && opts.user.nama) || 'Sistem',
+            `Transaksi iuran harian dikonsolidasikan ke ${existingTrx.no_bukti || existingTrx.id}`, duplicate.id);
+      }
       if (!id) {
         const ins = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
           VALUES (?,?,'pemasukan',?,?,?,?,?,?,'posted',?,?)`);
@@ -2993,7 +3007,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (grup) db.prepare('UPDATE iuran_grup SET coa_id=? WHERE id=?').run(coa.id, grup.id);
     return { ok: true, trxId: trxResult.id, noBukti, total, transactionTotal: trxResult.transactionTotal,
       bku, grup, coa, n: rows.length, siswaCount: trxResult.studentCount, paymentCount: trxResult.paymentCount,
-      reused: !!existingTrx, catatanTa,
+      reused: !!existingTrx, mergedCount: duplicateTransactions.length, catatanTa,
       reopenedPeriod: lockedPeriod ? lockedPeriod.periode : '', adjustmentRemoved };
   }
 
@@ -3006,8 +3020,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Semua penerimaan sudah terposting.'));
     const hasil = postQueueRows(rows, { bkuId: Number(req.body.bku_id || 0), coaId: Number(req.body.coa_id || 0), user: req.user, taSesiId: req.taId });
     if (!hasil.ok) return res.redirect(back + '?err=' + encodeURIComponent(hasil.err));
-    dbm.logAudit(req.user, 'POSTING IURAN', 'iuran', `${hasil.siswaCount} siswa (${hasil.paymentCount} pembayaran dalam transaksi) ${hasil.grup ? hasil.grup.nama : ''} ${rupiah(hasil.transactionTotal)} → ${hasil.bku.nama} (${hasil.noBukti}) · kode ${hasil.coa.kode} ${hasil.coa.nama}`);
+    dbm.logAudit(req.user, 'POSTING IURAN', 'iuran', `${hasil.siswaCount} siswa (${hasil.paymentCount} pembayaran dalam transaksi) ${hasil.grup ? hasil.grup.nama : ''} ${rupiah(hasil.transactionTotal)} → ${hasil.bku.nama} (${hasil.noBukti}) · kode ${hasil.coa.kode} ${hasil.coa.nama}`
+      + (hasil.mergedCount ? ` · ${hasil.mergedCount} transaksi duplikat dikonsolidasikan dan ditandai void` : ''));
     res.redirect(back + '?ok=' + encodeURIComponent(`Transaksi harian kolektif ${hasil.reused ? 'diperbarui' : 'dibuat'}: ${hasil.siswaCount} siswa, total ${rupiah(hasil.transactionTotal)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).`
+      + (hasil.mergedCount ? ` ${hasil.mergedCount} transaksi duplikat lama dikonsolidasikan.` : '')
       + (hasil.reopenedPeriod ? ` Periode ${dbm.periodeLabel(hasil.reopenedPeriod)} dibuka otomatis; tutup kembali setelah koreksi selesai.` : '')
       + (hasil.adjustmentRemoved ? ` ${hasil.adjustmentRemoved} penyesuaian opnam diarsipkan ke Kotak Sampah.` : '')
       + (hasil.catatanTa || '')));
