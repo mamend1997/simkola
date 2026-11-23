@@ -192,6 +192,11 @@ function openTenantConn(id, file) {
 /** kolom tautan publik (BKU & Grup Iuran) — dipastikan ada untuk DB sekolah lama */
 function ensurePublicColumns(conn) {
   const cols = t => { try { return conn.pragma(`table_info("${t}")`).map(c => c.name); } catch (e) { return []; } };
+  const tc = cols('transaksi');
+  if (tc.length && !tc.includes('jumlah_barang')) conn.exec('ALTER TABLE transaksi ADD COLUMN jumlah_barang REAL NOT NULL DEFAULT 1');
+  if (tc.length && !tc.includes('harga_satuan')) conn.exec('ALTER TABLE transaksi ADD COLUMN harga_satuan REAL NOT NULL DEFAULT 0');
+  if (tc.length && cols('coa').length) conn.exec(`UPDATE transaksi SET harga_satuan=nominal
+    WHERE COALESCE(harga_satuan,0)<=0 AND coa_id IN (SELECT id FROM coa WHERE kode IN ('5.2.01','5.2.02'))`);
   const bc = cols('bku');
   const cc = cols('coa');
   if (bc.length && !bc.includes('pemasukan_saldo')) {
@@ -325,7 +330,8 @@ CREATE TABLE IF NOT EXISTS bku_rab (
 CREATE TABLE IF NOT EXISTS transaksi (
   id INTEGER PRIMARY KEY AUTOINCREMENT, bku_id INTEGER NOT NULL, tanggal TEXT NOT NULL,
   jenis TEXT NOT NULL, metode TEXT NOT NULL DEFAULT 'tunai', no_bukti TEXT,
-  coa_id INTEGER, nominal REAL NOT NULL DEFAULT 0, uraian TEXT, nama_pihak TEXT,
+  coa_id INTEGER, nominal REAL NOT NULL DEFAULT 0, jumlah_barang REAL NOT NULL DEFAULT 1,
+  harga_satuan REAL NOT NULL DEFAULT 0, uraian TEXT, nama_pihak TEXT,
   nota_url TEXT, status TEXT NOT NULL DEFAULT 'posted', rekon_matched INTEGER NOT NULL DEFAULT 0,
   created_by INTEGER, created_at TEXT, approved_by INTEGER, approved_at TEXT, catatan_approval TEXT
 );
@@ -1250,6 +1256,10 @@ function bootstrap() {
     if (!trxCols.includes('is_penyesuaian')) db.exec('ALTER TABLE transaksi ADD COLUMN is_penyesuaian INTEGER NOT NULL DEFAULT 0');
     if (!trxCols.includes('periode_penyesuaian')) db.exec('ALTER TABLE transaksi ADD COLUMN periode_penyesuaian TEXT');
     if (!trxCols.includes('transfer_group')) db.exec('ALTER TABLE transaksi ADD COLUMN transfer_group TEXT');
+    if (!trxCols.includes('jumlah_barang')) db.exec('ALTER TABLE transaksi ADD COLUMN jumlah_barang REAL NOT NULL DEFAULT 1');
+    if (!trxCols.includes('harga_satuan')) db.exec('ALTER TABLE transaksi ADD COLUMN harga_satuan REAL NOT NULL DEFAULT 0');
+    db.exec(`UPDATE transaksi SET harga_satuan=nominal
+      WHERE COALESCE(harga_satuan,0)<=0 AND coa_id IN (SELECT id FROM coa WHERE kode IN ('5.2.01','5.2.02'))`);
 
     // buku pembantu/rekap → mode otomatis (tidak diinput manual, hanya rekapan transaksi)
     const bkuCols = db.prepare('PRAGMA table_info(bku)').all().map(c => c.name);

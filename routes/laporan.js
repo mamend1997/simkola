@@ -288,7 +288,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     let rows = db.prepare(sql).all(...args).map(t => ({
       ...t, seq: Number(t.id) || 0,
       pajakKolom: cfg.key === 'pajak' ? pajakKolom(t) : '',
-      jumlahBarang: pembantuJenisBarang(cfg.key) ? 1 : 0
+      jumlahBarang: pembantuJenisBarang(cfg.key) ? (Number(t.jumlah_barang) || 1) : 0,
+      hargaSatuan: pembantuJenisBarang(cfg.key)
+        ? (Number(t.harga_satuan) || Number(t.nominal || 0) / (Number(t.jumlah_barang) || 1))
+        : 0
     }));
     // rekapan otomatis Mutasi Bank & Cash pada Buku Pembantu Bank / Tunai
     if (cfg.key === 'bank' || cfg.key === 'tunai') {
@@ -355,10 +358,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       return `<table class="${print ? 'doc-tbl' : ''}">
         <thead><tr><th>Uraian</th><th>Jumlah Barang</th><th>Harga Satuan</th><th>Realisasi</th></tr></thead>
         <tbody>${pb.rows.map(t => `<tr><td>${esc(t.uraian || '')}</td><td class="num">${t.jumlahBarang}</td>
-          <td class="num">${money(t.nominal)}</td><td class="num">${money(t.nominal)}</td></tr>`).join('')}
+          <td class="num">${money(t.hargaSatuan)}</td><td class="num">${money(t.nominal)}</td></tr>`).join('')}
         </tbody><tfoot><tr><td class="${print ? 'center' : ''}">JUMLAH</td><td class="num">${qty}</td><td></td>
-          <td class="num">${money(pb.rows.reduce((s, t) => s + Number(t.nominal || 0), 0))}</td></tr></tfoot></table>
-        <p class="${print ? '' : 'help mt-2'}" style="${print ? 'font-size:10px' : ''}">Jumlah barang dihitung satu unit per transaksi karena data transaksi hanya menyimpan nominal total.</p>`;
+          <td class="num">${money(pb.rows.reduce((s, t) => s + Number(t.nominal || 0), 0))}</td></tr></tfoot></table>`;
     }
     return `<table class="${print ? 'doc-tbl' : ''}">
       <thead><tr><th>No</th><th>Tanggal</th><th>No. Bukti</th><th>Buku Kas</th><th>Uraian</th><th>Masuk</th><th>Keluar</th><th>Saldo</th></tr></thead>
@@ -401,10 +403,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         rows: [
           [{ v: 'Uraian', bold: true }, { v: 'Jumlah Barang', bold: true },
             { v: 'Harga Satuan', bold: true }, { v: 'Realisasi', bold: true }],
-          ...pb.rows.map(t => [t.uraian || '', Number(t.jumlahBarang || 0), Number(t.nominal || 0), Number(t.nominal || 0)]),
+          ...pb.rows.map(t => [t.uraian || '', Number(t.jumlahBarang || 0), Number(t.hargaSatuan || 0), Number(t.nominal || 0)]),
           [{ v: 'JUMLAH', bold: true }, { v: totalQty, bold: true }, '',
-            { v: realization, bold: true }],
-          ['Jumlah barang dihitung satu unit per transaksi karena data transaksi hanya menyimpan nominal total.']
+            { v: realization, bold: true }]
         ],
         widths: [52, 16, 20, 20]
       };

@@ -59,6 +59,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   function trxSnapshot(t) {
     return {
       tanggal: t.tanggal, jenis: t.jenis, metode: t.metode, nominal: t.nominal,
+      jumlah_barang: t.jumlah_barang, harga_satuan: t.harga_satuan,
       uraian: t.uraian, nama_pihak: t.nama_pihak, coa_id: t.coa_id, no_bukti: t.no_bukti
     };
   }
@@ -154,7 +155,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
 
     /* Form edit transaksi disamakan tampilannya dengan form Transaksi Masuk / Transaksi Keluar
        (urutan field, kartu radio metode, kode rekening + nominal sebaris, uraian + terbilang). */
-    const editForm = (t, mid) => `<form method="post" action="${c.base}/bku/${b.id}/trx/simpan" id="f${mid}" data-trx-form>
+    const editForm = (t, mid) => {
+      const coa = coaList.find(x => String(x.id) === String(t.coa_id));
+      const showBarangFields = t.jenis === 'pengeluaran' && coa && ['5.2.01', '5.2.02'].includes(String(coa.kode));
+      const jumlahBarang = Number(t.jumlah_barang) || 1;
+      const hargaSatuan = Number(t.harga_satuan) || Math.round(Number(t.nominal || 0) / jumlahBarang);
+      return `<form method="post" action="${c.base}/bku/${b.id}/trx/simpan" id="f${mid}" data-trx-form>
       <input type="hidden" name="id" value="${t.id}">
       <input type="hidden" name="back" value="${esc(pageHref([]))}">
       <div class="alert ${t.jenis === 'pemasukan' ? 'ok' : 'warn'}" style="margin-bottom:16px">${ui.icon(t.jenis === 'pemasukan' ? 'up' : 'down')}
@@ -181,10 +187,16 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       </div>
       <div class="row2">
         <div class="field"><label>Kode Rekening</label>
-          <select name="coa_id"><option value="">— Tanpa kode rekening —</option>
-          ${coaList.map(x => `<option value="${x.id}" ${String(t.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}</select>
+          <select name="coa_id" class="js-coa"><option value="">— Tanpa kode rekening —</option>
+          ${coaList.map(x => `<option value="${x.id}" data-kode="${esc(x.kode)}" ${String(t.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`).join('')}</select>
           <div class="hint">Rekening ditampilkan sesuai jenis transaksi.</div></div>
-        <div class="field"><label>Nominal (Rp)</label>${ui.moneyInput('nominal', t.nominal, 'class="js-nominal" required placeholder="0"')}</div>
+        <div class="field"><label>Nominal Total (Rp)</label>${ui.moneyInput('nominal', t.nominal, `class="js-nominal" required placeholder="0" ${showBarangFields ? 'readonly' : ''}`)}</div>
+      </div>
+      <div class="row2" data-trx-item-fields style="${showBarangFields ? '' : 'display:none'}">
+        <div class="field"><label>Jumlah Barang</label><input type="number" name="jumlah_barang" class="js-item-qty" min="0.01" step="0.01" value="${jumlahBarang}">
+          <div class="hint">Masukkan banyaknya barang yang dibeli.</div></div>
+        <div class="field"><label>Nominal per Barang / Harga Satuan (Rp)</label>${ui.moneyInput('harga_satuan', showBarangFields ? hargaSatuan : '', 'class="js-item-price" placeholder="0"')}
+          <div class="hint">Nominal total dihitung otomatis: jumlah barang × harga satuan.</div></div>
       </div>
       <div class="field"><label>Uraian / Keterangan</label><textarea name="uraian" required>${esc(t.uraian)}</textarea>
         <div class="hint">Terbilang: <b class="js-terbilang" style="color:var(--o-700)"></b></div></div>
@@ -196,6 +208,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <input name="alasan" required placeholder="Contoh: salah input nominal, koreksi tanggal"></div>
       </div>
     </form>`;
+    };
 
     const hapusForm = (t, mid) => `<form method="post" action="${c.base}/bku/${b.id}/trx/simpan" id="f${mid}">
       <input type="hidden" name="id" value="${t.id}"><input type="hidden" name="hapus" value="1">
@@ -475,7 +488,29 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     }
 
     const { tanggal, jenis, metode, nominal, uraian, nama_pihak, coa_id, no_bukti } = req.body;
-    const nom = lib.parseMoney(nominal);
+    const selectedCoa = coa_id ? db.prepare('SELECT * FROM coa WHERE id=?').get(coa_id) : null;
+    const isBarang = jenis === 'pengeluaran' && selectedCoa
+      && ['5.2.01', '5.2.02'].includes(String(selectedCoa.kode));
+    let jumlahBarang = 0;
+    let hargaSatuan = 0;
+    let nom;
+    if (isBarang) {
+      const hasBarangInputs = req.body.jumlah_barang !== undefined || req.body.harga_satuan !== undefined;
+      const qtyRaw = req.body.jumlah_barang !== undefined
+        ? req.body.jumlah_barang : (hasBarangInputs ? '' : (Number(t.jumlah_barang) || 1));
+      const priceRaw = req.body.harga_satuan !== undefined
+        ? req.body.harga_satuan : (hasBarangInputs ? ''
+          : (Number(t.harga_satuan) || Number(t.nominal || 0) / (Number(t.jumlah_barang) || 1)));
+      jumlahBarang = Number(String(qtyRaw || '').replace(',', '.'));
+      hargaSatuan = lib.parseMoney(priceRaw);
+      if (!Number.isFinite(jumlahBarang) || jumlahBarang <= 0 || !(hargaSatuan > 0)
+          || jumlahBarang * hargaSatuan > Number.MAX_SAFE_INTEGER) {
+        return go('Jumlah barang dan harga satuan harus lebih dari 0.', 'err');
+      }
+      nom = Math.round(jumlahBarang * hargaSatuan);
+    } else {
+      nom = lib.parseMoney(nominal);
+    }
     if (!(nom > 0)) return go('Nominal harus lebih dari 0.', 'err');
     if (!tanggal || !uraian) return go('Tanggal dan uraian wajib diisi.', 'err');
     const newLock = dbm.periodeLockError(b.id, tanggal);
@@ -501,11 +536,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         (Number(t.bku_id) !== Number(bkuTujuan) || String(t.periode_penyesuaian || t.tanggal).slice(0, 7) !== periodePenyesuaian)) {
       db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(t.id);
     }
-    db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,no_bukti=?,status=?,
+    db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,jumlah_barang=?,harga_satuan=?,uraian=?,nama_pihak=?,no_bukti=?,status=?,
       periode_penyesuaian=? WHERE id=?`)
-      .run(bkuTujuan, tanggal, jenis, metode || 'tunai', coa_id || null, nom, uraian, nama_pihak || '', no_bukti || t.no_bukti, status, periodePenyesuaian, t.id);
+      .run(bkuTujuan, tanggal, jenis, metode || 'tunai', coa_id || null, nom, jumlahBarang, hargaSatuan, uraian, nama_pihak || '', no_bukti || t.no_bukti, status, periodePenyesuaian, t.id);
 
-    const after = trxSnapshot({ ...t, bku_id: bkuTujuan, tanggal, jenis, metode, nominal: nom, uraian, nama_pihak, coa_id, no_bukti: no_bukti || t.no_bukti });
+    const after = trxSnapshot({ ...t, bku_id: bkuTujuan, tanggal, jenis, metode, nominal: nom,
+      jumlah_barang: jumlahBarang, harga_satuan: hargaSatuan, uraian, nama_pihak, coa_id, no_bukti: no_bukti || t.no_bukti });
     logPerubahan(req.user, 'EDIT', b, before, after, `alasan: ${alasan}`);
     go('Transaksi dikoreksi. Saldo berjalan seluruh baris setelahnya sudah dihitung ulang otomatis.' + catatanTa, 'ok');
   });

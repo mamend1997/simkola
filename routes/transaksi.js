@@ -52,6 +52,12 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     const fid = 'fTrx_' + (trx ? 'edit' : mode);
     const tgl = trx ? trx.tanggal : todayISO();
     const jenis = trx ? trx.jenis : mode;
+    const trxCoa = trx && coaAll.find(x => String(x.id) === String(trx.coa_id));
+    const showBarangFields = jenis === 'pengeluaran' && trxCoa && ['5.2.01', '5.2.02'].includes(String(trxCoa.kode));
+    const barangQty = trx ? (Number(trx.jumlah_barang) || 1) : 1;
+    const barangPrice = trx
+      ? (Number(trx.harga_satuan) || Math.round(Number(trx.nominal || 0) / barangQty))
+      : '';
     // form EDIT memakai struktur yang sama persis dengan form Pemasukan/Pengeluaran
     const judulForm = judul || (jenis === 'pemasukan' ? 'Input Pemasukan / Penerimaan Kas' : 'Input Pengeluaran / Belanja');
     const closeTarget = closeId || ('mTrx' + (trx ? 'Edit' : (mode === 'pemasukan' ? 'In' : 'Out')));
@@ -96,12 +102,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
               if (dbm.COA_INCOME_KATEGORI.includes(x.kategori)) kinds.push('pemasukan');
               if (dbm.COA_EXPENSE_KATEGORI.includes(x.kategori)) kinds.push('pengeluaran');
               if (!kinds.length && trx && String(trx.coa_id) === String(x.id)) kinds.push(jenis);
-              return `<option value="${x.id}" data-k="${x.kategori}" data-jenis="${kinds.join(',')}" ${trx && String(trx.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`;
+              return `<option value="${x.id}" data-k="${x.kategori}" data-kode="${esc(x.kode)}" data-jenis="${kinds.join(',')}" ${trx && String(trx.coa_id) === String(x.id) ? 'selected' : ''}>${esc(x.kode + ' · ' + x.nama)}</option>`;
             }).join('')}
           </select>
           <div class="hint">Rekening ditampilkan sesuai jenis transaksi.</div>
         </div>
-        <div class="field"><label>Nominal (Rp)</label>${ui.moneyInput('nominal', trx ? trx.nominal : '', 'class="js-nominal" required placeholder="0"')}</div>
+        <div class="field"><label>Nominal Total (Rp)</label>${ui.moneyInput('nominal', trx ? trx.nominal : '', `class="js-nominal" required placeholder="0" ${showBarangFields ? 'readonly' : ''}`)}</div>
+      </div>
+      <div class="row2" data-trx-item-fields style="${showBarangFields ? '' : 'display:none'}">
+        <div class="field"><label>Jumlah Barang</label><input type="number" name="jumlah_barang" class="js-item-qty" min="0.01" step="0.01" value="${showBarangFields ? barangQty : 1}">
+          <div class="hint">Masukkan banyaknya barang yang dibeli.</div></div>
+        <div class="field"><label>Nominal per Barang / Harga Satuan (Rp)</label>${ui.moneyInput('harga_satuan', showBarangFields ? barangPrice : '', 'class="js-item-price" placeholder="0"')}
+          <div class="hint">Nominal total dihitung otomatis: jumlah barang × harga satuan.</div></div>
       </div>
       <div class="alert warn js-approval" style="display:none;margin-bottom:14px">${ui.icon('clock')}<div><b>Perlu persetujuan:</b> nominal melebihi batas ${rupiah(dbm.getSetting('approval_threshold', '5000000'))}. Transaksi akan berstatus <b>Pending</b> sampai disetujui Kepala Sekolah.</div></div>
       <div class="alert js-pagu" style="display:none;margin-bottom:14px"></div>
@@ -269,6 +281,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
         <input type="hidden" name="id" value="${t.id}">
         <input type="hidden" name="jenis" value="${esc(t.jenis)}">
         <input type="hidden" name="bku_id" value="${t.bku_id}">
+        <input type="hidden" name="jumlah_barang" value="${Number(t.jumlah_barang) || 1}">
+        <input type="hidden" name="harga_satuan" value="${Number(t.harga_satuan) || Math.round(Number(t.nominal || 0) / (Number(t.jumlah_barang) || 1))}">
         <input type="hidden" name="nama_pihak" value="${esc(t.nama_pihak || '')}">
         <input type="hidden" name="back" value="${esc(backPath)}">
       </form>`;
@@ -542,8 +556,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     if (isEdit && old.jenis !== jenis && trxHasLinkedData(old.id)) {
       return go('Jenis transaksi ini terhubung ke pembayaran/modul lain. Lakukan koreksi dari modul asal agar data terkait tetap sinkron.', 'err');
     }
+    let selectedCoa = null;
     if (coa_id) {
-      const selectedCoa = db.prepare('SELECT * FROM coa WHERE id=?').get(coa_id);
+      selectedCoa = db.prepare('SELECT * FROM coa WHERE id=?').get(coa_id);
       if (!selectedCoa) return go('Kode rekening tidak ditemukan.', 'err');
       const kategoriValid = jenis === 'pemasukan'
         ? dbm.COA_INCOME_KATEGORI.includes(selectedCoa.kategori)
@@ -554,7 +569,28 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
     let b = db.prepare('SELECT * FROM bku WHERE id=?').get(bku_id);
     if (!b) return go('BKU tidak ditemukan.', 'err');
     if (b.status !== 'aktif') return go('BKU "' + b.nama + '" sudah ditutup dan terkunci.', 'err');
-    const nom = lib.parseMoney(nominal);
+    const isBarang = jenis === 'pengeluaran' && selectedCoa
+      && ['5.2.01', '5.2.02'].includes(String(selectedCoa.kode));
+    let jumlahBarang = 0;
+    let hargaSatuan = 0;
+    let nom;
+    if (isBarang) {
+      const hasBarangInputs = req.body.jumlah_barang !== undefined || req.body.harga_satuan !== undefined;
+      const qtyRaw = req.body.jumlah_barang !== undefined
+        ? req.body.jumlah_barang : (old ? old.jumlah_barang : (hasBarangInputs ? '' : 1));
+      const priceRaw = req.body.harga_satuan !== undefined
+        ? req.body.harga_satuan : (old ? (old.harga_satuan || Number(old.nominal || 0) / (Number(old.jumlah_barang) || 1))
+          : (hasBarangInputs ? '' : nominal));
+      jumlahBarang = Number(String(qtyRaw || '').replace(',', '.'));
+      hargaSatuan = lib.parseMoney(priceRaw);
+      if (!Number.isFinite(jumlahBarang) || jumlahBarang <= 0 || !(hargaSatuan > 0)
+          || jumlahBarang * hargaSatuan > Number.MAX_SAFE_INTEGER) {
+        return go('Jumlah barang dan harga satuan harus lebih dari 0.', 'err');
+      }
+      nom = Math.round(jumlahBarang * hargaSatuan);
+    } else {
+      nom = lib.parseMoney(nominal);
+    }
     if (!(nom > 0)) return go('Nominal harus lebih dari 0.', 'err');
     if (!tanggal || !uraian) return go('Tanggal dan uraian wajib diisi.', 'err');
 
@@ -612,9 +648,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
           (Number(old.bku_id) !== Number(bkuTujuan) || String(old.periode_penyesuaian || old.tanggal).slice(0, 7) !== periodePenyesuaian)) {
         db.prepare('UPDATE bku_periode SET transaksi_penyesuaian_id=NULL WHERE transaksi_penyesuaian_id=?').run(old.id);
       }
-      db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,uraian=?,nama_pihak=?,
+      db.prepare(`UPDATE transaksi SET bku_id=?,tanggal=?,jenis=?,metode=?,coa_id=?,nominal=?,jumlah_barang=?,harga_satuan=?,uraian=?,nama_pihak=?,
         nota_url=COALESCE(?,nota_url),status=?,approved_by=NULL,approved_at=NULL,periode_penyesuaian=? WHERE id=?`)
-        .run(bkuTujuan, tanggal, jenis, metode, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, periodePenyesuaian, id);
+        .run(bkuTujuan, tanggal, jenis, metode, coa_id || null, nom, jumlahBarang, hargaSatuan, uraian, nama_pihak || '', notaUrl, status, periodePenyesuaian, id);
       dbm.logAudit(req.user, 'EDIT', 'transaksi', `Edit transaksi ${old.no_bukti}: ${uraian} (${rupiah(nom)})`
         + (old.jenis !== jenis ? ` — jenis ${old.jenis} menjadi ${jenis}` : '')
         + (Number(old.bku_id) !== Number(bkuTujuan) ? ` — dipindahkan ke BKU ${b.nama}` : ''));
@@ -623,8 +659,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, uploadMedia,
       const seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bkuTujuan).c + 1;
       const noBukti = `${b.kode || 'BKU'}/${jenis === 'pemasukan' ? 'M' : 'K'}/${ym}/${String(seq).padStart(3, '0')}`;
       const status = perluApproval ? 'pending' : 'posted';
-      const info = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,nota_url,status,created_by,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(bkuTujuan, tanggal, jenis, metode, noBukti, coa_id || null, nom, uraian, nama_pihak || '', notaUrl, status, req.user.id, nowStamp());
+      const info = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,jumlah_barang,harga_satuan,uraian,nama_pihak,nota_url,status,created_by,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(bkuTujuan, tanggal, jenis, metode, noBukti, coa_id || null, nom, jumlahBarang, hargaSatuan, uraian, nama_pihak || '', notaUrl, status, req.user.id, nowStamp());
       trxId = info.lastInsertRowid;
       dbm.logAudit(req.user, 'TAMBAH', 'transaksi', `Input ${jenis} ${noBukti} pada ${b.nama}: ${uraian} (${rupiah(nom)})${perluApproval ? ' — menunggu approval' : ''}${catatanTa ? ' ·' + catatanTa : ''}`);
       if (perluApproval) {

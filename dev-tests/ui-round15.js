@@ -76,6 +76,19 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const visAll = await page.locator('#rekapTrx tbody tr:visible').count();
   ok('instant search reset saat kolom dikosongkan', visAll === totalRows, `${visAll}/${totalRows}`);
   ok('tombol Filter tetap ada', await page.locator('form.filter-eq button, form.filter-eq input[type=submit]').count() > 0);
+  await page.click('[data-open="mTrxOut"]');
+  const trxOut = page.locator('#mTrxOut');
+  await trxOut.locator('select[name=coa_id]').selectOption(String(coa.id));
+  ok('pilih rekening BHP menampilkan jumlah dan harga satuan',
+    await trxOut.locator('[data-trx-item-fields]').isVisible()
+      && await trxOut.locator('input[name=jumlah_barang]').isVisible()
+      && await trxOut.locator('input[name=harga_satuan]').isVisible());
+  await trxOut.locator('input[name=jumlah_barang]').fill('3');
+  await trxOut.locator('input[name=harga_satuan]').fill('25000');
+  const itemTotal = await trxOut.locator('input[name=nominal]').inputValue();
+  ok('nominal total terhitung otomatis dari jumlah × harga satuan',
+    itemTotal.replace(/\D/g, '') === '75000', itemTotal);
+  await trxOut.locator('[data-close="mTrxOut"]').click();
 
   /* ---------- 1b. instant search pada modul piutang (tabel target) ---------- */
   await req('POST', '/piutang/save', { nama_pegawai: 'Pegawai Cari Uji', tanggal_utang: today, nominal: '450000', keterangan: 'Uji cari' });

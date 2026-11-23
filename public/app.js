@@ -775,8 +775,11 @@
     const ter = form.querySelector('.js-terbilang');
     const appr = form.querySelector('.js-approval');
     const paguBox = form.querySelector('.js-pagu');
+    const itemFields = form.querySelector('[data-trx-item-fields]');
+    const itemQty = form.querySelector('.js-item-qty');
+    const itemPrice = form.querySelector('.js-item-price');
     const jenisRadios = Array.from(form.querySelectorAll('input[name=jenis][type=radio]'));
-    const jenisField = form.querySelector('input[name=jenis]');
+    const jenisField = form.querySelector('input[name=jenis],select[name=jenis]');
     const threshold = Number(window.__THRESHOLD || 0);
     const paguMap = window.__PAGU || {};
     function sync() {
@@ -791,6 +794,18 @@
           option.disabled = !visible;
           if (!visible && option.selected) coa.value = '';
         });
+      }
+      const selectedCoa = coa && coa.options[coa.selectedIndex];
+      const itemMode = jenis === 'pengeluaran' && selectedCoa
+        && ['5.2.01', '5.2.02'].includes(selectedCoa.dataset.kode);
+      if (itemFields) itemFields.style.display = itemMode ? 'grid' : 'none';
+      if (itemQty) itemQty.required = !!itemMode;
+      if (itemPrice) itemPrice.required = !!itemMode;
+      if (nominal) nominal.readOnly = !!itemMode;
+      if (itemMode && nominal) {
+        const qty = Number(String(itemQty.value || '').replace(',', '.')) || 0;
+        const total = Math.round(qty * moneyVal(itemPrice));
+        nominal.value = total ? thousands(total) : '';
       }
       const v = nominal ? moneyVal(nominal) : 0;
       if (ter) ter.textContent = v ? terbilang(v) : '';
@@ -814,6 +829,8 @@
     }
     if (nominal) nominal.addEventListener('input', sync);
     if (coa) coa.addEventListener('change', sync);
+    if (itemQty) itemQty.addEventListener('input', sync);
+    if (itemPrice) itemPrice.addEventListener('input', sync);
     jenisRadios.forEach(r => r.addEventListener('change', sync));
     sync();
   });

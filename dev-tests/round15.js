@@ -207,6 +207,16 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   /* ================= 8. kwitansi transaksi: orientasi & default bendahara ================= */
   const coa = db.prepare("SELECT * FROM coa WHERE kode='5.2.01'").get();
   await req('POST', '/transaksi/save', { bku_id: bku.id, tanggal: today, jenis: 'pengeluaran', metode: 'tunai', coa_id: coa.id, nominal: '250000', uraian: 'Belanja Uji Orientasi', nama_pihak: 'Toko Uji' });
+  r = await req('GET', '/transaksi');
+  ok('form transaksi menyediakan input jumlah dan harga barang', /name="jumlah_barang"/.test(r.text) && /name="harga_satuan"/.test(r.text));
+  await req('POST', '/transaksi/save', {
+    bku_id: bku.id, tanggal: today, jenis: 'pengeluaran', metode: 'tunai',
+    coa_id: coa.id, nominal: '', jumlah_barang: '3', harga_satuan: '25000',
+    uraian: 'Pembelian BHP Hitung Uji', nama_pihak: 'Toko Uji'
+  });
+  const trxBhp = db.prepare("SELECT * FROM transaksi WHERE uraian='Pembelian BHP Hitung Uji'").get();
+  ok('transaksi BHP menyimpan jumlah, harga satuan, dan total hasil perkalian',
+    !!trxBhp && trxBhp.jumlah_barang === 3 && trxBhp.harga_satuan === 25000 && trxBhp.nominal === 75000);
   const trx = db.prepare("SELECT * FROM transaksi WHERE uraian='Belanja Uji Orientasi'").get();
   r = await req('GET', `/transaksi/${trx.id}/kwitansi?orient=portrait`);
   ok('kwitansi pengeluaran default portrait', /size:A4 portrait/.test(r.text), r.status);
@@ -271,6 +281,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('Rekap BHP: uraian, jumlah barang, harga satuan, realisasi saja',
     /Jumlah Barang/.test(r.text) && /Harga Satuan/.test(r.text) && /Realisasi/.test(r.text)
       && !/<th[^>]*>Masuk<\/th>/.test(r.text) && !/<th[^>]*>Keluar<\/th>/.test(r.text));
+  ok('Rekap BHP memakai jumlah, harga satuan, dan nilai realisasi tersimpan',
+    /Pembelian BHP Hitung Uji/.test(r.text) && /<td class="num">3<\/td>/.test(r.text)
+      && /25\.000/.test(r.text) && /75\.000/.test(r.text));
   r = await req('GET', `/laporan?r=pembantu&p=modal&ta=${ta.id}&bulan=${bulan}`);
   ok('Rekap barang modal memakai format barang yang sama',
     /Jumlah Barang/.test(r.text) && /Harga Satuan/.test(r.text) && /Realisasi/.test(r.text));
@@ -293,6 +306,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('export BHP memakai kolom jumlah/harga/realisasi',
     bhpSheet.rows.some(row => (row || []).some(c => /Jumlah Barang/.test(X.cellText(c))))
       && bhpSheet.rows.some(row => (row || []).some(c => /Realisasi/.test(X.cellText(c)))));
+  const bhpDataRow = bhpSheet.rows.find(row => X.cellText(row && row[0]) === 'Pembelian BHP Hitung Uji');
+  ok('export BHP mempertahankan qty, harga satuan, dan realisasi',
+    !!bhpDataRow && bhpDataRow[1].n === 3 && bhpDataRow[2].n === 25000 && bhpDataRow[3].n === 75000);
   r = await req('GET', `/export/pembantu?p=pajak&ta=${ta.id}&bulan=${bulan}`, null, { binary: true });
   const pajakSheet = X.readXlsx(r.buf)[0];
   ok('export pajak memakai kolom PPN dan PPh', pajakSheet.rows.some(row => (row || []).some(c => /PPh 21/.test(X.cellText(c))))
