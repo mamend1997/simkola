@@ -2169,7 +2169,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   /* =========================================================
      ANTREAN POSTING BKU
      ========================================================= */
-  /** kelompokkan penerimaan pending per (grup + tanggal + BKU) → satu transaksi BKU */
+  /** kelompokkan penerimaan pending per (grup + tanggal + BKU + metode) → satu transaksi BKU */
   function queueRows(rows) {
     const map = new Map();
     const grupIds = [...new Set(rows.map(b => Number(b.grup_id || 0)).filter(Boolean))];
@@ -2177,18 +2177,27 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       ? db.prepare(`SELECT * FROM iuran_grup WHERE id IN (${grupIds.map(() => '?').join(',')})`).all(...grupIds).map(g => [g.id, g])
       : []);
     for (const b of rows) {
-      const key = (b.grup_id || 0) + '|' + String(b.tanggal).slice(0, 10) + '|' + (b.bku_id || 0);
+      const g = grupMap.get(Number(b.grup_id)) || null;
+      const targetBku = b.grup_id ? dbm.bkuForIuranGrup(b.grup_id) : null;
+      const bkuKey = targetBku ? targetBku.id : (b.bku_id || 0);
+      const metode = b.metode === 'transfer' ? 'transfer' : 'tunai';
+      const key = (b.grup_id || 0) + '|' + String(b.tanggal).slice(0, 10) + '|' + bkuKey + '|' + metode;
       if (!map.has(key)) {
-        const g = grupMap.get(Number(b.grup_id)) || null;
         map.set(key, {
           key, grup_id: b.grup_id, grup_nama: b.grup_nama || '-', grup: g,
-          target_bku: b.grup_id ? dbm.bkuForIuranGrup(b.grup_id) : null,
+          target_bku: targetBku, metode,
           coa_id: g && g.coa_id ? g.coa_id : null,
-          tanggal: String(b.tanggal).slice(0, 10), bku_id: b.bku_id, bku_nama: b.bku_nama || '-', n: 0, total: 0, rows: []
+          tanggal: String(b.tanggal).slice(0, 10), bku_id: targetBku ? targetBku.id : b.bku_id,
+          bku_nama: targetBku ? targetBku.nama : (b.bku_nama || '-'),
+          n: 0, total: 0, rows: []
         });
       }
       const q = map.get(key);
-      q.n++; q.total += Number(b.dibayar || 0); q.rows.push(b);
+      q.total += Number(b.dibayar || 0); q.rows.push(b);
+    }
+    for (const q of map.values()) {
+      q.n = new Set(q.rows.map(r => Number(r.siswa_id)
+        || (Number(r.tagihan_id) ? `tagihan:${r.tagihan_id}` : `payment:${r.id}`))).size;
     }
     return Array.from(map.values()).sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
   }
@@ -2525,7 +2534,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       ${queue.some(q => q.period_closed) ? `<div class="mt-1"><b>Perhatian:</b> ${queue.filter(q => q.period_closed).length} kelompok berada pada periode yang sudah ditutup. Saat diposting, periode akan dibuka otomatis dan harus ditutup ulang setelah koreksi.${!canReopenClosed ? ' Anda tidak memiliki hak Buka Kembali; minta administrator membuka periode terlebih dahulu.' : ''}</div>` : ''}</div></div>` : ''}
     <div class="card mb-3">
       <div class="card-head"><div><h3>Antrean Posting BKU</h3>
-        <div class="sub">Akumulasi penerimaan harian per grup iuran · ${filterAktif ? esc(periodeInfo) : 'seluruh periode'}</div></div></div>
+        <div class="sub">Akumulasi pembayaran siswa per grup, tanggal, BKU, dan metode · ${filterAktif ? esc(periodeInfo) : 'seluruh periode'}</div></div></div>
       ${queue.length ? `<form id="fQueueMass" method="post" action="${c.base}/iuran/antrean/posting-masal">
         <input type="hidden" name="back" value="/iuran/antrean">
         <div class="between mb-1">
@@ -2537,13 +2546,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             ${editable ? `<button class="btn btn-sm" type="button" data-open="mMassTinjau" data-mass-review="fQueueMass"
                 data-mass-target="mMassTinjau">${ui.icon('edit')}Tinjau / Edit Masal (<b data-check-count="qids" data-check-scope="#tblAntreanQueue">0</b>)</button>
             <button class="btn btn-sm btn-green" type="submit"
-              data-confirm-click="Posting ke BKU semua kelompok penerimaan yang dicentang? Setiap kelompok menjadi satu transaksi BKU.">
+              data-confirm-click="Posting ke BKU kelompok yang dicentang? Setiap grup, tanggal, BKU, dan metode menjadi satu transaksi kolektif.">
               ${ui.icon('check')}Posting BKU Masal (<b data-check-count="qids" data-check-scope="#tblAntreanQueue">0</b>)</button>` : ''}
           </div></div>
       </form>
       <div class="table-scroll tall"><table id="tblAntreanQueue"><thead><tr>
         <th style="width:34px"><input type="checkbox" data-check-all-box="qids" data-check-scope="#tblAntreanQueue" title="Pilih semua"></th>
-        <th>Tanggal</th><th>Grup Iuran</th><th>Keterangan</th><th class="num">Transaksi</th><th class="num">Total Diterima</th><th class="right">Aksi</th>
+        <th>Tanggal</th><th>Grup Iuran</th><th>Keterangan</th><th class="num">Siswa</th><th class="num">Total Diterima</th><th class="right">Aksi</th>
       </tr></thead><tbody>
       ${queue.map((q, i) => `<tr>
         <td><input type="checkbox" form="fQueueMass" name="ids" data-check-item="qids"
@@ -2559,8 +2568,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
           <div class="toolbar" style="justify-content:flex-end;gap:6px;flex-wrap:wrap">
             <button class="btn btn-sm" data-open="mQ${i}">${ui.icon('edit')}Tinjau / Edit</button>
             ${editable ? `<form method="post" action="${c.base}/iuran/antrean/posting" style="display:inline"
-              data-confirm="Posting ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?${q.period_closed ? ' Periode yang sudah ditutup akan dibuka otomatis dan harus ditutup ulang setelah posting.' : ''}">
-              <input type="hidden" name="bku_id" value="${q.bku_id || ''}">
+              data-confirm="Posting kolektif ${q.n} siswa pada ${esc(q.grup_nama)} tanggal ${tglID(q.tanggal)} sebesar ${rupiah(q.total)} ke ${esc(q.bku_nama)}?${q.period_closed ? ' Periode yang sudah ditutup akan dibuka otomatis dan harus ditutup ulang setelah posting.' : ''}">
+              <input type="hidden" name="bku_id" value="${q.bku_id || bkuDefault}">
               <input type="hidden" name="coa_id" value="${q.coa_id || coaDefId}">
               <button class="btn btn-sm btn-green" name="ids" value="${q.rows.map(r => r.id).join(',')}"
                 ${q.period_closed && !canReopenClosed ? 'disabled title="Perlu hak Buka Kembali periode"' : ''}>${ui.icon('check')}Posting ke BKU</button></form>` : ''}
@@ -2570,7 +2579,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         title: 'Tinjau Penerimaan — ' + q.grup_nama, wide: true,
         body: `<form method="post" action="${c.base}/iuran/antrean/posting" id="fq${i}">
           <input type="hidden" name="ids" value="${q.rows.map(r => r.id).join(',')}">
-          <div class="alert info">${ui.icon('info')}<div>Tinjau penerimaan lalu tentukan <b>Kode Akun</b> yang dipakai saat posting. Default: <b>${esc((coaDef || {}).kode || '4.1.07')} · ${esc((coaDef || {}).nama || 'Penerimaan Kegiatan Siswa')}</b> — bisa diubah per posting.
+          <div class="alert info">${ui.icon('info')}<div>${q.n} siswa membayar pada tanggal ini. Pembayaran pending dengan grup, BKU, dan metode yang sama akan dibukukan sebagai <b>satu transaksi kolektif</b>. Tinjau penerimaan lalu tentukan <b>Kode Akun</b> yang dipakai saat posting. Default: <b>${esc((coaDef || {}).kode || '4.1.07')} · ${esc((coaDef || {}).nama || 'Penerimaan Kegiatan Siswa')}</b> — bisa diubah per posting.
             ${!q.target_bku || dbm.bkuIncomeEnabled(q.target_bku.id) ? 'Gunakan Non-BKU bila penerimaan ini hanya ingin dicatat sebagai data.' : 'Grup ini terhubung ke BKU yang menonaktifkan pemasukan transaksi; penerimaan harus diposting ke BKU.'}
             ${q.period_closed ? ' Periode tersebut akan dibuka otomatis saat diposting; tutup kembali setelah seluruh koreksi selesai.' : ''}</div></div>
           <div class="row2">
@@ -2590,7 +2599,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         footer: `<button class="btn" data-close="mQ${i}">Tutup</button>${editable ? `${!q.target_bku || dbm.bkuIncomeEnabled(q.target_bku.id) ? `<button class="btn" form="fq${i}" formaction="${c.base}/iuran/antrean/nonbku" formmethod="post">${ui.icon('save')}Hanya Simpan Data (Non-BKU)</button>` : ''}
           <button class="btn btn-green" form="fq${i}"
             ${q.period_closed && !canReopenClosed ? 'disabled title="Perlu hak Buka Kembali periode"' : ''}
-            ${q.period_closed ? `data-confirm-click="Periode BKU ${esc(dbm.periodeLabel(q.tanggal.slice(0, 7)))} akan dibuka otomatis. Posting transaksi sekarang?"` : ''}>${ui.icon('check')}Posting ke BKU</button>` : ''}`
+            ${q.period_closed ? `data-confirm-click="Periode BKU ${esc(dbm.periodeLabel(q.tanggal.slice(0, 7)))} akan dibuka otomatis. Posting transaksi kolektif sekarang?"` : ''}>${ui.icon('check')}Posting ke BKU</button>` : ''}`
       })}`).join('')}
       </tbody></table></div>` : ui.emptyState('Antrean posting BKU kosong', pendingNonBkuRows.length
         ? 'Tidak ada pembayaran yang menunggu posting BKU; antrean proses Non-BKU ditampilkan terpisah di atas.'
@@ -2617,7 +2626,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             ${editable ? `<button class="btn btn-sm" type="button" data-open="mMassTinjau" data-mass-review="fPilih"
                 data-mass-target="mMassTinjau">${ui.icon('edit')}Tinjau / Edit Masal (<b data-check-count="ids" data-check-scope="#tblAntreanPending">0</b>)</button>
             <button class="btn btn-sm btn-green" type="submit"
-              data-confirm-click="Posting ke BKU semua penerimaan yang dicentang? Satu kelompok (grup + tanggal) menjadi satu transaksi BKU.">
+              data-confirm-click="Posting ke BKU semua penerimaan yang dicentang? Pembayaran pada grup, tanggal, BKU, dan metode yang sama menjadi satu transaksi kolektif.">
               ${ui.icon('check')}Posting ke BKU (<b data-check-count="ids" data-check-scope="#tblAntreanPending">0</b>)</button>
             ${c.can('iuran', 'delete') ? `<button class="btn btn-sm btn-danger" type="submit" formaction="${c.base}/iuran/bayar/hapus-masal"
               data-confirm-click="Hapus semua penerimaan yang dicentang? Data hilang dari riwayat siswa dan transaksi BKU terkait (bila ada) ikut dihapus.">
@@ -2638,10 +2647,10 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
             <div class="toolbar" style="justify-content:flex-end;gap:6px">
               ${editable ? `<button class="btn btn-sm" data-open="mE${b.id}">${ui.icon('edit')}Tinjau / Edit</button>
               <form method="post" action="${c.base}/iuran/antrean/posting" style="display:inline"
-                data-confirm="Posting penerimaan ${esc(b.siswa_nama)} (${rupiah(b.dibayar)}) ke ${esc(b.bku_nama || 'BKU sasaran')}?">
-                <input type="hidden" name="bku_id" value="${b.bku_id || ''}">
+                data-confirm="Posting kolektif semua pembayaran tertunda untuk ${esc(b.grup_nama || 'grup iuran')} tanggal ${tglID(b.tanggal)} dengan metode ${b.metode === 'transfer' ? 'transfer' : 'tunai'} ke BKU sasaran?">
+                <input type="hidden" name="bku_id" value="${b.bku_id || bkuDefault}">
                 <input type="hidden" name="coa_id" value="${coaFor(b, coaDefId, groupCoaMap)}">
-                <button class="btn btn-sm btn-green" name="ids" value="${b.id}">${ui.icon('check')}Posting</button></form>` : ''}
+                <button class="btn btn-sm btn-green" name="ids" value="${b.id}">${ui.icon('check')}Posting Kolektif</button></form>` : ''}
             </div></td></tr>
           ${late('mE' + b.id, editModal(b))}`).join('')}
       </tbody></table></div>` : ui.emptyState('Tidak ada penerimaan tertunda', filterAktif ? `Tidak ada penerimaan belum terposting pada ${periodeInfo}.` : '')}
@@ -2706,7 +2715,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       body: `<form method="post" action="${c.base}/iuran/antrean/posting-masal" id="fMassTinjau">
         <input type="hidden" name="back" value="/iuran/antrean">
         <div class="alert info">${ui.icon('info')}<div>Semua penerimaan yang dicentang akan <b>diposting ke BKU</b> memakai BKU &amp; kode akun di bawah.
-          Setiap kelompok (grup + tanggal) tetap menjadi <b>satu transaksi</b> tersendiri.
+        Setiap kelompok (grup + tanggal + BKU + metode) menjadi <b>satu transaksi kolektif</b>.
           Gunakan tombol <b>Hanya Simpan Data (Non-BKU)</b> bila penerimaan tidak boleh menambah kas BKU.</div></div>
         <div data-mass-ids></div>
         <div class="field"><label>Penerimaan Terpilih</label>
@@ -2864,7 +2873,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
   });
 
   /**
-   * Posting SATU kelompok penerimaan (grup + tanggal + BKU) menjadi satu transaksi BKU.
+   * Posting SATU kelompok penerimaan (grup + tanggal + BKU + metode) menjadi satu transaksi BKU.
    * Dipakai oleh posting per baris, posting masal, dan modal Tinjau/Edit masal.
    * → { ok:true, trxId, noBukti, total, bku, grup } | { ok:false, err }
    */
@@ -2872,18 +2881,45 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!rows || !rows.length) return { ok: false, err: 'Tidak ada penerimaan yang dipilih.' };
     const grupIdOf = row => row.tagihan_id
       ? Number((db.prepare('SELECT grup_id FROM iuran_tagihan WHERE id=?').get(row.tagihan_id) || {}).grup_id || 0) : 0;
+    const firstGrupId = grupIdOf(rows[0]);
+    const firstTanggal = String(rows[0].tanggal || '').slice(0, 10);
+    const firstMetode = rows[0].metode === 'transfer' ? 'transfer' : 'tunai';
+    const firstTarget = firstGrupId ? dbm.bkuForIuranGrup(firstGrupId) : null;
+    const sameStoredBku = rows.every(r => Number(r.bku_id || 0) === Number(rows[0].bku_id || 0));
+    if (firstGrupId && (firstTarget || sameStoredBku) && rows.every(r => grupIdOf(r) === firstGrupId
+      && String(r.tanggal || '').slice(0, 10) === firstTanggal
+      && (r.metode === 'transfer' ? 'transfer' : 'tunai') === firstMetode)) {
+      const args = [firstTanggal, firstGrupId, firstMetode];
+      let sql = `SELECT b.* FROM iuran_bayar b
+        JOIN iuran_tagihan t ON t.id=b.tagihan_id
+        WHERE b.status='pending' AND substr(COALESCE(b.tanggal,''),1,10)=?
+          AND t.grup_id=? AND CASE WHEN b.metode='transfer' THEN 'transfer' ELSE 'tunai' END=?`;
+      if (!firstTarget) {
+        sql += ' AND COALESCE(b.bku_id,0)=?';
+        args.push(Number(rows[0].bku_id || 0));
+      }
+      const batchRows = db.prepare(sql).all(...args);
+      if (!batchRows.length) return { ok: false, err: 'Pembayaran kolektif ini sudah diproses atau tidak lagi menunggu posting.' };
+      rows = batchRows;
+    }
     const grupIds = [...new Set(rows.map(grupIdOf))];
     if (grupIds.length > 1) return { ok: false, err: 'Posting harus dipisah per grup iuran.' };
     const tanggalRows = [...new Set(rows.map(r => String(r.tanggal || '').slice(0, 10)))];
     if (tanggalRows.length > 1) return { ok: false, err: 'Posting harus dipisah per tanggal pembayaran.' };
+    const metodeRows = [...new Set(rows.map(r => r.metode === 'transfer' ? 'transfer' : 'tunai'))];
+    if (metodeRows.length > 1) return { ok: false, err: 'Posting harus dipisah per metode pembayaran.' };
     const grupId = grupIds[0] || null;
     const grup = grupId ? db.prepare('SELECT * FROM iuran_grup WHERE id=?').get(grupId) : null;
     const bkuTerkonfigurasi = grupId ? dbm.bkuForIuranGrup(grupId) : null;
     const bkuId = Number((bkuTerkonfigurasi && bkuTerkonfigurasi.id) || opts.bkuId || rows[0].bku_id || 0);
+    if (!bkuTerkonfigurasi && !opts.bkuId
+      && [...new Set(rows.map(r => Number(r.bku_id || 0)))].length > 1) {
+      return { ok: false, err: 'Posting harus dipisah per BKU sasaran.' };
+    }
     let bku = db.prepare('SELECT * FROM bku WHERE id=?').get(bkuId);
     if (!bku) return { ok: false, err: 'BKU sasaran tidak ditemukan.' };
     if (bku.status !== 'aktif') return { ok: false, err: `BKU ${bku.nama} sudah ditutup.` };
-    const tanggal = rows[0].tanggal;
+    const tanggal = String(rows[0].tanggal || '').slice(0, 10);
     /* tahun pelajaran mengikuti TANGGAL penerimaan: bila tanggal berada pada tahun
        pelajaran lain, BKU sasaran dipindahkan ke BKU ber-nama sama di tahun tersebut */
     const taRes = dbm.resolveBkuTanggal(bku, tanggal, opts.taSesiId);
@@ -2902,12 +2938,24 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const coa = coaById(Number(opts.coaId || 0)) || coaIuran(grupId ? (db.prepare('SELECT coa_id FROM iuran_grup WHERE id=?').get(grupId) || {}).coa_id : null);
     if (!coa) return { ok: false, err: 'Kode rekening penerimaan tidak ditemukan.' };
     if (coa.kategori !== 'pendapatan') return { ok: false, err: 'Kode rekening yang dipilih bukan kelompok pendapatan/penerimaan.' };
+    const siswaCount = new Set(rows.map(r => Number(r.siswa_id)
+      || (Number(r.tagihan_id) ? `tagihan:${r.tagihan_id}` : `payment:${r.id}`))).size;
     const ym = String(tanggal).slice(0, 7).replace('-', '');
-    const seq = db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bku.id).c + 1;
-    const noBukti = `${bku.kode || 'BKU'}/IUR/${ym}/${String(seq).padStart(3, '0')}`;
-    const uraian = `${grup ? grup.nama : 'Iuran Siswa'} — ${rows.length} siswa (${tglID(tanggal)})`;
+    const sameDayTransactions = grupId ? db.prepare(`SELECT DISTINCT tr.* FROM transaksi tr
+      JOIN iuran_bayar ib ON ib.transaksi_id=tr.id
+      JOIN iuran_tagihan it ON it.id=ib.tagihan_id
+      WHERE ib.status='posted' AND it.grup_id=? AND substr(COALESCE(ib.tanggal,''),1,10)=?
+        AND tr.tanggal=? AND tr.bku_id=? AND tr.coa_id=? AND tr.metode=? AND tr.status='posted'
+      ORDER BY tr.id`).all(grupId, tanggal, tanggal, bku.id, coa.id, rows[0].metode === 'transfer' ? 'transfer' : 'tunai') : [];
+    if (sameDayTransactions.length > 1) {
+      return { ok: false, err: 'Sudah ada beberapa transaksi BKU untuk grup dan tanggal ini. Periksa riwayat sebelum memposting pembayaran baru.' };
+    }
+    const existingTrx = sameDayTransactions[0] || null;
+    const seq = existingTrx ? 0 : db.prepare('SELECT COUNT(*) c FROM transaksi WHERE bku_id=?').get(bku.id).c + 1;
+    const noBukti = existingTrx ? existingTrx.no_bukti
+      : `${bku.kode || 'BKU'}/IUR/${ym}/${String(seq).padStart(3, '0')}`;
     let adjustmentRemoved = 0;
-    const trxId = db.transaction(() => {
+    const trxResult = db.transaction(() => {
       if (lockedPeriod) {
         adjustmentRemoved = dbm.removePeriodAdjustment(
           bku.id, lockedPeriod.periode, opts.user,
@@ -2915,14 +2963,26 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         );
         db.prepare("UPDATE bku_periode SET status='dibuka' WHERE id=? AND status='ditutup'").run(lockedPeriod.id);
       }
-      const ins = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
-        VALUES (?,?,'pemasukan',?,?,?,?,?,?,'posted',?,?)`);
-      const r = ins.run(bku.id, tanggal, rows[0].metode === 'transfer' ? 'transfer' : 'tunai', noBukti, coa.id, total,
-        uraian, `${rows.length} siswa`, (opts.user && opts.user.id) || null, nowStamp());
-      const id = Number(r.lastInsertRowid);
+      let id = existingTrx ? Number(existingTrx.id) : 0;
+      if (!id) {
+        const ins = db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,no_bukti,coa_id,nominal,uraian,nama_pihak,status,created_by,created_at)
+          VALUES (?,?,'pemasukan',?,?,?,?,?,?,'posted',?,?)`);
+        const r = ins.run(bku.id, tanggal, rows[0].metode === 'transfer' ? 'transfer' : 'tunai', noBukti, coa.id, total,
+          '', '', (opts.user && opts.user.id) || null, nowStamp());
+        id = Number(r.lastInsertRowid);
+      }
       const upd = db.prepare("UPDATE iuran_bayar SET status='posted',transaksi_id=?,bku_id=?,posted_at=? WHERE id=?");
       for (const b of rows) upd.run(id, bku.id, nowStamp(), b.id);
-      return id;
+      const summary = db.prepare(`SELECT COUNT(*) payment_count, COALESCE(SUM(b.dibayar),0) total,
+          COUNT(DISTINCT COALESCE(b.siswa_id,t.siswa_id)) student_count
+        FROM iuran_bayar b LEFT JOIN iuran_tagihan t ON t.id=b.tagihan_id
+        WHERE b.transaksi_id=? AND b.status='posted'`).get(id);
+      const studentCount = Number(summary.student_count || summary.payment_count || 0);
+      const uraian = `${grup ? grup.nama : 'Iuran Siswa'} — ${studentCount} siswa (${tglID(tanggal)})`;
+      db.prepare('UPDATE transaksi SET nominal=?,uraian=?,nama_pihak=? WHERE id=?')
+        .run(summary.total, uraian, `${studentCount} siswa`, id);
+      return { id, paymentCount: Number(summary.payment_count || 0),
+        studentCount, transactionTotal: Number(summary.total || 0) };
     })();
     if (lockedPeriod) {
       dbm.logAudit(opts.user, 'BUKA BULAN', 'tutup_bulanan',
@@ -2931,7 +2991,9 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
         '; periode harus ditutup ulang setelah koreksi');
     }
     if (grup) db.prepare('UPDATE iuran_grup SET coa_id=? WHERE id=?').run(coa.id, grup.id);
-    return { ok: true, trxId, noBukti, total, bku, grup, coa, n: rows.length, catatanTa,
+    return { ok: true, trxId: trxResult.id, noBukti, total, transactionTotal: trxResult.transactionTotal,
+      bku, grup, coa, n: rows.length, siswaCount: trxResult.studentCount, paymentCount: trxResult.paymentCount,
+      reused: !!existingTrx, catatanTa,
       reopenedPeriod: lockedPeriod ? lockedPeriod.periode : '', adjustmentRemoved };
   }
 
@@ -2944,8 +3006,8 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Semua penerimaan sudah terposting.'));
     const hasil = postQueueRows(rows, { bkuId: Number(req.body.bku_id || 0), coaId: Number(req.body.coa_id || 0), user: req.user, taSesiId: req.taId });
     if (!hasil.ok) return res.redirect(back + '?err=' + encodeURIComponent(hasil.err));
-    dbm.logAudit(req.user, 'POSTING IURAN', 'iuran', `${hasil.n} penerimaan ${hasil.grup ? hasil.grup.nama : ''} ${rupiah(hasil.total)} → ${hasil.bku.nama} (${hasil.noBukti}) · kode ${hasil.coa.kode} ${hasil.coa.nama}`);
-    res.redirect(back + '?ok=' + encodeURIComponent(`Posting berhasil: ${rupiah(hasil.total)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).`
+    dbm.logAudit(req.user, 'POSTING IURAN', 'iuran', `${hasil.siswaCount} siswa (${hasil.paymentCount} pembayaran dalam transaksi) ${hasil.grup ? hasil.grup.nama : ''} ${rupiah(hasil.transactionTotal)} → ${hasil.bku.nama} (${hasil.noBukti}) · kode ${hasil.coa.kode} ${hasil.coa.nama}`);
+    res.redirect(back + '?ok=' + encodeURIComponent(`Transaksi harian kolektif ${hasil.reused ? 'diperbarui' : 'dibuat'}: ${hasil.siswaCount} siswa, total ${rupiah(hasil.transactionTotal)} masuk ke ${hasil.bku.nama} (${hasil.noBukti}).`
       + (hasil.reopenedPeriod ? ` Periode ${dbm.periodeLabel(hasil.reopenedPeriod)} dibuka otomatis; tutup kembali setelah koreksi selesai.` : '')
       + (hasil.adjustmentRemoved ? ` ${hasil.adjustmentRemoved} penyesuaian opnam diarsipkan ke Kotak Sampah.` : '')
       + (hasil.catatanTa || '')));
@@ -2953,7 +3015,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
 
   /**
    * POSTING BKU MASAL — banyak kelompok penerimaan sekaligus.
-   * Setiap kelompok (grup + tanggal) tetap menjadi SATU transaksi BKU tersendiri.
+   * Setiap kelompok (grup + tanggal + BKU + metode) menjadi SATU transaksi BKU.
    */
   post('/iuran/antrean/posting-masal', (req, res) => {
     guard(req, res, 'iuran', 'edit');
@@ -2963,14 +3025,17 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
     const rows = db.prepare(`SELECT * FROM iuran_bayar WHERE id IN (${ids.map(() => '?').join(',')}) AND status='pending'`).all(...ids);
     if (!rows.length) return res.redirect(back + '?err=' + encodeURIComponent('Semua penerimaan sudah terposting.'));
     const grupMap = new Map();
+    const bkuPilih = Number(req.body.bku_id || 0);
+    const coaPilih = Number(req.body.coa_id || 0);
     for (const r of rows) {
       const gid = r.tagihan_id ? (db.prepare('SELECT grup_id FROM iuran_tagihan WHERE id=?').get(r.tagihan_id) || {}).grup_id : null;
-      const key = `${gid || 0}|${String(r.tanggal).slice(0, 10)}|${r.bku_id || 0}`;
+      const target = gid ? dbm.bkuForIuranGrup(gid) : null;
+      const bkuKey = (target && target.id) || bkuPilih || r.bku_id || 0;
+      const metode = r.metode === 'transfer' ? 'transfer' : 'tunai';
+      const key = `${gid || 0}|${String(r.tanggal).slice(0, 10)}|${bkuKey}|${metode}`;
       if (!grupMap.has(key)) grupMap.set(key, []);
       grupMap.get(key).push(r);
     }
-    const bkuPilih = Number(req.body.bku_id || 0);
-    const coaPilih = Number(req.body.coa_id || 0);
     let berhasil = 0, total = 0, reopened = 0, adjustmentsRemoved = 0;
     const gagal = [];
     for (const group of grupMap.values()) {
@@ -2983,7 +3048,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, flashUrl }) 
       else gagal.push(`${tglID(group[0].tanggal)} ${hasil.err}`);
     }
     dbm.logAudit(req.user, 'POSTING IURAN MASAL', 'iuran',
-      `Posting masal: ${berhasil} kelompok penerimaan (${rupiah(total)}) → BKU` + (gagal.length ? ` · gagal: ${gagal.join('; ')}` : ''));
+      `Posting masal: ${berhasil} transaksi harian kolektif (${rupiah(total)}) → BKU` + (gagal.length ? ` · gagal: ${gagal.join('; ')}` : ''));
     if (!berhasil) return res.redirect(back + '?err=' + encodeURIComponent('Posting gagal: ' + gagal.join('; ')));
     res.redirect(back + '?ok=' + encodeURIComponent(
       `Posting masal berhasil: ${berhasil} transaksi BKU dibuat, total ${rupiah(total)}.`

@@ -202,6 +202,7 @@ const countOf = (html, needle) => html.split(needle).length - 1;
   ok('rincian pending: 2 tombol (Tinjau/Edit + Posting) per baris',
     countOf(tblPending, 'Tinjau / Edit') === 6 && countOf(tblPending, 'btn btn-sm btn-green') >= 6,
     countOf(tblPending, 'Tinjau / Edit') + '/' + countOf(tblPending, 'btn btn-sm btn-green'));
+  ok('tombol per baris menjelaskan posting dilakukan secara kolektif', tblPending.includes('Posting Kolektif'));
   ok('aksi masal antrean: Tinjau/Edit Masal + Posting BKU Masal',
     r.text.includes('Tinjau / Edit Masal') && r.text.includes('Posting BKU Masal'));
   ok('aksi masal rincian: Posting ke BKU (n) tersedia', /Posting ke BKU \(<b data-check-count="ids"[^>]*>0<\/b>\)/.test(r.text));
@@ -282,17 +283,35 @@ const countOf = (html, needle) => html.split(needle).length - 1;
   r = await req('POST', '/iuran/antrean/kembali', { ids: nbRow.id, bku_id: '' });
   ok('kembalikan tanpa BKU ditolak dengan pesan', r.status === 303 && /err=/.test(r.loc), dec(r.loc).slice(0, 120));
 
-  // posting satu baris (tombol Posting pada tabel rincian)
+  // posting satu baris harus otomatis mengolektifkan grup/tanggal/metode yang sama
   const before = one("SELECT COUNT(*) c FROM transaksi WHERE uraian LIKE '%Iuran SPP Uji%'").c;
   r = await req('POST', '/iuran/antrean/posting', { ids: pendingIds[0], bku_id: bku.id, coa_id: coaIn.id });
-  ok('posting satu penerimaan → 303 ok', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 140));
+  ok('posting satu penerimaan otomatis menjadi posting kolektif → 303 ok', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 140));
   const posted = one('SELECT * FROM iuran_bayar WHERE id=?', pendingIds[0]);
   ok('penerimaan menjadi posted + punya transaksi BKU', posted.status === 'posted' && posted.transaksi_id,
     posted.status + '/' + posted.transaksi_id);
+  const postedBatch = all('SELECT * FROM iuran_bayar WHERE transaksi_id=? AND status=\'posted\'', posted.transaksi_id);
+  ok('seluruh 3 siswa pada grup/tanggal sama memakai transaksi yang sama', postedBatch.length === 3
+    && pendingIds.slice(0, 3).every(id => postedBatch.some(x => Number(x.id) === id)), 'jumlah=' + postedBatch.length);
   const after = one("SELECT COUNT(*) c FROM transaksi WHERE uraian LIKE '%Iuran SPP Uji%'").c;
   ok('satu transaksi BKU baru terbentuk', after === before + 1, `${before} → ${after}`);
   const trx = one('SELECT * FROM transaksi WHERE id=?', posted.transaksi_id);
-  ok('nominal transaksi = total penerimaan', Number(trx.nominal) === Number(posted.dibayar), trx.nominal + ' vs ' + posted.dibayar);
+  ok('nominal transaksi kolektif dan keterangan mencantumkan 3 siswa',
+    Number(trx.nominal) === postedBatch.reduce((sum, row) => sum + Number(row.dibayar), 0)
+      && trx.uraian.includes('3 siswa') && trx.nama_pihak === '3 siswa',
+    trx.nominal + ' / ' + trx.uraian + ' / ' + trx.nama_pihak);
+  const siswaTambahan = siswaIds[5];
+  const tagTambahan = one('SELECT * FROM iuran_tagihan WHERE siswa_id=? AND grup_id=?', siswaTambahan, grupId);
+  insBayar.run(tagTambahan.id, siswaTambahan, '2026-08-10', 300000, 0, 300000, 'tunai', 'Pembayaran sesudah posting awal',
+    bku.id, 'pending', 'KW-PD-EXTRA', '2026-08-10 12:00:00');
+  const pembayaranTambahan = one("SELECT * FROM iuran_bayar WHERE kwitansi_no='KW-PD-EXTRA'");
+  r = await req('POST', '/iuran/antrean/posting', { ids: pembayaranTambahan.id, bku_id: bku.id, coa_id: coaIn.id });
+  const transaksiPerHari = one('SELECT * FROM transaksi WHERE id=?', posted.transaksi_id);
+  const postedBatchAfter = all('SELECT * FROM iuran_bayar WHERE transaksi_id=? AND status=\'posted\'', posted.transaksi_id);
+  ok('pembayaran berikutnya di hari yang sama digabung ke transaksi harian yang sudah ada',
+    r.status === 303 && /ok=/.test(r.loc) && transaksiPerHari.uraian.includes('4 siswa')
+      && Number(transaksiPerHari.nominal) === 1200000 && postedBatchAfter.length === 4,
+    `${postedBatchAfter.length} pembayaran / ${transaksiPerHari.nominal} / ${transaksiPerHari.uraian}`);
 
   // kelompok yang sudah diposting hilang dari antrean
   r = await req('GET', '/iuran/antrean');
@@ -301,7 +320,8 @@ const countOf = (html, needle) => html.split(needle).length - 1;
     && /Kembalikan ke Antrean/.test(cut(r.text, '<table id="tblAntreanPosted"', '</table>')));
   r = await req('POST', '/iuran/antrean/edit', { id: posted.id, jumlah: '320000', potongan: '0' });
   ok('edit nominal penerimaan BKU berhasil', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 100));
-  ok('nominal transaksi BKU disinkronkan setelah edit', Number(one('SELECT nominal FROM transaksi WHERE id=?', posted.transaksi_id).nominal) === 320000);
+  ok('nominal transaksi kolektif disinkronkan setelah edit',
+    Number(one('SELECT nominal FROM transaksi WHERE id=?', posted.transaksi_id).nominal) === 1220000);
   r = await req('POST', '/iuran/antrean/kembali', { ids: posted.id });
   ok('penerimaan BKU dapat dikembalikan ke antrean', r.status === 303 && /ok=/.test(r.loc), dec(r.loc).slice(0, 120));
   ok('pembayaran kembali pending dan transaksi BKU dihapus',
