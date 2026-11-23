@@ -251,12 +251,52 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('Arus kas: filter bulan + target BKU', /Rincian/.test(r.text) && /Target BKU/.test(r.text));
   r = await req('GET', `/laporan?r=pembantu&p=tunai&ta=${ta.id}&bulan=${bulan}`);
   ok('Buku pembantu: filter bulan + multi BKU', /Rincian/.test(r.text) && /multi-pilih/.test(r.text));
+  const coaPpn = db.prepare("SELECT id FROM coa WHERE kode='2.1.01'").get();
+  const coaModal = db.prepare("SELECT id FROM coa WHERE kode='5.2.02'").get();
+  if (coaPpn) {
+    db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,coa_id,nominal,uraian,status,created_at)
+      VALUES (?,?,?,?,?,?,?,'posted',?)`).run(bku.id, today, 'pemasukan', 'tunai', coaPpn.id, 1021711, 'Terima PPN Uji', today);
+    db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,coa_id,nominal,uraian,status,created_at)
+      VALUES (?,?,?,?,?,?,?,'posted',?)`).run(bku.id, today, 'pengeluaran', 'tunai', coaPpn.id, 1021711, 'Setor PPN Uji', today);
+  }
+  if (coaModal) {
+    db.prepare(`INSERT INTO transaksi (bku_id,tanggal,jenis,metode,coa_id,nominal,uraian,status,created_at)
+      VALUES (?,?,?,?,?,?,?,'posted',?)`).run(bku.id, today, 'pengeluaran', 'transfer', coaModal.id, 300000, 'Net volley Uji', today);
+  }
+  r = await req('GET', `/laporan?r=pembantu&p=pajak&ta=${ta.id}&bulan=${bulan}`);
+  ok('Buku Pembantu Pajak: kolom debit per jenis dan kredit', /PENERIMAAN \/ DEBIT/.test(r.text)
+    && /PPh 21/.test(r.text) && /PPh 23/.test(r.text) && /PPh 4/.test(r.text)
+    && /PENGELUARAN \/ KREDIT/.test(r.text) && /Terima PPN Uji/.test(r.text) && /Setor PPN Uji/.test(r.text));
+  r = await req('GET', `/laporan?r=pembantu&p=bhp&ta=${ta.id}&bulan=${bulan}`);
+  ok('Rekap BHP: uraian, jumlah barang, harga satuan, realisasi saja',
+    /Jumlah Barang/.test(r.text) && /Harga Satuan/.test(r.text) && /Realisasi/.test(r.text)
+      && !/<th[^>]*>Masuk<\/th>/.test(r.text) && !/<th[^>]*>Keluar<\/th>/.test(r.text));
+  r = await req('GET', `/laporan?r=pembantu&p=modal&ta=${ta.id}&bulan=${bulan}`);
+  ok('Rekap barang modal memakai format barang yang sama',
+    /Jumlah Barang/.test(r.text) && /Harga Satuan/.test(r.text) && /Realisasi/.test(r.text));
+  r = await req('GET', `/laporan?r=pembantu&p=tunai&ta=${ta.id}&from=${today}&to=${today}`);
+  ok('Buku pembantu tunai: saldo awal berada di kolom Masuk',
+    /<b>SALDO AWAL<\/b><\/td><td class="num"><b>[^<]+<\/b><\/td><td><\/td><td><\/td>/.test(r.text));
+  r = await req('GET', `/laporan?r=bku&ta=${ta.id}&bku=${bku.id}&from=${today}&to=${today}`);
+  ok('Laporan BKU: saldo awal berada di kolom penerimaan',
+    /Saldo awal[^<]*<\/td><td class="num t-strong">[^<]+<\/td><td><\/td><td><\/td>/.test(r.text));
   r = await req('GET', `/cetak/bku?ta=${ta.id}&bulan=${bulan}&orient=portrait`, null, { binary: true });
   ok('cetak BKU per bulan 200', r.status === 200 && /Rincian Bulan/.test(r.buf.toString()));
   r = await req('GET', `/export/pembantu?p=tunai&ta=${ta.id}&bulan=${bulan}`, null, { binary: true });
   ok('export buku pembantu per bulan xlsx', r.status === 200 && r.buf.slice(0, 2).toString() === 'PK');
   r = await req('GET', `/cetak/pembantu?p=tunai&ta=${ta.id}&bulan=${bulan}&bku=${bku.id}`, null, { binary: true });
   ok('cetak buku pembantu target BKU', r.status === 200 && /Target BKU/.test(r.buf.toString()));
+  r = await req('GET', `/cetak/pembantu?p=pajak&ta=${ta.id}&bulan=${bulan}`, null, { binary: true });
+  ok('cetak pajak memakai kolom debit jenis pajak', /PENERIMAAN \/ DEBIT/.test(r.buf.toString()) && /PPh 21/.test(r.buf.toString()));
+  r = await req('GET', `/export/pembantu?p=bhp&ta=${ta.id}&bulan=${bulan}`, null, { binary: true });
+  const bhpSheet = X.readXlsx(r.buf)[0];
+  ok('export BHP memakai kolom jumlah/harga/realisasi',
+    bhpSheet.rows.some(row => (row || []).some(c => /Jumlah Barang/.test(X.cellText(c))))
+      && bhpSheet.rows.some(row => (row || []).some(c => /Realisasi/.test(X.cellText(c)))));
+  r = await req('GET', `/export/pembantu?p=pajak&ta=${ta.id}&bulan=${bulan}`, null, { binary: true });
+  const pajakSheet = X.readXlsx(r.buf)[0];
+  ok('export pajak memakai kolom PPN dan PPh', pajakSheet.rows.some(row => (row || []).some(c => /PPh 21/.test(X.cellText(c))))
+    && pajakSheet.rows.some(row => (row || []).some(c => /SSPD/.test(X.cellText(c)))));
   r = await req('GET', `/cetak/lra?ta=${ta.id}&bulan=${bulan}`, null, { binary: true });
   ok('cetak LRA per bulan memuat rincian', /RINCIAN TRANSAKSI BELANJA/.test(r.buf.toString()));
   r = await req('GET', `/cetak/aruskas?ta=${ta.id}&bulan=${bulan}&bku=`, null, { binary: true });

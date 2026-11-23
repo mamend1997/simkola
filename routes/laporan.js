@@ -217,6 +217,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     { key: 'bhp', label: 'Rekap Barang Habis Pakai (BHP)', desc: 'Belanja kode rekening 5.2.01', where: "co.kode='5.2.01'" },
     { key: 'modal', label: 'Rekap Barang Modal', desc: 'Belanja kode rekening 5.2.02', where: "co.kode='5.2.02'" }
   ];
+  function pajakKolom(t) {
+    const text = `${t.coa_kode || ''} ${t.coa_nama || ''} ${t.uraian || ''}`.toLowerCase();
+    if (/\bppn\b/.test(text)) return 'ppn';
+    if (/pph\s*(?:pasal\s*)?21\b/.test(text)) return 'pph21';
+    if (/pph\s*(?:pasal\s*)?(?:22|23)\b/.test(text) || /22\s*\/\s*23/.test(text)) return 'pph23';
+    if (/pph\s*(?:pasal\s*)?4\b/.test(text) || /ayat\s*\(?2\)?/.test(text)) return 'pph4';
+    if (/sspd|setor(?:an)?\s+pajak|penyetoran\s+pajak/.test(text) || /^2\.1\.04\b/.test(text.trim())) return 'sspd';
+    return 'sspd';
+  }
+  function pembantuJenisBarang(key) {
+    return key === 'bhp' || key === 'modal';
+  }
   /** mutasi Bank & Cash (modul mutasi_kas) yang memengaruhi saldo kas bank / tunai */
   function mutasiKasRows(arah, from, to, taId) {
     // arah: 'bank' | 'tunai'
@@ -249,7 +261,11 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     if (from) { sql += ' AND t.tanggal>=?'; args.push(from); }
     if (to) { sql += ' AND t.tanggal<=?'; args.push(to); }
     sql += ' ORDER BY t.tanggal, t.id';
-    let rows = db.prepare(sql).all(...args).map(t => ({ ...t, seq: Number(t.id) || 0 }));
+    let rows = db.prepare(sql).all(...args).map(t => ({
+      ...t, seq: Number(t.id) || 0,
+      pajakKolom: cfg.key === 'pajak' ? pajakKolom(t) : '',
+      jumlahBarang: pembantuJenisBarang(cfg.key) ? 1 : 0
+    }));
     // rekapan otomatis Mutasi Bank & Cash pada Buku Pembantu Bank / Tunai
     if (cfg.key === 'bank' || cfg.key === 'tunai') {
       rows = rows.concat(mutasiKasRows(cfg.key, from, to, taId));
@@ -284,6 +300,101 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       cfg, rows: list, opening, closing: run,
       totalIn: list.filter(r => r.jenis === 'pemasukan').reduce((a, r) => a + r.nominal, 0),
       totalOut: list.filter(r => r.jenis === 'pengeluaran').reduce((a, r) => a + r.nominal, 0)
+    };
+  }
+  function pembantuTableHtml(pb, { print = false } = {}) {
+    const money = print ? num : rupiah;
+    if (pb.cfg.key === 'pajak') {
+      const keys = ['ppn', 'pph21', 'pph23', 'pph4', 'sspd'];
+      const labels = ['PPN', 'PPh 21', 'PPh 23', 'PPh 4', 'SSPD'];
+      const cells = t => keys.map(k => `<td class="num">${t.jenis === 'pemasukan' && t.pajakKolom === k ? money(t.nominal) : ''}</td>`).join('');
+      const debitTotals = Object.fromEntries(keys.map(k => [k, pb.rows.reduce((s, t) =>
+        s + (t.jenis === 'pemasukan' && t.pajakKolom === k ? Number(t.nominal || 0) : 0), 0)]));
+      const openRow = pb.opening
+        ? `<tr><td></td><td></td><td><b>Saldo Awal</b></td>${keys.map(() => '<td></td>').join('')}<td></td><td class="num"><b>${money(pb.opening)}</b></td></tr>`
+        : '';
+      return `<table class="${print ? 'doc-tbl' : ''}">
+        <thead><tr><th rowspan="2">Tanggal</th><th rowspan="2">No. Kode</th><th rowspan="2">Uraian</th>
+          <th colspan="5">PENERIMAAN / DEBIT</th><th rowspan="2">PENGELUARAN / KREDIT</th><th rowspan="2">SALDO</th></tr>
+          <tr>${labels.map(l => `<th>${l}</th>`).join('')}</tr></thead>
+        <tbody>${openRow}
+          ${pb.rows.map(t => `<tr><td class="${print ? 'center' : 'nowrap'}">${tglID(t.tanggal)}</td><td>${esc(t.coa_kode || '-')}</td>
+            <td>${esc(t.uraian || '')}</td>${cells(t)}
+            <td class="num">${t.jenis === 'pengeluaran' ? money(t.nominal) : ''}</td><td class="num">${money(t.saldo)}</td></tr>`).join('')}
+        </tbody><tfoot><tr><td colspan="3" class="${print ? 'center' : ''}">JUMLAH</td>
+          ${keys.map(k => `<td class="num">${money(debitTotals[k])}</td>`).join('')}
+          <td class="num">${money(pb.totalOut)}</td><td class="num">${money(pb.closing)}</td></tr></tfoot></table>`;
+    }
+    if (pembantuJenisBarang(pb.cfg.key)) {
+      const qty = pb.rows.reduce((s, t) => s + Number(t.jumlahBarang || 0), 0);
+      return `<table class="${print ? 'doc-tbl' : ''}">
+        <thead><tr><th>Uraian</th><th>Jumlah Barang</th><th>Harga Satuan</th><th>Realisasi</th></tr></thead>
+        <tbody>${pb.rows.map(t => `<tr><td>${esc(t.uraian || '')}</td><td class="num">${t.jumlahBarang}</td>
+          <td class="num">${money(t.nominal)}</td><td class="num">${money(t.nominal)}</td></tr>`).join('')}
+        </tbody><tfoot><tr><td class="${print ? 'center' : ''}">JUMLAH</td><td class="num">${qty}</td><td></td>
+          <td class="num">${money(pb.rows.reduce((s, t) => s + Number(t.nominal || 0), 0))}</td></tr></tfoot></table>
+        <p class="${print ? '' : 'help mt-2'}" style="${print ? 'font-size:10px' : ''}">Jumlah barang dihitung satu unit per transaksi karena data transaksi hanya menyimpan nominal total.</p>`;
+    }
+    return `<table class="${print ? 'doc-tbl' : ''}">
+      <thead><tr><th>No</th><th>Tanggal</th><th>No. Bukti</th><th>Buku Kas</th><th>Uraian</th><th>Masuk</th><th>Keluar</th><th>Saldo</th></tr></thead>
+      <tbody><tr><td></td><td></td><td></td><td></td><td><b>SALDO AWAL</b></td><td class="num"><b>${money(pb.opening)}</b></td><td></td><td></td></tr>
+        ${pb.rows.map(t => `<tr><td class="num">${t.no}</td><td class="${print ? 'center' : 'nowrap'}">${tglID(t.tanggal)}</td>
+          <td>${esc(t.no_bukti || '-')}</td><td>${esc(t.bku_nama || '')}</td>
+          <td>${esc(t.uraian || '')}<div class="${print ? '' : 't-sub'}">${esc((t.coa_kode || '') + ' ' + (t.coa_nama || ''))}${t.nama_pihak ? ' · ' + esc(t.nama_pihak) : ''}</div></td>
+          <td class="num">${t.jenis === 'pemasukan' ? money(t.nominal) : ''}</td>
+          <td class="num">${t.jenis === 'pengeluaran' ? money(t.nominal) : ''}</td><td class="num">${money(t.saldo)}</td></tr>`).join('')}
+      </tbody><tfoot><tr><td colspan="5" class="${print ? 'center' : ''}">JUMLAH</td>
+        <td class="num">${money(pb.totalIn)}</td><td class="num">${money(pb.totalOut)}</td><td class="num">${money(pb.closing)}</td></tr></tfoot></table>`;
+  }
+  function pembantuExcelTable(pb) {
+    if (pb.cfg.key === 'pajak') {
+      const keys = ['ppn', 'pph21', 'pph23', 'pph4', 'sspd'];
+      const totals = keys.map(k => pb.rows.reduce((s, t) =>
+        s + (t.jenis === 'pemasukan' && t.pajakKolom === k ? Number(t.nominal || 0) : 0), 0));
+      const opening = pb.opening
+        ? [['', '', 'Saldo Awal', '', '', '', '', '', '', pb.opening]]
+        : [];
+      return {
+        rows: [
+          ['', '', '', { v: 'PENERIMAAN / DEBIT', bold: true }, '', '', '', '', { v: 'PENGELUARAN / KREDIT', bold: true }, { v: 'SALDO', bold: true }],
+          [{ v: 'Tanggal', bold: true }, { v: 'No. Kode', bold: true }, { v: 'Uraian', bold: true },
+            ...['PPN', 'PPh 21', 'PPh 23', 'PPh 4', 'SSPD'].map(v => ({ v, bold: true })), '', ''],
+          ...opening,
+          ...pb.rows.map(t => [tglID(t.tanggal), t.coa_kode || '', t.uraian || '',
+            ...keys.map(k => t.jenis === 'pemasukan' && t.pajakKolom === k ? Number(t.nominal || 0) : ''),
+            t.jenis === 'pengeluaran' ? Number(t.nominal || 0) : '', Number(t.saldo || 0)]),
+          [{ v: 'JUMLAH', bold: true }, '', '', ...totals.map(v => ({ v, bold: true })),
+            { v: pb.totalOut, bold: true }, { v: pb.closing, bold: true }]
+        ],
+        widths: [14, 14, 48, 16, 16, 16, 16, 16, 20, 16]
+      };
+    }
+    if (pembantuJenisBarang(pb.cfg.key)) {
+      const totalQty = pb.rows.reduce((s, t) => s + Number(t.jumlahBarang || 0), 0);
+      const realization = pb.rows.reduce((s, t) => s + Number(t.nominal || 0), 0);
+      return {
+        rows: [
+          [{ v: 'Uraian', bold: true }, { v: 'Jumlah Barang', bold: true },
+            { v: 'Harga Satuan', bold: true }, { v: 'Realisasi', bold: true }],
+          ...pb.rows.map(t => [t.uraian || '', Number(t.jumlahBarang || 0), Number(t.nominal || 0), Number(t.nominal || 0)]),
+          [{ v: 'JUMLAH', bold: true }, { v: totalQty, bold: true }, '',
+            { v: realization, bold: true }],
+          ['Jumlah barang dihitung satu unit per transaksi karena data transaksi hanya menyimpan nominal total.']
+        ],
+        widths: [52, 16, 20, 20]
+      };
+    }
+    return {
+      rows: [
+        [{ v: 'No', bold: true }, { v: 'Tanggal', bold: true }, { v: 'No. Bukti', bold: true }, { v: 'Buku Kas', bold: true },
+          { v: 'Uraian', bold: true }, { v: 'Masuk', bold: true }, { v: 'Keluar', bold: true }, { v: 'Saldo', bold: true }],
+        ['', '', '', '', 'Saldo Awal', Number(pb.opening || 0), '', ''],
+        ...pb.rows.map(t => [t.no, tglID(t.tanggal), t.no_bukti || '', t.bku_nama || '', t.uraian || '',
+          t.jenis === 'pemasukan' ? Number(t.nominal || 0) : '',
+          t.jenis === 'pengeluaran' ? Number(t.nominal || 0) : '', Number(t.saldo || 0)]),
+        [{ v: 'JUMLAH', bold: true }, '', '', '', '', { v: pb.totalIn, bold: true }, { v: pb.totalOut, bold: true }, { v: pb.closing, bold: true }]
+      ],
+      widths: [6, 14, 18, 24, 46, 16, 16, 16]
     };
   }
 
@@ -505,7 +616,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       preview += d ? (rekap
         ? `<div class="table-wrap"><table><thead><tr><th>${mode === 'hari' ? 'Tanggal' : mode === 'bulan' ? 'Bulan' : 'Tahun Ajaran'}</th><th class="num">Jumlah Transaksi</th><th class="num">Penerimaan</th><th class="num">Pengeluaran</th><th class="num">Saldo Akhir</th></tr></thead>
           <tbody>
-            <tr style="background:#FFF8F2"><td class="t-strong">Saldo Awal</td><td></td><td></td><td></td><td class="num t-strong">${rupiah(d.opening)}</td></tr>
+            <tr style="background:#FFF8F2"><td class="t-strong">Saldo Awal</td><td></td><td class="num t-strong">${rupiah(d.opening)}</td><td></td><td></td></tr>
             ${rekap.map(g => `<tr><td class="t-strong">${esc(g.label)}</td><td class="num">${g.n}</td>
               <td class="num" style="color:var(--green)">${g.masuk ? rupiah(g.masuk) : '—'}</td>
               <td class="num" style="color:var(--red)">${g.keluar ? rupiah(g.keluar) : '—'}</td>
@@ -514,7 +625,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
           <p class="help mt-2">Mode: <b>${MODE_LABEL[mode]}</b> — ${rekap.length} kelompok data.</p>`
         : `<div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>No. Bukti</th><th>Uraian</th>${d.multi ? '<th>Buku Kas</th>' : ''}<th>Rekening</th><th class="num">Penerimaan</th><th class="num">Pengeluaran</th><th class="num">Saldo</th></tr></thead>
         <tbody>
-          <tr style="background:#FFF8F2"><td colspan="${d.multi ? 7 : 6}" class="t-strong">Saldo awal ${from ? 'per ' + tglID(from) : 'BKU'} ${d.multi ? '· gabungan ' + d.bkuList.length + ' BKU' : ''}</td><td class="num t-strong">${rupiah(d.opening)}</td></tr>
+          <tr style="background:#FFF8F2"><td colspan="${d.multi ? 5 : 4}" class="t-strong">Saldo awal ${from ? 'per ' + tglID(from) : 'BKU'} ${d.multi ? '· gabungan ' + d.bkuList.length + ' BKU' : ''}</td><td class="num t-strong">${rupiah(d.opening)}</td><td></td><td></td></tr>
           ${d.rows.map(t => `<tr><td class="nowrap">${tglID(t.tanggal)}</td><td class="mono t-sub nowrap">${esc(t.no_bukti || '')}</td>
             <td>${esc(t.uraian)}${t.nama_pihak ? `<div class="t-sub">${esc(t.nama_pihak)}</div>` : ''}</td>
             ${d.multi ? `<td class="t-sub">${esc(t.bku_nama || '-')}</td>` : ''}
@@ -626,16 +737,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
           ${from || to || pbku.length || bulanSel ? `<a class="btn" href="${c.base}/laporan?r=pembantu&p=${pKey}">Reset</a>` : ''}
         </form>
         ${bulanSel ? `<div class="alert info mb-2">${ui.icon('info')}<div>Menampilkan buku pembantu <b>Rincian ${esc(pr.label)}</b> (transaksi aktual bulan tersebut), bukan rekapan tahunan.</div></div>` : ''}
-        ${pb.rows.length ? `<div class="table-wrap sticky-head"><table><thead><tr><th style="width:44px">No</th><th style="width:110px">Tanggal</th><th>No. Bukti</th><th>Buku Kas</th><th>Uraian</th><th class="num">Masuk</th><th class="num">Keluar</th><th class="num">Saldo</th></tr></thead><tbody>
-          <tr style="background:#FFF8F2"><td></td><td colspan="6" class="t-strong">SALDO AWAL ${from ? 'per ' + tglID(from) : ''}</td><td class="num t-strong">${rupiah(pb.opening)}</td></tr>
-          ${pb.rows.map(t => `<tr><td class="num t-sub">${t.no}</td><td class="nowrap">${tglID(t.tanggal)}</td>
-            <td class="mono t-sub nowrap">${esc(t.no_bukti || '-')}</td>
-            <td class="small">${esc(t.bku_nama)}</td>
-            <td><div class="t-strong">${esc(t.uraian)}</div><div class="t-sub">${esc((t.coa_kode || '') + ' ' + (t.coa_nama || ''))}${t.nama_pihak ? ' · ' + esc(t.nama_pihak) : ''}</div></td>
-            <td class="num" style="color:var(--green)">${t.jenis === 'pemasukan' ? rupiah(t.nominal) : '—'}</td>
-            <td class="num" style="color:var(--red)">${t.jenis === 'pengeluaran' ? rupiah(t.nominal) : '—'}</td>
-            <td class="num t-strong">${rupiah(t.saldo)}</td></tr>`).join('')}
-        </tbody><tfoot><tr><td colspan="5">JUMLAH</td><td class="num">${rupiah(pb.totalIn)}</td><td class="num">${rupiah(pb.totalOut)}</td><td class="num">${rupiah(pb.closing)}</td></tr></tfoot></table></div>`
+        ${pb.rows.length || (['tunai', 'bank'].includes(pKey) && pb.opening) ? `<div class="table-wrap sticky-head">${pembantuTableHtml(pb)}</div>`
         : ui.emptyState('Belum ada transaksi pada buku pembantu ini', 'Catat transaksi terkait (tunai, transfer, pajak, BHP, atau barang modal) agar rekapan ini terisi otomatis.')}
         <p class="help mt-2">Auto-posting: transaksi tunai → Buku Pembantu Tunai · transfer → Buku Pembantu Bank · mutasi Bank &amp; Cash (tunai ⇄ bank) → Buku Pembantu Tunai &amp; Bank · kode rekening pajak → Buku Pembantu Pajak · 5.2.01 → Rekap BHP · 5.2.02 → Rekap Barang Modal.</p>`;
     } else if (r === 'aruskas') {
@@ -834,14 +936,14 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
       ${rekap ? `<table class="doc-tbl">
         <thead><tr><th>${mode === 'hari' ? 'Tanggal' : mode === 'bulan' ? 'Bulan' : 'Tahun'}</th><th style="width:70px">Jml Trx</th><th style="width:100px">Penerimaan</th><th style="width:100px">Pengeluaran</th><th style="width:100px">Saldo Akhir</th></tr></thead>
         <tbody>
-          <tr><td colspan="4"><b>Saldo Awal</b></td><td class="num"><b>${rupiah(d.opening)}</b></td></tr>
+          <tr><td><b>Saldo Awal</b></td><td></td><td class="num"><b>${rupiah(d.opening)}</b></td><td></td><td></td></tr>
           ${rekap.map(g => `<tr><td>${esc(g.label)}</td><td class="center">${g.n}</td><td class="num">${g.masuk ? num(g.masuk) : ''}</td><td class="num">${g.keluar ? num(g.keluar) : ''}</td><td class="num">${num(g.saldo)}</td></tr>`).join('')}
         </tbody>
         <tfoot><tr><td class="center">JUMLAH</td><td class="center">${d.rows.length}</td><td class="num">${num(d.totalIn)}</td><td class="num">${num(d.totalOut)}</td><td class="num">${num(d.closing)}</td></tr></tfoot>
       </table>` : `<table class="doc-tbl">
         <thead><tr><th style="width:34px">No</th><th style="width:74px">Tanggal</th><th>Uraian</th><th style="width:90px">Rekening</th><th style="width:92px">Penerimaan</th><th style="width:92px">Pengeluaran</th><th style="width:96px">Saldo</th></tr></thead>
         <tbody>
-          <tr><td></td><td></td><td colspan="3"><b>Saldo Awal</b></td><td></td><td class="num"><b>${rupiah(d.opening)}</b></td></tr>
+          <tr><td></td><td></td><td><b>Saldo Awal</b></td><td></td><td class="num"><b>${rupiah(d.opening)}</b></td><td></td><td></td></tr>
           ${d.rows.map((t, i) => `<tr><td class="center">${i + 1}</td><td class="center" style="white-space:nowrap">${tglID(t.tanggal)}</td>
             <td>${esc(t.uraian)}${t.nama_pihak ? `<div style="font-size:10.5px;color:#4A3A30">${esc(t.nama_pihak)}</div>` : ''}<div style="font-size:10px;color:#6B5B51">${esc(t.no_bukti || '')}${d.multi ? ' · ' + esc(t.bku_nama || '') : ''}</div></td>
             <td style="font-size:10.5px">${esc(t.coa_kode || '')}</td>
@@ -951,19 +1053,7 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
         <div><b>Target BKU:</b> ${pbku.length ? esc(pbku.map(id => (dbm.allBku(taId).find(x => Number(x.id) === Number(id)) || {}).nama || '-').join(', ')) : 'Semua BKU'}</div>
       </div>
       <p style="font-size:11.5px">Rekapan otomatis dari transaksi — ${esc(pb.cfg.desc)}.</p>
-      <table class="doc-tbl">
-        <thead><tr><th style="width:34px">No</th><th style="width:74px">Tanggal</th><th>No. Bukti</th><th>Buku Kas</th><th>Uraian</th><th style="width:86px">Masuk</th><th style="width:86px">Keluar</th><th style="width:90px">Saldo</th></tr></thead>
-        <tbody>
-          <tr><td></td><td></td><td colspan="4"><b>Saldo Awal</b></td><td></td><td class="num"><b>${rupiah(pb.opening)}</b></td></tr>
-          ${pb.rows.map(t => `<tr><td class="center">${t.no}</td><td class="center" style="white-space:nowrap">${tglID(t.tanggal)}</td>
-            <td style="font-size:10.5px">${esc(t.no_bukti || '-')}</td><td style="font-size:10.5px">${esc(t.bku_nama)}</td>
-            <td>${esc(t.uraian)}<div style="font-size:10px;color:#6B5B51">${esc((t.coa_kode || '') + ' ' + (t.coa_nama || ''))}</div></td>
-            <td class="num">${t.jenis === 'pemasukan' ? num(t.nominal) : ''}</td>
-            <td class="num">${t.jenis === 'pengeluaran' ? num(t.nominal) : ''}</td>
-            <td class="num">${num(t.saldo)}</td></tr>`).join('')}
-        </tbody>
-        <tfoot><tr><td colspan="5" class="center">JUMLAH</td><td class="num">${num(pb.totalIn)}</td><td class="num">${num(pb.totalOut)}</td><td class="num">${num(pb.closing)}</td></tr></tfoot>
-      </table>
+      ${pembantuTableHtml(pb, { print: true })}
       <p style="font-size:11.5px">Saldo akhir: <b>${rupiah(pb.closing)}</b> (${lib.terbilangRupiah(pb.closing)})</p>
       ${ui.signBlock(c.settings, { tempat: '', tanggal: lib.tglID(to || todayISO()) })}`;
     res.html(ui.docPage({
@@ -1144,13 +1234,13 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const bodyRows = rekap
       ? [
         [{ v: mode === 'hari' ? 'Tanggal' : mode === 'bulan' ? 'Bulan' : 'Tahun', bold: true }, { v: 'Jml Trx', bold: true }, { v: 'Penerimaan', bold: true }, { v: 'Pengeluaran', bold: true }, { v: 'Saldo Akhir', bold: true }],
-        ['', '', '', 'Saldo Awal', d.opening],
+        ['Saldo Awal', '', d.opening, '', ''],
         ...rekap.map(g => [g.label, g.n, g.masuk, g.keluar, g.saldo]),
         [{ v: 'JUMLAH', bold: true }, { v: d.rows.length, bold: true }, { v: d.totalIn, bold: true }, { v: d.totalOut, bold: true }, { v: d.closing, bold: true }]
       ]
       : [
         [{ v: 'No', bold: true }, { v: 'Tanggal', bold: true }, { v: 'No. Bukti', bold: true }, { v: 'Uraian', bold: true }, { v: 'Rekening', bold: true }, { v: 'Penerimaan', bold: true }, { v: 'Pengeluaran', bold: true }, { v: 'Saldo', bold: true }],
-        ['', '', '', 'Saldo Awal', '', '', '', d.opening],
+        ['', '', '', 'Saldo Awal', '', d.opening, '', ''],
         ...d.rows.map((t, i) => [i + 1, tglID(t.tanggal), t.no_bukti || '', t.uraian + (t.nama_pihak ? ' — ' + t.nama_pihak : ''), t.coa_kode || '', t.jenis === 'pemasukan' ? t.nominal : '', t.jenis === 'pengeluaran' ? t.nominal : '', t.saldo]),
         [{ v: 'JUMLAH', bold: true }, '', '', '', '', { v: d.totalIn, bold: true }, { v: d.totalOut, bold: true }, { v: d.closing, bold: true }]
       ];
@@ -1395,23 +1485,18 @@ module.exports = ({ get, post, dbm, lib, ui, page, ctx, guard, can, saas }) => {
     const pr = qBulans(ta, bulanSel, req.query.get('from'), req.query.get('to'));
     const pbku = (req.query.getAll ? req.query.getAll('bku') : []).map(Number).filter(Boolean);
     const pb = pembantuData(key, pr.from, pr.to, taId, pbku);
+    const table = pembantuExcelTable(pb);
     const rows = [
       ...head(c.settings),
       [{ v: (pb.cfg.label || '').toUpperCase(), bold: true }],
       [`Tahun Ajaran: ${ta.nama || '-'}`, '', '', `Periode: ${pr.from ? tglID(pr.from) : 'Awal'} s.d. ${pr.to ? tglID(pr.to) : 'Akhir'}${bulanSel ? ' (Rincian ' + pr.label + ')' : ''}`],
       [`Target BKU: ${pbku.length ? pbku.map(id => (dbm.allBku(taId).find(x => Number(x.id) === Number(id)) || {}).nama || '-').join(', ') : 'Semua BKU'}`],
       [],
-      [{ v: 'No', bold: true }, { v: 'Tanggal', bold: true }, { v: 'No. Bukti', bold: true }, { v: 'Buku Kas', bold: true },
-        { v: 'Uraian', bold: true }, { v: 'Rekening', bold: true }, { v: 'Masuk', bold: true }, { v: 'Keluar', bold: true }, { v: 'Saldo', bold: true }],
-      ['', '', '', '', 'Saldo Awal', '', '', '', pb.opening],
-      ...pb.rows.map(t => [t.no, tglID(t.tanggal), t.no_bukti || '', t.bku_nama || '', t.uraian || '',
-        (t.coa_kode || '') + ' ' + (t.coa_nama || ''), t.jenis === 'pemasukan' ? Number(t.nominal || 0) : '',
-        t.jenis === 'pengeluaran' ? Number(t.nominal || 0) : '', Number(t.saldo || 0)]),
-      [{ v: 'JUMLAH', bold: true }, '', '', '', '', '', { v: pb.totalIn, bold: true }, { v: pb.totalOut, bold: true }, { v: pb.closing, bold: true }],
+      ...table.rows,
       [], ['Mengetahui, Kepala Sekolah', '', '', 'Bendahara'], [c.settings.sekolah_kepala || '', '', '', c.settings.sekolah_bendahara || '']
     ];
     xlsxSend(res, `${(pb.cfg.label || 'Buku-Pembantu').replace(/[^\w]+/g, '-')}${bulanSel ? '-' + bulanSel : ''}.xlsx`,
-      'Buku Pembantu', rows, [5, 14, 18, 24, 46, 26, 16, 16, 16]);
+      'Buku Pembantu', rows, table.widths);
   });
 
   get('/export/aruskas', (req, res) => {
