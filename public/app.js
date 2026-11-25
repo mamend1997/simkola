@@ -119,7 +119,6 @@
       const onClick = e => {
         if (e.target.closest('[data-confirm-cancel]')) finish(false);
         else if (e.target.closest('[data-confirm-ok]')) finish(true);
-        else if (e.target === dialog) finish(false);
       };
       const onKeydown = e => {
         if (e.key === 'Escape') {
@@ -426,7 +425,6 @@
   function close(m) { if (!m) return; m.classList.remove('show'); unloadFrames(m); document.body.style.overflow = ''; }
   $$('[data-open]').forEach(b => b.addEventListener('click', () => open(b.dataset.open)));
   $$('[data-close]').forEach(b => b.addEventListener('click', () => close(document.getElementById(b.dataset.close))));
-  document.querySelectorAll('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m) close(m); }));
   /* pop-up otomatis (mis. peringatan Tutup BKU Bulanan) — sekali per sesi per kunci */
   $$('.modal[data-autoshow]').forEach(m => {
     const key = 'autoshow:' + m.id + ':' + (m.dataset.autokey || '');

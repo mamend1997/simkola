@@ -78,6 +78,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok('tombol Filter tetap ada', await page.locator('form.filter-eq button, form.filter-eq input[type=submit]').count() > 0);
   await page.click('[data-open="mTrxOut"]');
   const trxOut = page.locator('#mTrxOut');
+  await trxOut.locator('textarea[name=uraian]').fill('Belanja tetap tersimpan saat klik luar');
+  await page.mouse.click(10, 10);
+  ok('klik di luar modal transaksi tidak menutup atau menghapus isian',
+    await trxOut.isVisible()
+      && await trxOut.locator('textarea[name=uraian]').inputValue() === 'Belanja tetap tersimpan saat klik luar');
   await trxOut.locator('select[name=coa_id]').selectOption(String(coa.id));
   ok('pilih rekening BHP menampilkan jumlah dan harga satuan',
     await trxOut.locator('[data-trx-item-fields]').isVisible()
