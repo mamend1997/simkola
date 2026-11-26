@@ -270,6 +270,9 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     else { q.set('nama', ident.nama || ''); q.set('lahir', ident.lahir || ''); }
     return url(base, '/bayar' + sub) + '?' + q.toString().replace(/\+/g, '%20');
   }
+  function noticeUrl(path, key, message) {
+    return path + (path.includes('?') ? '&' : '?') + key + '=' + encodeURIComponent(message);
+  }
   const statusBadge = st => {
     const map = { menunggu: ['Menunggu Pembayaran / Verifikasi', 'amber'], lunas: ['Lunas', 'green'], ditolak: ['Ditolak', 'red'], batal: ['Batal', 'gray'] };
     const b = map[st] || [st || '-', 'gray'];
@@ -359,10 +362,18 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     </div>
     ${riwayat.length ? `<div class="portal-card">
       <h3>Riwayat Pembayaran Portal</h3>
-      <div class="table-wrap"><table class="tbl-modern"><thead><tr><th>Waktu</th><th class="num">Total</th><th>Metode</th><th>Status</th></tr></thead><tbody>
+      <div class="table-wrap"><table class="tbl-modern"><thead><tr><th>Waktu</th><th class="num">Total</th><th>Metode</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
         ${riwayat.map(x => `<tr><td class="t-sub">${esc(lib.stampShort(x.created_at))}</td><td class="num">${esc(rupiah(x.total))}</td>
           <td>${x.metode === 'gateway' ? 'QRIS ' + esc(x.provider || '') : 'Transfer manual'}</td>
-          <td>${statusBadge(x.status)}${x.alasan ? `<div class="t-sub">${esc(x.alasan)}</div>` : ''}</td></tr>`).join('')}
+          <td>${statusBadge(x.status)}${x.alasan && x.status !== 'batal' ? `<div class="t-sub">${esc(x.alasan)}</div>` : ''}</td>
+          <td>${x.status === 'menunggu' && x.metode === 'gateway' ? `<div class="portal-pay-row">
+            <a class="btn btn-sm" href="${esc(x.checkout_url || bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(x.order_id || ''))}"
+              ${x.checkout_url ? 'target="_blank" rel="noopener"' : ''}>${ui.icon('link')}Lanjutkan Bayar</a>
+            <form method="post" action="${url(base, '/bayar/batal')}">
+              <input type="hidden" name="order" value="${esc(x.order_id || '')}">${identFields}
+              <button class="btn btn-sm" type="submit" data-confirm-click="Batalkan pembayaran ini? Tagihan akan dikembalikan ke status belum dibayar.">Batal Bayar</button>
+            </form>
+          </div>` : '<span class="t-sub">—</span>'}</td></tr>`).join('')}
       </tbody></table></div>
     </div>` : ''}
     <div class="center mt-2"><a class="btn" href="${url(base)}?${ident.token ? 'token=' + encodeURIComponent(ident.token) : 'nama=' + encodeURIComponent(ident.nama) + '&lahir=' + encodeURIComponent(ident.lahir)}">${ui.icon('file')}Kembali ke Rincian Tagihan</a></div>`;
@@ -619,6 +630,40 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
         'Pembayaran belum terkonfirmasi' + (r.gateway_status ? ` (status: ${r.gateway_status})` : '') + '. Selesaikan pembayaran lalu cek kembali.'));
     } catch (e) {
       return res.redirect(req.BASE + back + '&err=' + encodeURIComponent(e.message));
+    }
+  });
+
+  post('/portal/bayar/batal', async (req, res) => {
+    const base = req.BASE;
+    const ident = identOf(req.body);
+    const order = String(req.body.order || '');
+    const back = ident.siswa ? bayarUrl(base, ident) : url(base);
+    const row = ident.siswa ? bayar.byOrder(dbm, order) : null;
+    if (!row || Number(row.siswa_id) !== Number(ident.siswa.id)) {
+      return res.redirect(req.BASE + noticeUrl(back, 'err', 'Transaksi pembayaran tidak ditemukan.'));
+    }
+    if (row.metode !== 'gateway' || row.status !== 'menunggu') {
+      return res.redirect(req.BASE + noticeUrl(back, 'err', 'Hanya pembayaran QRIS yang masih menunggu yang dapat dibatalkan dari portal.'));
+    }
+    try {
+      const current = await bayar.syncGateway(dbm, saas, row);
+      if (current.paid || current.status === 'lunas') {
+        return res.redirect(req.BASE + bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(order)
+          + '&ok=' + encodeURIComponent('Pembayaran sudah terkonfirmasi lunas; tagihan telah diperbarui.'));
+      }
+      if (current.error) throw new Error('Status gateway belum dapat dipastikan. Pembayaran tidak dibatalkan; coba lagi.');
+      const result = bayar.cancelGateway(dbm, row);
+      if (!result.batal) {
+        if (result.status === 'lunas') {
+          return res.redirect(req.BASE + bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(order)
+            + '&ok=' + encodeURIComponent('Pembayaran sudah terkonfirmasi lunas; tagihan telah diperbarui.'));
+        }
+        throw new Error('Pembayaran sudah tidak dalam status menunggu.');
+      }
+      dbm.logAudit(null, 'BATAL BAYAR IURAN PORTAL', 'iuran', `Pembayaran QRIS ${row.nama || ''} (${lib.rupiah(row.total)}) dibatalkan orang tua`);
+      return res.redirect(req.BASE + noticeUrl(back, 'ok', 'Pembayaran dibatalkan. Tagihan dikembalikan ke status belum dibayar.'));
+    } catch (e) {
+      return res.redirect(req.BASE + noticeUrl(back, 'err', e.message));
     }
   });
 

@@ -279,6 +279,19 @@ function listBySiswa(dbm, siswaId, limit = 12) {
   return dbm.db.prepare('SELECT * FROM iuran_checkout WHERE siswa_id=? ORDER BY id DESC LIMIT ' + (Number(limit) || 12)).all(Number(siswaId) || 0);
 }
 
+function cancelGateway(dbm, row) {
+  const id = Number(row && row.id) || 0;
+  if (!id) throw new Error('Keranjang pembayaran tidak ditemukan.');
+  const info = dbm.db.prepare(`UPDATE iuran_checkout
+    SET status='batal', alasan='Dibatalkan melalui portal', gateway_status='CANCELLED_BY_USER'
+    WHERE id=? AND status='menunggu' AND metode='gateway'`)
+    .run(id);
+  if (info.changes) return { batal: true, status: 'batal' };
+  const current = byId(dbm, id);
+  if (!current) throw new Error('Keranjang pembayaran tidak ditemukan.');
+  return { batal: false, status: current.status };
+}
+
 /* ---------- pelunasan ---------- */
 /** pilih BKU sasaran: BKU aktif pertama (bukan buku pembantu otomatis) pada tahun ajaran terkait */
 function defaultBku(dbm, taId) {
@@ -368,6 +381,6 @@ async function syncGateway(dbm, saas, row) {
 
 module.exports = {
   ensureTables, cfg, publicCfg, itemsOf, pickItems, createManual, createGateway,
-  byId, byOrder, listPending, listBySiswa, applyPaid, reject, syncGateway,
+  byId, byOrder, listPending, listBySiswa, cancelGateway, applyPaid, reject, syncGateway,
   notifyBendahara, defaultBku, orderId, bulanNama, bulanTahunLabel, BULAN_ID, rupiah
 };

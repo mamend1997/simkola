@@ -214,13 +214,27 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
   const coG = one("SELECT * FROM iuran_checkout WHERE metode='gateway' ORDER BY id DESC LIMIT 1");
   ok('order gateway memiliki order_id', !!coG && /^IU\d+-/.test(coG.order_id), coG && coG.order_id);
   ok('QRIS string tersimpan (sandbox)', !!coG.qr_string, coG && coG.qr_string);
-  r = await pub('POST', '/portal/pay/callback?t=1', { order_id: coG.order_id, status: 'PAID', paid: true, amount: 150000 });
+  let history = await follow('GET', '/portal/bayar?nama=' + encodeURIComponent(ident.nama) + '&lahir=' + ident.lahir);
+  ok('riwayat pembayaran menyediakan lanjutkan dan batal untuk gateway menunggu',
+    history.text.includes('Lanjutkan Bayar') && history.text.includes('Batal Bayar'));
+  ok('lanjutkan bayar membuka halaman status order yang sama',
+    history.text.includes('/bayar/status?nama=Budi%20Uji&amp;lahir=2010-01-02&amp;order=' + coG.order_id));
+  r = await pub('POST', '/portal/bayar/batal', { ...ident, order: coG.order_id });
+  ok('batal bayar dialihkan kembali ke rincian pembayaran', r.status === 303 && /ok=/.test(r.loc), r.status + ' ' + r.loc);
+  ok('batal bayar mengubah keranjang menjadi batal', one('SELECT status FROM iuran_checkout WHERE id=?', coG.id).status === 'batal');
+  history = await follow('GET', '/portal/bayar?nama=' + encodeURIComponent(ident.nama) + '&lahir=' + ident.lahir);
+  ok('tagihan yang dibatalkan kembali tersedia untuk dibayar',
+    history.text.includes(`value="${one('SELECT id FROM iuran_tagihan WHERE siswa_id=?', sid).id}:8"`));
+  r = await pub('POST', '/portal/bayar', { ...ident, metode: 'gateway', item: `${one('SELECT id FROM iuran_tagihan WHERE siswa_id=?', sid).id}:8` });
+  const coG2 = one("SELECT * FROM iuran_checkout WHERE metode='gateway' ORDER BY id DESC LIMIT 1");
+  ok('tagihan yang dibatalkan dapat dibuatkan order gateway baru', r.status === 303 && coG2.id !== coG.id && coG2.status === 'menunggu');
+  r = await pub('POST', '/portal/pay/callback?t=1', { order_id: coG2.order_id, status: 'PAID', paid: true, amount: 150000 });
   ok('callback sandbox tanpa signature ditolak', r.status === 401, r.status + ' ' + r.text);
   ok('checkout tetap menunggu setelah callback sandbox palsu',
-    one('SELECT status FROM iuran_checkout WHERE id=?', coG.id).status === 'menunggu');
-  r = await req('POST', '/iuran/verifikasi', { id: coG.id, aksi: 'setuju' });
+    one('SELECT status FROM iuran_checkout WHERE id=?', coG2.id).status === 'menunggu');
+  r = await req('POST', '/iuran/verifikasi', { id: coG2.id, aksi: 'setuju' });
   ok('admin dapat menyetujui pembayaran sandbox secara manual', r.status === 303 && /ok=/.test(r.loc), r.status + ' ' + r.loc);
-  ok('verifikasi manual menandai lunas', one('SELECT status FROM iuran_checkout WHERE id=?', coG.id).status === 'lunas');
+  ok('verifikasi manual menandai lunas', one('SELECT status FROM iuran_checkout WHERE id=?', coG2.id).status === 'lunas');
   const rowsG = all("SELECT * FROM iuran_bayar WHERE siswa_id=? AND status='pending'", sid);
   ok('gateway → antrean bertambah menjadi 2 baris', rowsG.length === 2, 'baris=' + rowsG.length);
   const notifG = one("SELECT * FROM notif WHERE untuk='super_admin' AND jenis='bayar-lunas' ORDER BY id DESC LIMIT 1");
