@@ -371,7 +371,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
               ${x.checkout_url ? 'target="_blank" rel="noopener"' : ''}>${ui.icon('link')}Lanjutkan Bayar</a>
             <form method="post" action="${url(base, '/bayar/batal')}">
               <input type="hidden" name="order" value="${esc(x.order_id || '')}">${identFields}
-              <button class="btn btn-sm" type="submit">Batal Bayar</button>
+              <button class="btn btn-sm" type="submit" data-confirm-click="Yakin membatalkan pembayaran ini? Tagihan akan dikembalikan ke status belum dibayar. Jika status gateway tidak dapat diperiksa, QR atau tautan pembayaran lama mungkin masih aktif—jangan membayar melalui order lama.">Batal Bayar</button>
             </form>
           </div>` : '<span class="t-sub">—</span>'}</td></tr>`).join('')}
       </tbody></table></div>
@@ -653,7 +653,6 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
         return res.redirect(req.BASE + bayarUrl(base, ident, '/status') + '&order=' + encodeURIComponent(order)
           + '&ok=' + encodeURIComponent('Pembayaran sudah terkonfirmasi lunas; tagihan telah diperbarui.'));
       }
-      if (current.error) throw new Error('Status gateway belum dapat dipastikan. Pembayaran tidak dibatalkan; coba lagi.');
       const result = bayar.cancelGateway(dbm, row);
       if (!result.batal) {
         if (result.status === 'lunas') {
@@ -663,7 +662,10 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
         throw new Error('Pembayaran sudah tidak dalam status menunggu.');
       }
       dbm.logAudit(null, 'BATAL BAYAR IURAN PORTAL', 'iuran', `Pembayaran QRIS ${row.nama || ''} (${lib.rupiah(row.total)}) dibatalkan orang tua`);
-      return res.redirect(req.BASE + noticeUrl(back, 'ok', 'Pembayaran dibatalkan. Tagihan dikembalikan ke status belum dibayar.'));
+      const message = current.error
+        ? 'Order dibatalkan di portal dan tagihan dikembalikan ke status belum dibayar. Status gateway tidak dapat dipastikan; jangan membayar melalui QR atau tautan order lama.'
+        : 'Pembayaran dibatalkan. Tagihan dikembalikan ke status belum dibayar.';
+      return res.redirect(req.BASE + noticeUrl(back, 'ok', message));
     } catch (e) {
       return res.redirect(req.BASE + noticeUrl(back, 'err', e.message));
     }
