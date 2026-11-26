@@ -371,7 +371,7 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
               ${x.checkout_url ? 'target="_blank" rel="noopener"' : ''}>${ui.icon('link')}Lanjutkan Bayar</a>
             <form method="post" action="${url(base, '/bayar/batal')}">
               <input type="hidden" name="order" value="${esc(x.order_id || '')}">${identFields}
-              <button class="btn btn-sm" type="submit" data-confirm-click="Batalkan pembayaran ini? Tagihan akan dikembalikan ke status belum dibayar.">Batal Bayar</button>
+              <button class="btn btn-sm" type="submit">Batal Bayar</button>
             </form>
           </div>` : '<span class="t-sub">—</span>'}</td></tr>`).join('')}
       </tbody></table></div>
@@ -528,18 +528,20 @@ ${settings.sekolah_logo ? `<link rel="preload" as="image" href="${esc(settings.s
     const base = req.BASE;
     const settings = dbm.settingsAll();
     const ident = identOf(req.query);
+    const ok = String(req.query.get('ok') || '');
+    const err = String(req.query.get('err') || '');
     if (!ident.siswa) {
       return res.html(shell({
         base, settings,
         content: searchForm({
           settings, base, nama: ident.nama, lahir: ident.lahir,
-          err: 'Sesi pencarian berakhir. Silakan cari data tagihan kembali dengan nama dan tanggal lahir siswa.'
+          err: err || 'Sesi pencarian berakhir. Silakan cari data tagihan kembali dengan nama dan tanggal lahir siswa.'
         })
       }));
     }
     res.html(shell({
       base, settings, token: !!ident.token, canonical: appBase(req) + '/' + slug() + '/bayar',
-      content: bayarPage({ base, settings, ident })
+      content: bayarPage({ base, settings, ident, ok, err })
     }));
   });
 
