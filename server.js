@@ -414,7 +414,16 @@ post('/ai/chat', async (req, res) => {
   if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
   const cfg = saas.aiConfig();
   if (!cfg.aktif) return res.json({ ok: false, error: 'Bantuan AI belum diaktifkan.' }, 403);
-  const endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
+  let endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
+  endpoint = String(endpoint).trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(endpoint)) endpoint = 'https://' + endpoint;
+  try {
+    const u = new URL(endpoint);
+    if (!/\/chat\/completions\/?$/i.test(u.pathname) && !/\/responses\/?$/i.test(u.pathname)) {
+      u.pathname = u.pathname.replace(/\/+$/, '') + '/chat/completions';
+      endpoint = u.toString();
+    }
+  } catch (e) { return res.json({ ok: false, error: 'Endpoint API AI tidak valid.' }, 400); }
   const apiKey = String(saas.get('ai_api_key', '') || saas.get('ai_assistant_api_key', '') || '').trim();
   if (!apiKey) return res.json({ ok: false, error: 'API key bantuan AI belum dikonfigurasi.' }, 503);
   const message = String(req.body && req.body.message || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
@@ -425,27 +434,50 @@ post('/ai/chat', async (req, res) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 45000);
     let response;
+    let data;
+    const payload = {
+      model: cfg.model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: message }],
+      temperature: 0.3,
+      max_tokens: 700
+    };
     try {
       response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-        body: JSON.stringify({
-          model: cfg.model,
-          messages: [{ role: 'system', content: system }, { role: 'user', content: message }],
-          temperature: 0.3,
-          max_tokens: 700
-        }),
+        body: JSON.stringify(payload),
         signal: ctrl.signal
       });
+      data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const rawText = typeof data === 'string' ? data : JSON.stringify(data || {}).slice(0, 2000);
+        if (/max_tokens|unsupported.*max/i.test(rawText) && payload.max_tokens) {
+          delete payload.max_tokens;
+          payload.max_completion_tokens = 700;
+          response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+            body: JSON.stringify(payload),
+            signal: ctrl.signal
+          });
+          data = await response.json().catch(() => null);
+        }
+      }
     } finally { clearTimeout(timer); }
-    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const detail = String(data.error && (data.error.message || data.error) || data.message || 'Gateway AI menolak permintaan.')
-        .replace(/\b(?:sk-[A-Za-z0-9_-]+|[A-Za-z0-9_-]{32,})\b/g, '[disamarkan]').slice(0, 300);
-      return res.json({ ok: false, error: detail }, response.status || 502);
+      const errObj = data && data.error;
+      let detail = typeof errObj === 'string' ? errObj
+        : String(errObj && (errObj.message || errObj.type) || data && (data.message || data.detail || data.response) || '').trim();
+      if (!detail && typeof data === 'string') detail = data;
+      if (!detail) detail = 'Gateway AI menolak permintaan.';
+      detail = detail.replace(/\b(?:sk-[A-Za-z0-9_-]+|[A-Za-z0-9_-]{32,})\b/g, '[disamarkan]').replace(/[\r\n]+/g, ' ').slice(0, 300);
+      return res.json({ ok: false, error: `Gateway AI (${response.status}): ${detail}` }, response.status >= 400 && response.status < 600 ? response.status : 502);
     }
-    const answer = String(data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
-      || data.output_text || data.response || '').trim();
+    let answer = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if (Array.isArray(answer)) answer = answer.map(part => part && (part.text || part.content) || '').join('');
+    if (!answer) answer = data && (data.output_text || data.response || (typeof data.message === 'string' ? data.message : ''));
+    answer = String(answer || '').trim();
     if (!answer) return res.json({ ok: false, error: 'AI tidak mengembalikan jawaban.' }, 502);
     return res.json({ ok: true, answer: answer.slice(0, 12000) });
   } catch (e) {
