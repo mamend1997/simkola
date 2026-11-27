@@ -16,11 +16,15 @@ set -u
 APP_DIR="/home/manbi/simkola3"
 SQL_FILE="${1:-$APP_DIR/data/import.sql}"
 
-if command -v python3 >/dev/null 2>&1 && [ -f "$APP_DIR/tools/restore-sql.py" ]; then
+PYTHON=""
+for c in python3 python3.13 python3.12 python3.11 python3.10 python; do
+  if command -v "$c" >/dev/null 2>&1; then PYTHON="$c"; break; fi
+done
+if [ -n "$PYTHON" ] && [ -f "$APP_DIR/tools/restore-sql.py" ]; then
   export DB_PATH="$APP_DIR/data/keuangan.sqlite"
   export SAAS_DB_PATH="$APP_DIR/data/saas.db"
   cd "$APP_DIR" || exit 1
-  exec python3 tools/restore-sql.py "$SQL_FILE"
+  exec "$PYTHON" tools/restore-sql.py "$SQL_FILE"
 fi
 
 export DB_PATH="$APP_DIR/data/keuangan.sqlite"
