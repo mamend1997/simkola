@@ -2744,7 +2744,111 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       if (!panel || panel.hidden) setTimeout(loadSummary, 80);
     });
 
-    function addMessage(text, type, actions) {
+    function startAIGuides(guides) {
+      if (!Array.isArray(guides) || !guides.length) return;
+      document.querySelectorAll('.ai-guide-tip,.guide-highlight').forEach(el => {
+        el.classList && el.classList.remove('guide-highlight');
+        if (el.classList && el.classList.contains('ai-guide-tip')) el.remove();
+      });
+
+      const aliasSelectors = {
+        add: ['[data-guide-target]', 'main .card-head a.btn-primary', 'main .card-head button.btn-primary', 'main a.btn-primary', 'main button.btn-primary'],
+        save: ['main form button[type="submit"]', 'main form input[type="submit"]', '.form-actions button.btn-primary', '[data-bayar-submit]'],
+        search: ['input[data-table-search]', 'input[name="q"]', 'input[name="cari"]', 'input[name="search"]'],
+        filter: ['.filterbar button[type="submit"]', '.filterbar select[data-autosubmit]', 'select[data-autosubmit]', '[data-iuran-metode]'],
+        print: ['button[onclick*="print"]', 'a[href*="cetak"]', 'button[title*="Cetak"]', '.doc-actions button'],
+        table: ['main table', '.table-wrap table', '.data-table'],
+        submit: ['main form button[type="submit"]', 'main form input[type="submit"]'],
+        export: ['a[href*="export"]', 'button[title*="Export"]', 'a[title*="Export"]'],
+        edit: ['a[href*="edit"]', 'button[data-open*="Edit"]', 'button[title*="Edit"]', '[data-open^="mEdit"]'],
+        delete: ['button[title*="Hapus"]', 'button[data-confirm*="hapus"]', 'a[href*="delete"]'],
+        back: ['a[href*="back"]', 'a.btn[href] .guide-no-target'],
+        close: ['.modal.show .modal-head .xbtn', '.modal.show [data-close]', '.modal.show button[aria-label*="Tutup"]']
+      };
+
+      let index = 0;
+      let target = null;
+      const shade = document.createElement('div');
+      shade.className = 'ai-guide-tip guide-tip';
+      shade.setAttribute('role', 'dialog');
+      shade.setAttribute('aria-live', 'polite');
+
+      const head = document.createElement('div');
+      head.className = 'guide-tip-head';
+      const titleWrap = document.createElement('div');
+      const kicker = document.createElement('div');
+      kicker.className = 'guide-tip-kicker';
+      const title = document.createElement('h3');
+      titleWrap.append(kicker, title);
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'xbtn';
+      closeBtn.setAttribute('aria-label', 'Tutup panduan');
+      closeBtn.textContent = '×';
+      head.append(titleWrap, closeBtn);
+
+      const description = document.createElement('p');
+      const actions = document.createElement('div');
+      actions.className = 'guide-tip-actions';
+      const prev = document.createElement('button'); prev.type = 'button'; prev.className = 'btn btn-sm'; prev.textContent = 'Sebelumnya';
+      const next = document.createElement('button'); next.type = 'button'; next.className = 'btn btn-sm btn-primary'; next.textContent = 'Langkah Berikutnya';
+      actions.append(prev, next);
+      shade.append(head, description, actions);
+      document.body.appendChild(shade);
+
+      const place = () => {
+        if (!target) return;
+        const rect = target.getBoundingClientRect();
+        const width = shade.offsetWidth, height = shade.offsetHeight;
+        let left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+        let top = rect.bottom + 14;
+        if (top + height > window.innerHeight - 12) top = rect.top - height - 14;
+        top = Math.max(12, Math.min(top, window.innerHeight - height - 12));
+        shade.style.left = left + 'px'; shade.style.top = top + 'px';
+      };
+
+      const finish = () => {
+        if (target) target.classList.remove('guide-highlight');
+        shade.remove();
+        window.removeEventListener('resize', place);
+        window.removeEventListener('scroll', place, true);
+      };
+
+      const render = () => {
+        if (target) target.classList.remove('guide-highlight');
+        const step = guides[index];
+        const selectors = aliasSelectors[step.target] || [];
+        target = null;
+        for (const selector of selectors) {
+          target = Array.from(document.querySelectorAll(selector)).find(el => el.getClientRects().length && !el.disabled && !el.closest('.modal:not(.show)'));
+          if (target) break;
+        }
+        kicker.textContent = 'Panduan AI · Langkah ' + (index + 1) + ' dari ' + guides.length;
+        title.textContent = step.title;
+        description.textContent = target
+          ? step.text + ' Elemen yang disorot adalah target tindakan.'
+          : step.text + ' Target khusus tidak ditemukan di halaman ini.';
+        prev.disabled = index === 0;
+        next.textContent = index === guides.length - 1 ? 'Selesai' : 'Langkah Berikutnya';
+        if (target) {
+          target.classList.add('guide-highlight');
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setTimeout(place, 380);
+        } else {
+          shade.style.left = '12px'; shade.style.top = '90px';
+        }
+      };
+
+      prev.addEventListener('click', () => { if (index > 0) { index--; render(); } });
+      next.addEventListener('click', () => { if (index < guides.length - 1) { index++; render(); } else finish(); });
+      closeBtn.addEventListener('click', finish);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') finish(); }, { once: true });
+      window.addEventListener('resize', place);
+      window.addEventListener('scroll', place, true);
+      render();
+    }
+
+    function addMessage(text, type, actions, guides) {
       if (!messages) return;
       const div = document.createElement('div');
       div.className = 'ai-msg ' + (type === 'user' ? 'ai-msg-user' : 'ai-msg-bot');
@@ -2754,32 +2858,31 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         group.className = 'ai-actions';
         actions.forEach(action => {
           if (!action || !/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(String(action.href || ''))) return;
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'ai-action';
-          button.textContent = String(action.label || 'Buka menu').slice(0, 80);
-          button.addEventListener('click', async () => {
-            const agreed = await confirmInApp('Buka menu "' + String(action.label || 'tujuan') + '"?');
-            if (!agreed) return;
+          const link = document.createElement('a');
+          link.className = 'ai-action';
+          link.href = base + action.href;
+          link.setAttribute('role', 'link');
+          link.textContent = String(action.label || 'Buka menu').slice(0, 80);
+          link.addEventListener('click', () => {
             try {
-              const draft = await fetch(base + '/ai/action/draft', {
+              fetch(base + '/ai/action/draft', {
                 method: 'POST', credentials: 'same-origin', cache: 'no-store',
                 headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
                 body: JSON.stringify({ href: action.href, label: action.label })
               }).then(r => r.json()).catch(() => ({}));
-              if (!draft || !draft.ok) throw new Error(draft.error || 'Menu tidak dapat dibuka.');
-              const confirmed = await fetch(base + '/ai/action/confirm', {
-                method: 'POST', credentials: 'same-origin', cache: 'no-store',
-                headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
-                body: JSON.stringify({ token: draft.token })
-              }).then(r => r.json()).catch(() => ({}));
-              if (!confirmed || !confirmed.ok) throw new Error(confirmed.error || 'Konfirmasi gagal.');
-              window.location.assign(base + confirmed.href);
-            } catch (err) { addMessage(err && err.message ? err.message : 'Tindakan dibatalkan.', 'bot'); }
+            } catch (err) {}
           });
-          group.appendChild(button);
+          group.appendChild(link);
         });
         if (group.children.length) div.appendChild(group);
+      }
+      if (type !== 'user' && Array.isArray(guides) && guides.length) {
+        const guideButton = document.createElement('button');
+        guideButton.type = 'button';
+        guideButton.className = 'ai-guide-button';
+        guideButton.textContent = 'Mulai panduan bertahap (' + guides.length + ' langkah)';
+        guideButton.addEventListener('click', () => startAIGuides(guides));
+        div.appendChild(guideButton);
       }
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
@@ -2809,7 +2912,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         const j = await r.json().catch(() => ({}));
         if (wait) wait.remove();
         if (!r.ok || !j.ok) throw new Error(j.error || 'Bantuan AI sedang tidak tersedia.');
-        addMessage(j.answer || 'Tidak ada jawaban.', 'bot', j.actions || []);
+        addMessage(j.answer || 'Tidak ada jawaban.', 'bot', j.actions || [], j.guides || []);
       } catch (err) {
         if (wait) wait.remove();
         addMessage(err && err.message ? err.message : 'Bantuan AI sedang tidak tersedia.', 'bot');

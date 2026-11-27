@@ -176,8 +176,24 @@ function draftGet(dbm, req, token) {
   return dbm.db.prepare(`SELECT * FROM ai_action_draft WHERE token=? AND user_id=?`).get(token, req.user.id) || null;
 }
 
+const GUIDE_ALIASES = new Set(['add','save','search','filter','print','table','submit','export','edit','delete','back','close']);
+
+function parseGuides(answer) {
+  const guides = [];
+  String(answer || '').split(/\r?\n/).forEach(line => {
+    const match = /^\[GUIDE\]([^|\n]+)\|([^|\n]+)\|([^\n]+)$/.exec(line.trim());
+    if (!match) return;
+    const title = match[1].trim().slice(0, 80);
+    const target = match[2].trim().toLowerCase();
+    const text = match[3].trim().slice(0, 300);
+    if (title && GUIDE_ALIASES.has(target) && text && guides.length < 6) guides.push({ title, target, text });
+  });
+  return guides;
+}
+
 module.exports = {
   ensureTables, historyAdd, historyList, historyClear, rateLimit,
   contextSummary, detectTools, draftToken, draftGet,
-  toolStatusBku, toolCariSiswa, toolRekapIuran, toolPetunjuk
+  toolStatusBku, toolCariSiswa, toolRekapIuran, toolPetunjuk,
+  GUIDE_ALIASES, parseGuides
 };

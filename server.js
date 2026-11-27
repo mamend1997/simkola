@@ -473,7 +473,7 @@ post('/ai/chat', async (req, res) => {
       : req.user.role === 'super_admin'
         ? 'Prioritaskan panduan konfigurasi SaaS, tenant, paket, dan operasi administrasi pusat.'
         : 'Prioritaskan panduan penggunaan modul sesuai hak akses pengguna.';
-  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nTahun Pelajaran: ${context.ta}; siswa aktif: ${context.siswaAktif}; transaksi pending: ${context.pendingTransaksi}; pembayaran iuran antrean: ${context.pembayaranIuranAntrean}; periode BKU belum ditutup: ${context.bkuTidakDitutup}.\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). ${roleInstruction} Jangan mengubah atau menghapus data; jangan menampilkan rahasia.\n${tool.type ? `Hasil tool ${tool.type}:\n${tool.text}` : 'Tidak ada tool khusus digunakan.'}\nRiwayat percakapan ringkas:\n${historyText || '(belum ada)'}\nJika jawaban mengarahkan ke satu atau beberapa menu, tambahkan tepat satu baris per menu dengan format [MENU]label|/alamat. Gunakan hanya alamat yang tercantum di katalog berikut:\n${menuText || '(Tidak ada menu yang dapat dibuka pengguna ini)'}.`;
+  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nTahun Pelajaran: ${context.ta}; siswa aktif: ${context.siswaAktif}; transaksi pending: ${context.pendingTransaksi}; pembayaran iuran antrean: ${context.pembayaranIuranAntrean}; periode BKU belum ditutup: ${context.bkuTidakDitutup}.\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). ${roleInstruction} Jangan mengubah atau menghapus data; jangan menampilkan rahasia.\n${tool.type ? `Hasil tool ${tool.type}:\n${tool.text}` : 'Tidak ada tool khusus digunakan.'}\nUntuk panduan visual, bila ada langkah yang perlu ditekan, tambahkan baris [GUIDE]Judul|alias|Instruksi. Alias yang tersedia: add, save, search, filter, print, table, submit, export, edit, delete, back, close. Maksimal 6 langkah. Jangan mengirim CSS atau selector HTML.\nRiwayat percakapan ringkas:\n${historyText || '(belum ada)'}\nJika jawaban mengarahkan ke satu atau beberapa menu, tambahkan tepat satu baris per menu dengan format [MENU]label|/alamat. Gunakan hanya alamat yang tercantum di katalog berikut:\n${menuText || '(Tidak ada menu yang dapat dibuka pengguna ini)'}.`;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 45000);
@@ -532,7 +532,9 @@ post('/ai/chat', async (req, res) => {
 
     const allowedMap = new Map(menuAllowed.map(i => [i.href, i.label]));
     const actions = [];
+    const guides = ai.parseGuides(answer);
     const cleanAnswer = answer.split(/\r?\n/).filter(line => {
+      if (/^\[GUIDE\]/.test(line.trim())) return false;
       const match = /^\[MENU\]([^|\n]+)\|([^\s]+)\s*$/.exec(line.trim());
       if (!match) return true;
       const href = match[2];
@@ -545,7 +547,7 @@ post('/ai/chat', async (req, res) => {
     const finalAnswer = (cleanAnswer || answer).slice(0, 12000);
     ai.historyAdd(dbm, req, { page: pageTitle, message, answer: finalAnswer, actions: actions.slice(0, 4), toolUsed: tool.type });
     try { dbm.logAudit(req.user, 'CHAT AI', 'ai', `Halaman: ${pageTitle || '-'}; tool: ${tool.type || '-'}; pesan ${message.slice(0, 120)}`); } catch (e) {}
-    return res.json({ ok: true, answer: finalAnswer, actions: actions.slice(0, 4), tool: tool.type || null, limit });
+    return res.json({ ok: true, answer: finalAnswer, actions: actions.slice(0, 4), guides: guides.slice(0, 6), tool: tool.type || null, limit });
   } catch (e) {
     if (tool.type && tool.text) {
       const fallbackActions = menuAllowed.slice(0, 3).map(i => ({ label: i.label, href: i.href }));
