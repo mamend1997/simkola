@@ -2262,14 +2262,38 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
   });
 
   /** pulihkan seluruh data satu sekolah dari objek dump SIMKEU */
+  function normalizeRestoreUnique(table, rows) {
+    if (table !== 'transaksi' && table !== 'iuran_bayar') return rows;
+    const column = table === 'transaksi' ? 'no_bukti' : 'no_kwitansi';
+    if (!rows.some(row => row && Object.prototype.hasOwnProperty.call(row, column))) return rows;
+    const seen = new Map();
+    let fixed = 0;
+    for (const row of rows) {
+      if (!row || row[column] === null || row[column] === undefined) continue;
+      const value = String(row[column]).trim();
+      if (!value) continue;
+      const tenantId = String(row.tenant_id ?? '1');
+      const key = tenantId + '\u001f' + value;
+      if (seen.has(key)) {
+        const suffix = '-' + String(row.id || seen.get(key).length + 1).padStart(6, '0') + '-RESTORE';
+        row[column] = value + suffix;
+        fixed++;
+      } else {
+        seen.set(key, { length: seen.size + 1 });
+      }
+    }
+    if (fixed) console.log(`[restore] ${fixed} nomor duplikat ${table}.${column} dinormalkan`);
+    return rows;
+  }
   function restoreTenantDump(conn, data) {
     bd.validateDump(conn, data);
     const tables = bd.TABLES;
     let n = 0;
     conn.transaction(() => {
       for (const t of tables) {
-        const rows = data && data.tables ? data.tables[t] : null;
+        let rows = data && data.tables ? data.tables[t] : null;
         if (!Array.isArray(rows)) continue;
+        rows = normalizeRestoreUnique(t, rows);
         conn.prepare('DELETE FROM "' + t + '"').run();
         if (!rows.length) continue;
         const cols = Object.keys(rows[0]).filter(k => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k));
