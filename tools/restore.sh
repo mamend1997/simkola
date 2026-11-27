@@ -16,6 +16,17 @@ set -u
 APP_DIR="/home/manbi/simkola3"
 SQL_FILE="${1:-$APP_DIR/data/import.sql}"
 
+NODE_NATIVE=""
+for c in "/home/manbi/nodevenv/simkola3/22/bin/node" "/usr/local/bin/node" "$(command -v node 2>/dev/null || true)"; do
+  if [ -n "$c" ] && [ -x "$c" ] 2>/dev/null || [ -n "$c" ] && command -v "$c" >/dev/null 2>&1; then NODE_NATIVE="$c"; break; fi
+done
+if [ -n "$NODE_NATIVE" ] && [ -f "$APP_DIR/tools/restore-sql-node.js" ]; then
+  export DB_PATH="$APP_DIR/data/keuangan.sqlite"
+  export SAAS_DB_PATH="$APP_DIR/data/saas.db"
+  cd "$APP_DIR" || exit 1
+  exec "$NODE_NATIVE" tools/restore-sql-node.js "$SQL_FILE"
+fi
+
 PYTHON=""
 for c in python3 python3.13 python3.12 python3.11 python3.10 python; do
   if command -v "$c" >/dev/null 2>&1; then PYTHON="$c"; break; fi
