@@ -78,12 +78,6 @@ module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPo
       res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Silakan masuk sebagai Super Admin Pusat.'));
       return null;
     }
-    if (!saas.mfaEnabled(u.id)) {
-      saas.destroySession(parseCookie(req, COOKIE));
-      res.set('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie(req)}`);
-      res.redirect(req.BASE + '/super-admin/login?err=' + encodeURIComponent('Aktifkan MFA sebelum melanjutkan.'));
-      return null;
-    }
     return u;
   }
   function flash(path, key, msg) {
