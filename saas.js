@@ -1557,9 +1557,10 @@ function updateSession(token, patch = {}) {
 /* ---------------- akun super admin pusat ---------------- */
 function ensureAdmin() {
   const email = String(process.env.SAAS_ADMIN_EMAIL || 'super@simkeu.id').trim().toLowerCase();
-  const pass = String(process.env.SAAS_ADMIN_PASSWORD || 'SuperAdmin2026!');
   const ada = S.prepare('SELECT id FROM saas_users WHERE role=? LIMIT 1').get('super_admin');
   if (ada) return { created: false, email };
+  const pass = String(process.env.SAAS_ADMIN_PASSWORD || '');
+  if (!pass) throw new Error('SAAS_ADMIN_PASSWORD wajib diatur sebelum membuat Super Admin pertama.');
   S.prepare('INSERT INTO saas_users (nama,email,password,role,aktif,created_at) VALUES (?,?,?,?,1,?)')
     .run('Super Admin Pusat', email, lib.hashPassword(pass), 'super_admin', lib.nowStamp());
   return { created: true, email, password: pass };
