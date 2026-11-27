@@ -118,6 +118,8 @@ function importSection(target, sql, label, required) {
   const conn = new Database(target);
   try {
     conn.pragma('foreign_keys = OFF');
+    conn.pragma('journal_mode = DELETE');
+    conn.pragma('synchronous = FULL');
     conn.exec(sql);
     const ic = conn.pragma('integrity_check');
     const okIntegrity = ic.length === 1 && ic[0].integrity_check === 'ok';
