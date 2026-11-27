@@ -2680,6 +2680,70 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     if (toggle) toggle.addEventListener('click', () => setOpen(panel && panel.hidden));
     if (close) close.addEventListener('click', () => setOpen(false));
 
+    const aiHead = host.querySelector('.ai-head');
+    const aiTools = document.createElement('button');
+    aiTools.type = 'button';
+    aiTools.className = 'ai-history-btn';
+    aiTools.textContent = 'Riwayat';
+    aiTools.title = 'Lihat riwayat percakapan';
+    if (close) aiHead && aiHead.insertBefore(aiTools, close); else aiHead && aiHead.appendChild(aiTools);
+
+    const aiClear = document.createElement('button');
+    aiClear.type = 'button';
+    aiClear.className = 'ai-history-btn ai-clear';
+    aiClear.textContent = 'Hapus';
+    aiClear.title = 'Hapus riwayat percakapan saya';
+    if (close) aiHead && aiHead.insertBefore(aiClear, close); else aiHead && aiHead.appendChild(aiClear);
+
+    async function loadSummary() {
+      if (!messages) return;
+      let old = host.querySelector('[data-ai-summary]');
+      if (old) old.remove();
+      try {
+        const r = await fetch(base + '/ai/summary', { credentials: 'same-origin', cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) return;
+        const strip = document.createElement('div');
+        strip.className = 'ai-summary';
+        strip.setAttribute('data-ai-summary', '1');
+        const title = document.createElement('b');
+        title.textContent = 'Ringkasan halaman';
+        const small = document.createElement('div');
+        small.textContent = (j.notices && j.notices.length) ? j.notices.join(' • ') : 'Belum ada notifikasi penting pada tahun pelajaran ini.';
+        strip.appendChild(title); strip.appendChild(small);
+        messages.insertBefore(strip, messages.firstChild);
+      } catch (e) {}
+    }
+
+    async function loadHistory() {
+      if (!messages) return;
+      try {
+        const r = await fetch(base + '/ai/history', { credentials: 'same-origin', cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) return;
+        addMessage((j.rows || []).length ? 'Riwayat percakapan terakhir:' : 'Belum ada riwayat percakapan.', 'bot');
+        (j.rows || []).slice(-12).forEach(row => {
+          addMessage('Anda: ' + String(row.message || ''), 'bot');
+          addMessage(String(row.answer || ''), 'bot', row.actions || []);
+        });
+      } catch (e) {}
+    }
+
+    aiTools.addEventListener('click', () => loadHistory());
+    aiClear.addEventListener('click', async () => {
+      const ok = await confirmInApp('Hapus seluruh riwayat percakapan AI milik Anda?');
+      if (!ok) return;
+      try {
+        await fetch(base + '/ai/history/clear', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type':'application/json' }, body: '{}' });
+        messages && (messages.innerHTML = '<div class="ai-msg ai-msg-bot">Riwayat percakapan telah dihapus.</div>');
+        loadSummary();
+      } catch (e) {}
+    });
+
+    if (toggle) toggle.addEventListener('click', () => {
+      if (!panel || panel.hidden) setTimeout(loadSummary, 80);
+    });
+
     function addMessage(text, type, actions) {
       if (!messages) return;
       const div = document.createElement('div');
@@ -2690,11 +2754,30 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         group.className = 'ai-actions';
         actions.forEach(action => {
           if (!action || !/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(String(action.href || ''))) return;
-          const link = document.createElement('a');
-          link.className = 'ai-action';
-          link.href = base + action.href;
-          link.textContent = String(action.label || 'Buka menu').slice(0, 80);
-          group.appendChild(link);
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'ai-action';
+          button.textContent = String(action.label || 'Buka menu').slice(0, 80);
+          button.addEventListener('click', async () => {
+            const agreed = await confirmInApp('Buka menu "' + String(action.label || 'tujuan') + '"?');
+            if (!agreed) return;
+            try {
+              const draft = await fetch(base + '/ai/action/draft', {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
+                body: JSON.stringify({ href: action.href, label: action.label })
+              }).then(r => r.json()).catch(() => ({}));
+              if (!draft || !draft.ok) throw new Error(draft.error || 'Menu tidak dapat dibuka.');
+              const confirmed = await fetch(base + '/ai/action/confirm', {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
+                body: JSON.stringify({ token: draft.token })
+              }).then(r => r.json()).catch(() => ({}));
+              if (!confirmed || !confirmed.ok) throw new Error(confirmed.error || 'Konfirmasi gagal.');
+              window.location.assign(base + confirmed.href);
+            } catch (err) { addMessage(err && err.message ? err.message : 'Tindakan dibatalkan.', 'bot'); }
+          });
+          group.appendChild(button);
         });
         if (group.children.length) div.appendChild(group);
       }

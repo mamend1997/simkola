@@ -1368,6 +1368,17 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
             <div class="field"><label>Instruksi Sistem Asisten</label>
               <textarea name="ai_prompt" rows="4" maxlength="4000" placeholder="Instruksi perilaku asisten">${esc(ai.prompt)}</textarea>
               <div class="hint">Gunakan untuk membatasi topik dan gaya jawaban sesuai SOP sekolah.</div></div>
+            <div class="row3">
+              <div class="field"><label>Batas Pesan per Pengguna/Jam</label>
+                <input type="number" name="ai_limit_per_hour" value="${ai.limitPerHour}" min="1" max="300"></div>
+              <div class="field"><label>Riwayat Percakapan Disimpan</label>
+                <input type="number" name="ai_history_limit" value="${ai.historyLimit}" min="1" max="100"></div>
+              <div class="field"><label>Tools Data Read-Only</label>
+                <select name="ai_tools_aktif">
+                  <option value="1" ${ai.toolsAktif ? 'selected' : ''}>Aktif</option>
+                  <option value="0" ${ai.toolsAktif ? '' : 'selected'}>Nonaktif</option>
+                </select></div>
+            </div>
             ${ai.aktif && !ai.kunciTersimpan ? `<div class="alert warn">${ui.icon('alert')}<div>Asisten aktif, tetapi API key belum tersimpan. Widget akan menampilkan pesan konfigurasi.</div></div>` : ''}`;
           })()}
           <hr class="sep">
@@ -1478,6 +1489,9 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       if (b.ai_api_url !== undefined || b.ai_assistant_endpoint !== undefined) saas.set('ai_api_url', String(b.ai_api_url !== undefined ? b.ai_api_url : b.ai_assistant_endpoint || '').trim().slice(0, 500));
       if (b.ai_model !== undefined || b.ai_assistant_model !== undefined) saas.set('ai_model', String(b.ai_model !== undefined ? b.ai_model : b.ai_assistant_model || '').trim().slice(0, 120) || 'gpt-4o-mini');
       if (b.ai_prompt !== undefined || b.ai_assistant_prompt !== undefined) saas.set('ai_prompt', String(b.ai_prompt !== undefined ? b.ai_prompt : b.ai_assistant_prompt || '').trim().slice(0, 4000));
+      if (b.ai_limit_per_hour !== undefined) saas.set('ai_limit_per_hour', String(Math.max(1, Math.min(300, Number(b.ai_limit_per_hour) || 20))));
+      if (b.ai_history_limit !== undefined) saas.set('ai_history_limit', String(Math.max(1, Math.min(100, Number(b.ai_history_limit) || 30))));
+      if (b.ai_tools_aktif !== undefined) saas.set('ai_tools_aktif', /^(1|true|on|ya)$/i.test(String(b.ai_tools_aktif)) ? '1' : '0');
       if (String(b.ai_api_key || b.ai_assistant_api_key || '').trim()) saas.set('ai_api_key', String(b.ai_api_key || b.ai_assistant_api_key).trim());
       if (b.saas_base_url !== undefined) saas.set('saas_base_url', String(b.saas_base_url || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, ''));
       if (b.saas_server_ip !== undefined) saas.set('saas_server_ip', String(b.saas_server_ip || '').trim());

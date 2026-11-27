@@ -268,7 +268,10 @@ const DEFAULT_SETTINGS = {
   ai_api_url: '',
   ai_api_key: '',
   ai_model: 'gpt-4o-mini',
-  ai_prompt: 'Anda adalah asisten resmi SIMKOLA untuk membantu petugas sekolah menggunakan aplikasi keuangan sekolah. Jawab ringkas, praktis, dan tidak meminta rahasia. Jika tindakan memerlukan hak akses atau data sensitif, arahkan petugas ke menu yang sesuai.'
+  ai_prompt: 'Anda adalah asisten resmi SIMKOLA untuk membantu petugas sekolah menggunakan aplikasi keuangan sekolah. Jawab ringkas, praktis, dan tidak meminta rahasia. Jika tindakan memerlukan hak akses atau data sensitif, arahkan petugas ke menu yang sesuai.',
+  ai_limit_per_hour: '20',
+  ai_history_limit: '30',
+  ai_tools_aktif: '1'
 };
 function initSettings() {
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
@@ -323,6 +326,9 @@ function aiConfig() {
     endpoint,
     model: String(get('ai_model', '') || get('ai_assistant_model', '') || 'gpt-4o-mini').trim().slice(0, 120),
     prompt: String(get('ai_prompt', '') || get('ai_assistant_prompt', '') || '').trim().slice(0, 4000),
+    limitPerHour: Math.max(1, Math.min(300, Number(get('ai_limit_per_hour', '20')) || 20)),
+    historyLimit: Math.max(1, Math.min(100, Number(get('ai_history_limit', '30')) || 30)),
+    toolsAktif: String(get('ai_tools_aktif', '1')) === '1',
     kunciTersimpan: !!String(get('ai_api_key', '') || get('ai_assistant_api_key', '') || '').trim()
   };
 }

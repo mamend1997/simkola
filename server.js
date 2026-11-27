@@ -14,6 +14,7 @@ const storage = require('./storage');
 const queue = require('./queue');
 const bayariuran = require('./bayariuran');
 const publicUrl = require('./publicurl');
+const ai = require('./ai');
 
 const PORT = process.env.PORT || 3120;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -409,11 +410,39 @@ async function faviconResponse(pathname) {
   return { buf: Buffer.from(svg, 'utf8'), mime: 'image/svg+xml' };
 }
 
-/* ---------------- tahun ajaran aktif (dropdown header) ---------------- */
+/* ---------------- Bantuan AI ---------------- */
+get('/ai/summary', (req, res) => {
+  if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
+  ai.ensureTables(dbm);
+  const summary = ai.contextSummary(dbm, req);
+  const list = [];
+  if (summary.pendingTransaksi) list.push(`${summary.pendingTransaksi} transaksi menunggu persetujuan atau diproses`);
+  if (summary.pembayaranIuranAntrean) list.push(`${summary.pembayaranIuranAntrean} pembayaran iuran masih dalam antrean`);
+  if (summary.bkuTidakDitutup) list.push(`${summary.bkuTidakDitutup} periode BKU belum ditutup`);
+  if (summary.tunggakanIuran) list.push(`Total tunggakan iuran ${lib.formatMoney ? lib.formatMoney(summary.tunggakanIuran) : summary.tunggakanIuran}`);
+  res.json({ ok: true, summary, notices: list });
+});
+get('/ai/history', (req, res) => {
+  if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
+  const cfg = saas.aiConfig();
+  const rows = ai.historyList(dbm, req, cfg.historyLimit).map(r => ({
+    id: r.id, page: r.page, message: r.message, answer: r.answer,
+    actions: (() => { try { return JSON.parse(r.actions || '[]'); } catch (e) { return []; } })(),
+    tool_used: r.tool_used, created_at: r.created_at
+  }));
+  res.json({ ok: true, rows });
+});
+post('/ai/history/clear', (req, res) => {
+  if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
+  const deleted = ai.historyClear(dbm, req);
+  res.json({ ok: true, deleted });
+});
 post('/ai/chat', async (req, res) => {
   if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
   const cfg = saas.aiConfig();
   if (!cfg.aktif) return res.json({ ok: false, error: 'Bantuan AI belum diaktifkan.' }, 403);
+  const limit = ai.rateLimit(dbm, saas, req);
+  if (!limit.ok) return res.json({ ok: false, error: `Batas penggunaan AI tercapai (${limit.limit}/jam). Coba lagi setelah ${limit.resetText}.`, limit }, 429);
   let endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
   endpoint = String(endpoint).trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(endpoint)) endpoint = 'https://' + endpoint;
@@ -429,10 +458,22 @@ post('/ai/chat', async (req, res) => {
   const message = String(req.body && req.body.message || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
   if (!message) return res.json({ ok: false, error: 'Pesan belum diisi.' }, 400);
   const pageTitle = String(req.body && req.body.page || '').slice(0, 120);
+  ai.ensureTables(dbm);
+  const tool = cfg.toolsAktif ? ai.detectTools(dbm, req, message) : { type: '', text: '' };
+  const context = ai.contextSummary(dbm, req);
   const menuAllowed = ui.navCatalog().flatMap(g => g.items).filter(i => can(req.user, i.key, i.action || 'view'))
     .filter((i, idx, arr) => arr.findIndex(x => x.href === i.href) === idx);
   const menuText = menuAllowed.map(i => `${i.label}|${i.href}`).join('\n');
-  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). Jangan mengubah atau menghapus data; jangan menampilkan rahasia.\nJika jawaban mengarahkan ke satu atau beberapa menu, tambahkan tepat satu baris per menu dengan format [MENU]label|/alamat. Gunakan hanya alamat yang tercantum di katalog berikut:\n${menuText || '(Tidak ada menu yang dapat dibuka pengguna ini)'}.`;
+  const historyRows = ai.historyList(dbm, req, Math.min(8, cfg.historyLimit));
+  const historyText = historyRows.map(r => `P: ${String(r.message).slice(0, 500)}\nJ: ${String(r.answer).slice(0, 700)}`).join('\n');
+  const roleInstruction = req.user.role === 'kepala_sekolah'
+    ? 'Prioritaskan ringkasan manajerial, laporan, dan risiko. Jangan menyarankan perubahan data yang tidak diperlukan.'
+    : req.user.role === 'bendahara'
+      ? 'Prioritaskan BKU, kas, iuran, transaksi, dan verifikasi pembayaran.'
+      : req.user.role === 'super_admin'
+        ? 'Prioritaskan panduan konfigurasi SaaS, tenant, paket, dan operasi administrasi pusat.'
+        : 'Prioritaskan panduan penggunaan modul sesuai hak akses pengguna.';
+  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nTahun Pelajaran: ${context.ta}; siswa aktif: ${context.siswaAktif}; transaksi pending: ${context.pendingTransaksi}; pembayaran iuran antrean: ${context.pembayaranIuranAntrean}; periode BKU belum ditutup: ${context.bkuTidakDitutup}.\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). ${roleInstruction} Jangan mengubah atau menghapus data; jangan menampilkan rahasia.\n${tool.type ? `Hasil tool ${tool.type}:\n${tool.text}` : 'Tidak ada tool khusus digunakan.'}\nRiwayat percakapan ringkas:\n${historyText || '(belum ada)'}\nJika jawaban mengarahkan ke satu atau beberapa menu, tambahkan tepat satu baris per menu dengan format [MENU]label|/alamat. Gunakan hanya alamat yang tercantum di katalog berikut:\n${menuText || '(Tidak ada menu yang dapat dibuka pengguna ini)'}.`;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 45000);
@@ -474,6 +515,12 @@ post('/ai/chat', async (req, res) => {
         : String(errObj && (errObj.message || errObj.type) || data && (data.message || data.detail || data.response) || '').trim();
       if (!detail && typeof data === 'string') detail = data;
       if (!detail) detail = 'Gateway AI menolak permintaan.';
+      if (tool.type && tool.text) {
+        const fallbackActions = menuAllowed.slice(0, 3).map(i => ({ label: i.label, href: i.href }));
+        ai.historyAdd(dbm, req, { page: pageTitle, message, answer: tool.text, actions: fallbackActions, toolUsed: tool.type });
+        try { dbm.logAudit(req.user, 'CHAT AI FALLBACK', 'ai', `Tool ${tool.type}; gateway HTTP ${response.status}`); } catch (e) {}
+        return res.json({ ok: true, fallback: true, answer: tool.text, actions: fallbackActions, tool: tool.type, limit });
+      }
       detail = detail.replace(/\b(?:sk-[A-Za-z0-9_-]+|[A-Za-z0-9_-]{32,})\b/g, '[disamarkan]').replace(/[\r\n]+/g, ' ').slice(0, 300);
       return res.json({ ok: false, error: `Gateway AI (${response.status}): ${detail}` }, response.status >= 400 && response.status < 600 ? response.status : 502);
     }
@@ -495,11 +542,45 @@ post('/ai/chat', async (req, res) => {
       return false;
     }).join('\n').trim();
 
-    return res.json({ ok: true, answer: (cleanAnswer || answer).slice(0, 12000), actions: actions.slice(0, 4) });
+    const finalAnswer = (cleanAnswer || answer).slice(0, 12000);
+    ai.historyAdd(dbm, req, { page: pageTitle, message, answer: finalAnswer, actions: actions.slice(0, 4), toolUsed: tool.type });
+    try { dbm.logAudit(req.user, 'CHAT AI', 'ai', `Halaman: ${pageTitle || '-'}; tool: ${tool.type || '-'}; pesan ${message.slice(0, 120)}`); } catch (e) {}
+    return res.json({ ok: true, answer: finalAnswer, actions: actions.slice(0, 4), tool: tool.type || null, limit });
   } catch (e) {
+    if (tool.type && tool.text) {
+      const fallbackActions = menuAllowed.slice(0, 3).map(i => ({ label: i.label, href: i.href }));
+      ai.historyAdd(dbm, req, { page: pageTitle, message, answer: tool.text, actions: fallbackActions, toolUsed: tool.type });
+      try { dbm.logAudit(req.user, 'CHAT AI FALLBACK', 'ai', `Tool ${tool.type}; gateway tidak terhubung`); } catch (e2) {}
+      return res.json({ ok: true, fallback: true, answer: tool.text, actions: fallbackActions, tool: tool.type, limit });
+    }
     const msg = e && e.name === 'AbortError' ? 'Permintaan ke AI habis waktu.' : 'Tidak dapat terhubung ke layanan AI.';
     return res.json({ ok: false, error: msg }, 502);
   }
+});
+
+post('/ai/action/draft', (req, res) => {
+  if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
+  const href = String(req.body && req.body.href || '').trim();
+  const label = String(req.body && req.body.label || '').trim().slice(0, 80);
+  const allowed = ui.navCatalog().flatMap(g => g.items).filter(i => can(req.user, i.key, i.action || 'view'));
+  const item = allowed.find(i => i.href === href);
+  if (!item) return res.json({ ok: false, error: 'Menu tidak diizinkan atau tidak tersedia.' }, 403);
+  const token = ai.draftToken(dbm, req, { action: 'open_page', data: { href: item.href, label: label || item.label } });
+  return res.json({ ok: true, confirm: true, token, label: label || item.label, href: item.href });
+});
+post('/ai/action/confirm', (req, res) => {
+  if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
+  const token = String(req.body && req.body.token || '').trim();
+  const draft = ai.draftGet(dbm, req, token);
+  if (!draft || draft.status !== 'pending' || draft.action !== 'open_page') return res.json({ ok: false, error: 'Draft tindakan tidak ditemukan atau sudah kedaluwarsa.' }, 404);
+  let payload = {};
+  try { payload = JSON.parse(draft.payload || '{}'); } catch (e) { payload = {}; }
+  const href = String(payload.href || '').trim();
+  const allowed = ui.navCatalog().flatMap(g => g.items).filter(i => can(req.user, i.key, i.action || 'view'));
+  if (!allowed.some(i => i.href === href)) return res.json({ ok: false, error: 'Menu tidak diizinkan.' }, 403);
+  dbm.db.prepare("UPDATE ai_action_draft SET status='confirmed' WHERE token=?").run(token);
+  try { dbm.logAudit(req.user, 'KONFIRMASI NAVIGASI AI', 'ai', `Tombol menuju ${href}`); } catch (e) {}
+  return res.json({ ok: true, href });
 });
 
 post('/ta/pilih', (req, res) => {
