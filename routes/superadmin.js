@@ -243,10 +243,6 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
       saas.authRecord(identity, true);
     } else {
       saas.authRecord(identity, true);
-      saas.mfaStart(u.id);
-      const setupToken = saas.createSession({ userId: u.id, kind: 'saas_mfa_setup', expiresMinutes: 10 });
-      res.set('Set-Cookie', `${MFA_COOKIE}=${setupToken}; Path=/super-admin; HttpOnly; SameSite=Lax; Max-Age=600${secureCookie(req)}`);
-      return res.redirect(req.BASE + '/super-admin/mfa-setup');
     }
     const token = saas.createSession({ userId: u.id, kind: 'saas' });
     S.prepare('UPDATE saas_users SET last_login=? WHERE id=?').run(nowStamp(), u.id);
