@@ -2656,6 +2656,80 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
   })();
 
   /* ===================================================================
+     Bantuan AI melayang
+     Widget hanya ada bila diaktifkan Super Admin; pertanyaan dikirim ke route
+     server agar API key tidak pernah tersedia di browser.
+     =================================================================== */
+  (function aiAssistant() {
+    const host = document.querySelector('[data-ai-assistant]');
+    if (!host) return;
+    const panel = host.querySelector('[data-ai-panel]');
+    const toggle = host.querySelector('[data-ai-toggle]');
+    const close = host.querySelector('[data-ai-close]');
+    const form = host.querySelector('[data-ai-form]');
+    const input = form ? form.querySelector('input[name="message"]') : null;
+    const messages = host.querySelector('[data-ai-messages]');
+    const base = host.dataset.aiBase || '';
+
+    function setOpen(open) {
+      if (!panel) return;
+      panel.hidden = !open;
+      host.classList.toggle('open', open);
+      if (open && input) setTimeout(() => input.focus(), 40);
+    }
+    if (toggle) toggle.addEventListener('click', () => setOpen(panel && panel.hidden));
+    if (close) close.addEventListener('click', () => setOpen(false));
+
+    function addMessage(text, type) {
+      if (!messages) return;
+      const div = document.createElement('div');
+      div.className = 'ai-msg ' + (type === 'user' ? 'ai-msg-user' : 'ai-msg-bot');
+      div.textContent = text;
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+      return div;
+    }
+
+    if (form) form.addEventListener('submit', async e => {
+      e.preventEvent?.();
+      e.preventDefault();
+      const text = input ? input.value.trim() : '';
+      if (!text) return;
+      input.value = '';
+      input.disabled = true;
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = true;
+      addMessage(text, 'user');
+      const wait = addMessage('Sedang menyiapkan jawaban…', 'bot');
+      if (wait) wait.classList.add('ai-loading');
+      try {
+        const r = await fetch(base + '/ai/chat', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ message: text, page: document.title || '' })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (wait) wait.remove();
+        if (!r.ok || !j.ok) throw new Error(j.error || 'Bantuan AI sedang tidak tersedia.');
+        addMessage(j.answer || 'Tidak ada jawaban.', 'bot');
+      } catch (err) {
+        if (wait) wait.remove();
+        addMessage(err && err.message ? err.message : 'Bantuan AI sedang tidak tersedia.', 'bot');
+      } finally {
+        input.disabled = false;
+        if (submit) submit.disabled = false;
+        input.focus();
+      }
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && panel && !panel.hidden) setOpen(false);
+    });
+  })();
+
+  /* ===================================================================
      Combobox "Nama Penerima / Penyetor"
      Pilih nama dari master pegawai (dropdown dengan pencarian) ATAU ketik
      manual — nilainya tetap teks bebas. Data dari <script id="pihakData">.

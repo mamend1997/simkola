@@ -261,7 +261,14 @@ const DEFAULT_SETTINGS = {
   mail_to: '', mail_host: '', mail_port: '587', mail_secure: '0',
   mail_from: '', mail_user: '', mail_pass: '',
   backup_slots: '06:00,15:00',
-  backup_last: ''
+  backup_last: '',
+  // bantuan AI melayang pada aplikasi sekolah
+  ai_aktif: '0',
+  ai_nama: 'Asisten SIMKOLA',
+  ai_api_url: '',
+  ai_api_key: '',
+  ai_model: 'gpt-4o-mini',
+  ai_prompt: 'Anda adalah asisten resmi SIMKOLA untuk membantu petugas sekolah menggunakan aplikasi keuangan sekolah. Jawab ringkas, praktis, dan tidak meminta rahasia. Jika tindakan memerlukan hak akses atau data sensitif, arahkan petugas ke menu yang sesuai.'
 };
 function initSettings() {
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
@@ -306,6 +313,19 @@ function priceOf(durasi) {
 }
 function defaultPriceMonth() { return Number(get('harga_bulan', '150000') || 0); }
 function trialDays() { return Math.max(0, Number(get('trial_hari', '30') || 0)); }
+
+/** Konfigurasi Bantuan AI untuk aplikasi sekolah. Kunci API sengaja tidak dikirim ke layout HTML. */
+function aiConfig() {
+  const endpoint = String(get('ai_api_url', '') || get('ai_assistant_endpoint', '') || '').trim();
+  return {
+    aktif: String(get('ai_aktif', '0')) === '1' || String(get('ai_assistant_aktif', '0')) === '1',
+    nama: String(get('ai_nama', '') || get('ai_assistant_name', '') || 'Asisten SIMKOLA').trim().slice(0, 40),
+    endpoint,
+    model: String(get('ai_model', '') || get('ai_assistant_model', '') || 'gpt-4o-mini').trim().slice(0, 120),
+    prompt: String(get('ai_prompt', '') || get('ai_assistant_prompt', '') || '').trim().slice(0, 4000),
+    kunciTersimpan: !!String(get('ai_api_key', '') || get('ai_assistant_api_key', '') || '').trim()
+  };
+}
 
 /* ---------------- daftar fitur (feature flagging) ---------------- */
 const FEATURES = [
@@ -1629,7 +1649,7 @@ module.exports = {
   db: S,
   C: S,
   FEATURES, FEATURE_MAP, PATH_FEATURES, PAKET, PAY_STATUS, SESSION_DAYS,
-  get, set, settings, appName, appSub, appLogo, tema, priceOf, defaultPriceMonth, trialDays,
+  get, set, settings, appName, appSub, appLogo, tema, priceOf, defaultPriceMonth, trialDays, aiConfig,
   featureDefaults, tenantFeatures, enabledKeys, blockedFeature, parseFeatures,
   DEFAULT_PACKAGES, packageRows, packageByKode, packageById, defaultPackage, packageLabels, packagePrice,
   packageSave, packageDelete, packageSetDefault, seedPackages, setPackage,

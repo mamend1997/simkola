@@ -119,6 +119,7 @@ module.exports = ({ get, post, dbm, lib, ui, saas, queue, uploadMedia, refreshPo
     const q = req.query;
     const ok = q.get('ok'), err = q.get('err');
     const stats = saas.stats();
+    const ai = saas.aiConfig();
     const nav = MENU.map(m => `<a href="${base}${m.href}" class="sa-nav${active === m.href ? ' on' : ''}">${ui.icon(m.icon)}<span>${esc(m.label)}</span>
       ${m.href === '/super-admin/pembayaran' && stats.menunggu ? `<b class="sa-pill">${stats.menunggu}</b>` : ''}</a>`).join('');
     return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -173,6 +174,14 @@ ${ui.fontLinks()}
     ${content}
   </main>
 </div>
+${ai.aktif ? `<div class="ai-assistant" id="aiAssistant" data-ai-assistant data-ai-name="${esc(ai.nama)}" data-ai-base="${esc(base)}">
+  <button type="button" class="ai-launch" data-ai-toggle aria-label="Buka bantuan AI" title="Bantuan AI">${ui.icon('bot')}<span class="ai-launch-label">Bantuan AI</span></button>
+  <section class="ai-panel" data-ai-panel aria-label="Bantuan AI" hidden>
+    <header class="ai-head"><div class="ai-avatar">${ui.icon('bot')}</div><div><b data-ai-title>${esc(ai.nama)}</b><span>Siap membantu petugas</span></div><button type="button" class="ai-close" data-ai-close aria-label="Tutup">${ui.icon('x')}</button></header>
+    <div class="ai-messages" data-ai-messages role="log" aria-live="polite"><div class="ai-msg ai-msg-bot">Halo! Apa yang dapat saya bantu terkait halaman ini?</div></div>
+    <form class="ai-compose" data-ai-form><input type="text" name="message" maxlength="4000" autocomplete="off" placeholder="Tulis pertanyaan…" required><button type="submit" class="ai-send" aria-label="Kirim" title="Kirim">${ui.icon('send')}</button></form>
+  </section>
+</div>` : ''}
 <script src="${base}/assets/app.js?v=${ui.ASSET_V}" defer></script>
 <script>
 document.querySelectorAll('[data-proof]').forEach(function(el){
@@ -1343,6 +1352,35 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
             <div class="hint" style="margin-bottom:4px">Maksimal ${otp.maxPerJam}× kirim per nomor per jam &amp; 5 percobaan verifikasi per kode.</div>`;
           })()}
           <hr class="sep">
+          ${(() => {
+            const ai = saas.aiConfig();
+            return `<div class="card-head" style="padding:0 0 8px"><div><h3>Bantuan AI Melayang</h3>
+              <div class="sub">Tombol asisten di sudut aplikasi sekolah, dilayani lewat API server-side</div></div></div>
+            <div class="row2">
+              <div class="field"><label>Status Bantuan AI</label>
+                <select name="ai_aktif">
+                  <option value="1" ${ai.aktif ? 'selected' : ''}>Aktif</option>
+                  <option value="0" ${ai.aktif ? '' : 'selected'}>Nonaktif</option>
+                </select></div>
+              <div class="field"><label>Nama Asisten</label>
+                <input type="text" name="ai_nama" value="${esc(ai.nama)}" maxlength="40" placeholder="Asisten SIMKOLA"></div>
+            </div>
+            <div class="row2">
+              <div class="field"><label>Endpoint API (OpenAI-compatible)</label>
+                <input type="url" name="ai_api_url" value="${esc(ai.endpoint)}" placeholder="https://api.openai.com/v1/chat/completions">
+                <div class="hint">Kosongkan untuk memakai endpoint OpenAI bawaan.</div></div>
+              <div class="field"><label>Model</label>
+                <input type="text" name="ai_model" value="${esc(ai.model)}" maxlength="120" placeholder="gpt-4o-mini"></div>
+            </div>
+            <div class="field"><label>API Key</label>
+              <input type="password" name="ai_api_key" value="" placeholder="${ai.kunciTersimpan ? 'Kunci tersimpan — kosongkan bila tidak diganti' : 'Masukkan API key'}" autocomplete="new-password">
+              <div class="hint">Kunci disimpan di control plane dan <b>tidak dikirim ke browser</b>.</div></div>
+            <div class="field"><label>Instruksi Sistem Asisten</label>
+              <textarea name="ai_prompt" rows="4" maxlength="4000" placeholder="Instruksi perilaku asisten">${esc(ai.prompt)}</textarea>
+              <div class="hint">Gunakan untuk membatasi topik dan gaya jawaban sesuai SOP sekolah.</div></div>
+            ${ai.aktif && !ai.kunciTersimpan ? `<div class="alert warn">${ui.icon('alert')}<div>Asisten aktif, tetapi API key belum tersimpan. Widget akan menampilkan pesan konfigurasi.</div></div>` : ''}`;
+          })()}
+          <hr class="sep">
           <div class="card-head" style="padding:0 0 8px"><div><h3>Domain, Subdomain &amp; Server</h3>
             <div class="sub">Dipakai pada petunjuk DNS custom domain sekolah</div></div></div>
           <div class="row2">
@@ -1442,6 +1480,15 @@ document.addEventListener('click', function(e){ if(e.target.id==='lb'||e.target.
         saas.set('daftar_otp_demo', /^(1|true|on|ya)$/i.test(String(last)) ? '1' : '0');
       }
       if (b.wa_admin_number !== undefined) saas.set('wa_admin_number', String(b.wa_admin_number || '').trim());
+      if (b.ai_aktif !== undefined || b.ai_assistant_aktif !== undefined) {
+        const raw = b.ai_aktif !== undefined ? b.ai_aktif : b.ai_assistant_aktif;
+        saas.set('ai_aktif', /^(1|true|on|ya)$/i.test(String(raw)) ? '1' : '0');
+      }
+      if (b.ai_nama !== undefined || b.ai_assistant_name !== undefined) saas.set('ai_nama', String(b.ai_nama !== undefined ? b.ai_nama : b.ai_assistant_name || '').trim().slice(0, 40) || 'Asisten SIMKOLA');
+      if (b.ai_api_url !== undefined || b.ai_assistant_endpoint !== undefined) saas.set('ai_api_url', String(b.ai_api_url !== undefined ? b.ai_api_url : b.ai_assistant_endpoint || '').trim().slice(0, 500));
+      if (b.ai_model !== undefined || b.ai_assistant_model !== undefined) saas.set('ai_model', String(b.ai_model !== undefined ? b.ai_model : b.ai_assistant_model || '').trim().slice(0, 120) || 'gpt-4o-mini');
+      if (b.ai_prompt !== undefined || b.ai_assistant_prompt !== undefined) saas.set('ai_prompt', String(b.ai_prompt !== undefined ? b.ai_prompt : b.ai_assistant_prompt || '').trim().slice(0, 4000));
+      if (String(b.ai_api_key || b.ai_assistant_api_key || '').trim()) saas.set('ai_api_key', String(b.ai_api_key || b.ai_assistant_api_key).trim());
       if (b.saas_base_url !== undefined) saas.set('saas_base_url', String(b.saas_base_url || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, ''));
       if (b.saas_server_ip !== undefined) saas.set('saas_server_ip', String(b.saas_server_ip || '').trim());
       if (b.portal_cname_target !== undefined) saas.set('portal_cname_target', String(b.portal_cname_target || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, ''));

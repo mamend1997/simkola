@@ -320,7 +320,8 @@ function page(req, res, { title, sub = '', active, content }) {
     announcements: notices,
     // notifikasi lonceng (pembayaran portal, dsb) sesuai role pengguna
     notifs: (() => { try { bayariuran.ensureTables(dbm); return dbm.notifList(req.user.role, { limit: 10 }); } catch (e) { return []; } })(),
-    notifCount: (() => { try { return dbm.notifCount(req.user.role); } catch (e) { return 0; } })()
+    notifCount: (() => { try { return dbm.notifCount(req.user.role); } catch (e) { return 0; } })(),
+    ai: saas.aiConfig()
   }));
 }
 
@@ -409,6 +410,50 @@ async function faviconResponse(pathname) {
 }
 
 /* ---------------- tahun ajaran aktif (dropdown header) ---------------- */
+post('/ai/chat', async (req, res) => {
+  if (!req.user) return res.json({ ok: false, error: 'Silakan masuk kembali.' }, 401);
+  const cfg = saas.aiConfig();
+  if (!cfg.aktif) return res.json({ ok: false, error: 'Bantuan AI belum diaktifkan.' }, 403);
+  const endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
+  const apiKey = String(saas.get('ai_api_key', '') || saas.get('ai_assistant_api_key', '') || '').trim();
+  if (!apiKey) return res.json({ ok: false, error: 'API key bantuan AI belum dikonfigurasi.' }, 503);
+  const message = String(req.body && req.body.message || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
+  if (!message) return res.json({ ok: false, error: 'Pesan belum diisi.' }, 400);
+  const pageTitle = String(req.body && req.body.page || '').slice(0, 120);
+  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). Jangan mengubah atau menghapus data; jangan menampilkan rahasia.`;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 45000);
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        body: JSON.stringify({
+          model: cfg.model,
+          messages: [{ role: 'system', content: system }, { role: 'user', content: message }],
+          temperature: 0.3,
+          max_tokens: 700
+        }),
+        signal: ctrl.signal
+      });
+    } finally { clearTimeout(timer); }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = String(data.error && (data.error.message || data.error) || data.message || 'Gateway AI menolak permintaan.')
+        .replace(/\b(?:sk-[A-Za-z0-9_-]+|[A-Za-z0-9_-]{32,})\b/g, '[disamarkan]').slice(0, 300);
+      return res.json({ ok: false, error: detail }, response.status || 502);
+    }
+    const answer = String(data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
+      || data.output_text || data.response || '').trim();
+    if (!answer) return res.json({ ok: false, error: 'AI tidak mengembalikan jawaban.' }, 502);
+    return res.json({ ok: true, answer: answer.slice(0, 12000) });
+  } catch (e) {
+    const msg = e && e.name === 'AbortError' ? 'Permintaan ke AI habis waktu.' : 'Tidak dapat terhubung ke layanan AI.';
+    return res.json({ ok: false, error: msg }, 502);
+  }
+});
+
 post('/ta/pilih', (req, res) => {
   if (!req.user) return res.redirect(req.BASE + '/login');
   const id = Number(req.body.ta || 0);
@@ -666,7 +711,7 @@ const ALWAYS_ALLOWED = ['/info-layanan', '/perpanjang', '/akun', '/logout', '/lo
  */
 const CSRF_EXEMPT = new Set([
   '/api/webhook/kasera', '/pay/webhook/kasera',
-  '/pay/callback', '/portal/pay/callback'
+  '/pay/callback', '/portal/pay/callback', '/ai/chat'
 ]);
 function isCsrfExempt(pathname) { return CSRF_EXEMPT.has(String(pathname || '')); }
 function hasOriginMetadata(req) {

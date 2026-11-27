@@ -146,6 +146,7 @@ const ICONS = {
   layers: '<path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
   graduation: '<path d="m22 9-10-5L2 9l10 5 10-5Z"/><path d="M6 11.5V17c0 1.5 2.7 3 6 3s6-1.5 6-3v-5.5"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
+  bot: '<rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/><path d="M2 12v3M22 12v3"/>',
   link: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
   coins: '<ellipse cx="9" cy="6" rx="6" ry="3"/><path d="M3 6v5c0 1.7 2.7 3 6 3s6-1.3 6-3V6"/><path d="M3 11v5c0 1.7 2.7 3 6 3"/><ellipse cx="16" cy="15" rx="5" ry="2.5"/><path d="M11 15v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/>',
   qris: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14h1M14 20h1M18 18h3v3h-3z"/>',
@@ -363,7 +364,7 @@ function navOrdered(cfg) {
   return groups;
 }
 
-function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appSub = '', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light', notifs = [], notifCount = 0 }) {
+function layout({ title, sub = '', user, active, base = '', content, query, roleLabel, pendingCount = 0, can, logoStamp = '', taList = [], taId = null, path = '', navHidden = '', navCfg = null, tema = '', appName = 'SIMKEU Sekolah', appSub = '', appLogo = '', appLogoSmall = '', features = null, tenantInfo = null, impersonate = null, announcements = null, mode = 'light', notifs = [], notifCount = 0, ai = null }) {
   // sub-judul di bawah nama aplikasi ("Sistem Keuangan") — dapat diubah sekolah & Super Admin
   const brandSub = String(appSub || '').trim() || 'Sistem Keuangan';
   // tahun pelajaran yang sedang dibuka (untuk peringatan tanggal transaksi di app.js)
@@ -507,6 +508,25 @@ ${Array.isArray(announcements) ? announcements.filter(a => a.tipe === 'popup').m
 })))};
   window.__TA_SESI = ${JSON.stringify(taNow ? { id: taNow.id, nama: taNow.nama } : null)};
 </script>
+${ai && ai.aktif ? `<div class="ai-assistant" id="aiAssistant" data-ai-assistant data-ai-name="${esc(ai.nama || 'Asisten SIMKOLA')}" data-ai-base="${esc(base)}">
+  <button type="button" class="ai-launch" data-ai-toggle aria-label="Buka bantuan AI" title="Bantuan AI">
+    ${icon('bot')}<span class="ai-launch-label">Bantuan AI</span>
+  </button>
+  <section class="ai-panel" data-ai-panel aria-label="Bantuan AI" hidden>
+    <header class="ai-head">
+      <div class="ai-avatar">${icon('bot')}</div>
+      <div><b data-ai-title>${esc(ai.nama || 'Asisten SIMKOLA')}</b><span>Siap membantu petugas</span></div>
+      <button type="button" class="ai-close" data-ai-close aria-label="Tutup">${icon('x')}</button>
+    </header>
+    <div class="ai-messages" data-ai-messages role="log" aria-live="polite">
+      <div class="ai-msg ai-msg-bot">Halo! Apa yang dapat saya bantu terkait halaman ini?</div>
+    </div>
+    <form class="ai-compose" data-ai-form>
+      <input type="text" name="message" maxlength="4000" autocomplete="off" placeholder="Tulis pertanyaan…" required>
+      <button type="submit" class="ai-send" aria-label="Kirim" title="Kirim">${icon('send')}</button>
+    </form>
+  </section>
+</div>` : ''}
 <script src="${base}/assets/app.js?v=${ASSET_V}" defer></script>
 </body></html>`;
 }
