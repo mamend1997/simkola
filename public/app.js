@@ -2680,11 +2680,24 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     if (toggle) toggle.addEventListener('click', () => setOpen(panel && panel.hidden));
     if (close) close.addEventListener('click', () => setOpen(false));
 
-    function addMessage(text, type) {
+    function addMessage(text, type, actions) {
       if (!messages) return;
       const div = document.createElement('div');
       div.className = 'ai-msg ' + (type === 'user' ? 'ai-msg-user' : 'ai-msg-bot');
       div.textContent = text;
+      if (type !== 'user' && Array.isArray(actions) && actions.length) {
+        const group = document.createElement('div');
+        group.className = 'ai-actions';
+        actions.forEach(action => {
+          if (!action || !/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(String(action.href || ''))) return;
+          const link = document.createElement('a');
+          link.className = 'ai-action';
+          link.href = base + action.href;
+          link.textContent = String(action.label || 'Buka menu').slice(0, 80);
+          group.appendChild(link);
+        });
+        if (group.children.length) div.appendChild(group);
+      }
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
       return div;
@@ -2713,7 +2726,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         const j = await r.json().catch(() => ({}));
         if (wait) wait.remove();
         if (!r.ok || !j.ok) throw new Error(j.error || 'Bantuan AI sedang tidak tersedia.');
-        addMessage(j.answer || 'Tidak ada jawaban.', 'bot');
+        addMessage(j.answer || 'Tidak ada jawaban.', 'bot', j.actions || []);
       } catch (err) {
         if (wait) wait.remove();
         addMessage(err && err.message ? err.message : 'Bantuan AI sedang tidak tersedia.', 'bot');

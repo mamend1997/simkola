@@ -429,7 +429,10 @@ post('/ai/chat', async (req, res) => {
   const message = String(req.body && req.body.message || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
   if (!message) return res.json({ ok: false, error: 'Pesan belum diisi.' }, 400);
   const pageTitle = String(req.body && req.body.page || '').slice(0, 120);
-  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). Jangan mengubah atau menghapus data; jangan menampilkan rahasia.`;
+  const menuAllowed = ui.navCatalog().flatMap(g => g.items).filter(i => can(req.user, i.key, i.action || 'view'))
+    .filter((i, idx, arr) => arr.findIndex(x => x.href === i.href) === idx);
+  const menuText = menuAllowed.map(i => `${i.label}|${i.href}`).join('\n');
+  const system = `${cfg.prompt || 'Anda adalah asisten resmi SIMKOLA yang membantu petugas sekolah.'}\nKonteks halaman saat ini: ${pageTitle || '-'}\nPengguna: ${String(req.user.nama || 'Petugas')} (${String(req.user.role || '')}). Jangan mengubah atau menghapus data; jangan menampilkan rahasia.\nJika jawaban mengarahkan ke satu atau beberapa menu, tambahkan tepat satu baris per menu dengan format [MENU]label|/alamat. Gunakan hanya alamat yang tercantum di katalog berikut:\n${menuText || '(Tidak ada menu yang dapat dibuka pengguna ini)'}.`;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 45000);
@@ -479,7 +482,20 @@ post('/ai/chat', async (req, res) => {
     if (!answer) answer = data && (data.output_text || data.response || (typeof data.message === 'string' ? data.message : ''));
     answer = String(answer || '').trim();
     if (!answer) return res.json({ ok: false, error: 'AI tidak mengembalikan jawaban.' }, 502);
-    return res.json({ ok: true, answer: answer.slice(0, 12000) });
+
+    const allowedMap = new Map(menuAllowed.map(i => [i.href, i.label]));
+    const actions = [];
+    const cleanAnswer = answer.split(/\r?\n/).filter(line => {
+      const match = /^\[MENU\]([^|\n]+)\|([^\s]+)\s*$/.exec(line.trim());
+      if (!match) return true;
+      const href = match[2];
+      if (!/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(href) || !allowedMap.has(href)) return true;
+      const label = match[1].trim().slice(0, 80) || allowedMap.get(href);
+      if (!actions.some(a => a.href === href)) actions.push({ label, href });
+      return false;
+    }).join('\n').trim();
+
+    return res.json({ ok: true, answer: (cleanAnswer || answer).slice(0, 12000), actions: actions.slice(0, 4) });
   } catch (e) {
     const msg = e && e.name === 'AbortError' ? 'Permintaan ke AI habis waktu.' : 'Tidak dapat terhubung ke layanan AI.';
     return res.json({ ok: false, error: msg }, 502);
