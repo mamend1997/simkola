@@ -1,6 +1,7 @@
 node_modules/
 data/
 storage/
+Backup_*.sql
 *.sqlite
 *.db
 *.sqlite-wal

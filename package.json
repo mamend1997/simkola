@@ -8,9 +8,12 @@
     "test": "node dev-tests/hardening.js",
     "test:hardening": "node dev-tests/hardening.js"
   },
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
     "better-sqlite3": "12.9.0",
+    "mysql2": "^3.24.6",
     "qrcode": "1.5.4"
   }
 }
