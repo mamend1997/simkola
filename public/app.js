@@ -2754,18 +2754,53 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       }
     }
 
-    aiTools.addEventListener('click', () => loadHistory(false));
-    loadHistory(false);
+    aiTools.addEventListener('click', () => loadHistory(true));
+    let aiAlreadyCleared = false;
+    try { aiAlreadyCleared = sessionStorage.getItem('simkeu:ai-chat-cleared') === '1'; } catch (e) {}
+    if (aiAlreadyCleared) {
+      aiCacheSave([]);
+      messages.innerHTML = '<div class="ai-msg ai-msg-bot">Halo! Apa yang dapat saya bantu terkait halaman ini?</div>';
+    } else {
+      loadHistory(false);
+    }
 
     aiClear.addEventListener('click', async () => {
-      const ok = await confirmInApp('Hapus seluruh riwayat percakapan AI milik Anda?');
-      if (!ok) return;
+      aiClear.disabled = true;
+      aiClear.textContent = 'Menghapus…';
       try {
-        await fetch(base + '/ai/history/clear', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type':'application/json' }, body: '{}' });
+        let deleted = 0;
+        try {
+          const r = await fetch(base + '/ai/history/clear', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: '{}'
+          });
+          const j = await r.json().catch(() => ({}));
+          deleted = j.deleted || 0;
+          if (!r.ok || !j.ok) throw new Error(j.error || 'Riwayat server gagal dihapus.');
+        } catch (e) {
+          throw e;
+        }
+
         aiCacheSave([]);
-        messages && (messages.innerHTML = '<div class="ai-msg ai-msg-bot">Riwayat percakapan telah dihapus.</div>');
+        try {
+          Object.keys(sessionStorage).filter(k => k.indexOf('simkeu:ai-chat:') === 0).forEach(k => sessionStorage.removeItem(k));
+          sessionStorage.setItem('simkeu:ai-chat-cleared', '1');
+        } catch (e) {}
+        messages.innerHTML = '<div class="ai-msg ai-msg-bot">Riwayat percakapan berhasil dihapus.' + (deleted ? ' (' + deleted + ' data).' : '') + '</div>';
+        aiClear.textContent = 'Terhapus';
+        setTimeout(() => { aiClear.textContent = 'Hapus'; aiClear.disabled = false; }, 1200);
         loadSummary();
-      } catch (e) {}
+      } catch (e) {
+        aiClear.textContent = 'Coba Lagi';
+        aiClear.disabled = false;
+        if (messages) {
+          const div = document.createElement('div');
+          div.className = 'ai-msg ai-msg-bot';
+          div.textContent = e && e.message ? e.message : 'Riwayat belum berhasil dihapus.';
+          messages.appendChild(div);
+        }
+      }
     });
 
     if (toggle) toggle.addEventListener('click', () => {
