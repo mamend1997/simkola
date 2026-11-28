@@ -2695,6 +2695,14 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
     aiClear.title = 'Hapus riwayat percakapan saya';
     if (close) aiHead && aiHead.insertBefore(aiClear, close); else aiHead && aiHead.appendChild(aiClear);
 
+    const aiCacheKey = 'simkeu:ai-chat:' + (base || '/');
+    const aiCacheLoad = () => {
+      try { return JSON.parse(sessionStorage.getItem(aiCacheKey) || '[]'); } catch (e) { return []; }
+    };
+    const aiCacheSave = rows => {
+      try { sessionStorage.setItem(aiCacheKey, JSON.stringify((Array.isArray(rows) ? rows : []).slice(-30))); } catch (e) {}
+    };
+
     async function loadSummary() {
       if (!messages) return;
       let old = host.querySelector('[data-ai-summary]');
@@ -2715,26 +2723,46 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       } catch (e) {}
     }
 
-    async function loadHistory() {
+    async function loadHistory(forceServer) {
       if (!messages) return;
+      const cached = aiCacheLoad();
+      if (cached.length && !forceServer) {
+        cached.forEach(row => {
+          if (row.type === 'user') addMessage(row.text, 'user', [], [], false);
+          else addMessage(row.text, 'bot', row.actions || [], row.guides || [], false);
+        });
+        return;
+      }
       try {
         const r = await fetch(base + '/ai/history', { credentials: 'same-origin', cache: 'no-store' });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.ok) return;
-        addMessage((j.rows || []).length ? 'Riwayat percakapan terakhir:' : 'Belum ada riwayat percakapan.', 'bot');
+        messages.innerHTML = '';
+        const rowsCache = [];
         (j.rows || []).slice(-12).forEach(row => {
-          addMessage('Anda: ' + String(row.message || ''), 'bot');
-          addMessage(String(row.answer || ''), 'bot', row.actions || []);
+          rowsCache.push({ type: 'user', text: String(row.message || '') });
+          rowsCache.push({ type: 'bot', text: String(row.answer || ''), actions: row.actions || [], guides: row.guides || [] });
+          addMessage('Anda: ' + String(row.message || ''), 'bot', [], [], false);
+          addMessage(String(row.answer || ''), 'bot', row.actions || [], row.guides || [], false);
         });
-      } catch (e) {}
+        aiCacheSave(rowsCache);
+      } catch (e) {
+        cached.forEach(row => {
+          if (row.type === 'user') addMessage(row.text, 'user', [], [], false);
+          else addMessage(row.text, 'bot', row.actions || [], row.guides || [], false);
+        });
+      }
     }
 
-    aiTools.addEventListener('click', () => loadHistory());
+    aiTools.addEventListener('click', () => loadHistory(false));
+    loadHistory(false);
+
     aiClear.addEventListener('click', async () => {
       const ok = await confirmInApp('Hapus seluruh riwayat percakapan AI milik Anda?');
       if (!ok) return;
       try {
         await fetch(base + '/ai/history/clear', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type':'application/json' }, body: '{}' });
+        aiCacheSave([]);
         messages && (messages.innerHTML = '<div class="ai-msg ai-msg-bot">Riwayat percakapan telah dihapus.</div>');
         loadSummary();
       } catch (e) {}
@@ -2744,7 +2772,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
       if (!panel || panel.hidden) setTimeout(loadSummary, 80);
     });
 
-    function startAIGuides(guides) {
+    function startAIGuides(guides, startIndex) {
       if (!Array.isArray(guides) || !guides.length) return;
       document.querySelectorAll('.ai-guide-tip,.guide-highlight').forEach(el => {
         el.classList && el.classList.remove('guide-highlight');
@@ -2766,7 +2794,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         close: ['.modal.show .modal-head .xbtn', '.modal.show [data-close]', '.modal.show button[aria-label*="Tutup"]']
       };
 
-      let index = 0;
+      let index = Math.max(0, Math.min(Number(startIndex || 0), guides.length - 1));
       let target = null;
       const shade = document.createElement('div');
       shade.className = 'ai-guide-tip guide-tip';
@@ -2809,6 +2837,7 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
 
       const finish = () => {
         if (target) target.classList.remove('guide-highlight');
+        try { sessionStorage.removeItem('simkeu:ai-guide'); } catch (e) {}
         shade.remove();
         window.removeEventListener('resize', place);
         window.removeEventListener('scroll', place, true);
@@ -2839,16 +2868,40 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         }
       };
 
-      prev.addEventListener('click', () => { if (index > 0) { index--; render(); } });
-      next.addEventListener('click', () => { if (index < guides.length - 1) { index++; render(); } else finish(); });
+      prev.addEventListener('click', () => {
+        if (index > 0) {
+          index--;
+          try { sessionStorage.setItem('simkeu:ai-guide', JSON.stringify({ index, guides })); } catch (e) {}
+          const href = guides[index].href || '';
+          if (href && location.pathname !== href) { location.assign(base + href); return; }
+          render();
+        }
+      });
+      next.addEventListener('click', () => {
+        if (index < guides.length - 1) {
+          index++;
+          try { sessionStorage.setItem('simkeu:ai-guide', JSON.stringify({ index, guides })); } catch (e) {}
+          const href = guides[index].href || '';
+          if (href && location.pathname !== href) { location.assign(base + href); return; }
+          render();
+        } else finish();
+      });
       closeBtn.addEventListener('click', finish);
       document.addEventListener('keydown', e => { if (e.key === 'Escape') finish(); }, { once: true });
       window.addEventListener('resize', place);
       window.addEventListener('scroll', place, true);
       render();
+      let retry = 0;
+      const retryTarget = () => {
+        if (target || retry >= 12) return;
+        retry++;
+        render();
+        setTimeout(retryTarget, 300);
+      };
+      setTimeout(retryTarget, 300);
     }
 
-    function addMessage(text, type, actions, guides) {
+    function addMessage(text, type, actions, guides, cache) {
       if (!messages) return;
       const div = document.createElement('div');
       div.className = 'ai-msg ' + (type === 'user' ? 'ai-msg-user' : 'ai-msg-bot');
@@ -2881,13 +2934,33 @@ qsa('[data-check-name-all],[data-check-name-none]').forEach(function (btn) {
         guideButton.type = 'button';
         guideButton.className = 'ai-guide-button';
         guideButton.textContent = 'Mulai panduan bertahap (' + guides.length + ' langkah)';
-        guideButton.addEventListener('click', () => startAIGuides(guides));
+        guideButton.addEventListener('click', () => {
+          const first = guides[0] || {};
+          try { sessionStorage.setItem('simkeu:ai-guide', JSON.stringify({ index: 0, guides })); } catch (e) {}
+          if (first.href) {
+            const destination = base + first.href;
+            if (location.pathname !== first.href) { location.assign(destination); return; }
+          }
+          startAIGuides(guides);
+        });
         div.appendChild(guideButton);
       }
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
+      if (cache !== false) {
+        const rows = aiCacheLoad();
+        rows.push({ type: type === 'user' ? 'user' : 'bot', text: String(text || ''), actions: actions || [], guides: guides || [] });
+        aiCacheSave(rows);
+      }
       return div;
     }
+
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('simkeu:ai-guide') || 'null');
+      if (saved && Array.isArray(saved.guides) && saved.guides.length) {
+        setTimeout(() => startAIGuides(saved.guides, saved.index || 0), 350);
+      }
+    } catch (e) {}
 
     if (form) form.addEventListener('submit', async e => {
       e.preventEvent?.();

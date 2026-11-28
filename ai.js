@@ -177,16 +177,43 @@ function draftGet(dbm, req, token) {
 }
 
 const GUIDE_ALIASES = new Set(['add','save','search','filter','print','table','submit','export','edit','delete','back','close']);
+const GUIDE_ROUTES = {
+  add: ['/iuran','/siswa','/kelas','/bku','/transaksi','/piutang','/pegawai','/ekskul','/beasiswa'],
+  save: ['/iuran','/siswa','/kelas','/bku','/transaksi','/piutang','/pegawai','/ekskul','/beasiswa'],
+  delete: ['/iuran','/iuran/data','/trash','/siswa','/transaksi','/piutang'],
+  edit: ['/iuran','/iuran/data','/siswa','/transaksi','/piutang','/pegawai'],
+  search: ['/iuran/data','/iuran/transaksi','/siswa','/transaksi','/piutang'],
+  filter: ['/laporan','/iuran/data','/iuran/transaksi','/iuran/bulanan','/transaksi'],
+  print: ['/laporan','/iuran','/iuran/data','/transaksi'],
+  export: ['/laporan','/iuran','/iuran/data','/transaksi'],
+  table: ['/iuran','/iuran/data','/transaksi','/laporan'],
+  submit: ['/iuran','/siswa','/kelas','/bku','/transaksi','/piutang'],
+  back: ['/iuran','/iuran/data','/siswa','/transaksi'],
+  close: ['/iuran','/iuran/data','/siswa','/transaksi']
+};
 
-function parseGuides(answer) {
+function parseGuides(answer, menuAllowed) {
   const guides = [];
+  const menu = Array.isArray(menuAllowed) ? menuAllowed : [];
   String(answer || '').split(/\r?\n/).forEach(line => {
-    const match = /^\[GUIDE\]([^|\n]+)\|([^|\n]+)\|([^\n]+)$/.exec(line.trim());
-    if (!match) return;
-    const title = match[1].trim().slice(0, 80);
-    const target = match[2].trim().toLowerCase();
-    const text = match[3].trim().slice(0, 300);
-    if (title && GUIDE_ALIASES.has(target) && text && guides.length < 6) guides.push({ title, target, text });
+    const parts = line.trim().match(/^\[GUIDE\]([^|\n]+)\|([^|\n]+)\|([^|\n]+)(?:\|([^\n]+))?$/);
+    if (!parts) return;
+    const title = parts[1].trim().slice(0, 80);
+    const target = parts[2].trim().toLowerCase();
+    const third = parts[3].trim();
+    const text = (parts[4] || '').trim().slice(0, 300) || third.slice(0, 300);
+    let href = parts[4] ? third : '';
+    if (href && !/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]*$/.test(href)) href = '';
+    if (!href) {
+      const clue = (title + ' ' + text).toLowerCase();
+      let matched = menu.find(i => clue.includes(String(i.label || '').toLowerCase()) && i.href);
+      if (!matched) {
+        const routes = GUIDE_ROUTES[target] || [];
+        matched = routes.map(r => menu.find(i => i.href === r)).find(Boolean);
+      }
+      href = matched ? matched.href : '';
+    }
+    if (title && GUIDE_ALIASES.has(target) && text && guides.length < 6) guides.push({ title, target, href, text });
   });
   return guides;
 }
@@ -195,5 +222,5 @@ module.exports = {
   ensureTables, historyAdd, historyList, historyClear, rateLimit,
   contextSummary, detectTools, draftToken, draftGet,
   toolStatusBku, toolCariSiswa, toolRekapIuran, toolPetunjuk,
-  GUIDE_ALIASES, parseGuides
+  GUIDE_ALIASES, GUIDE_ROUTES, parseGuides
 };
